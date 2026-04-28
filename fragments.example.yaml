@@ -1,0 +1,90 @@
+database:
+  path: ./data/fragments-engine.db
+
+delivery:
+  file:
+    max_attempts: 1
+    backoff_ms: 0
+  mcp:
+    max_attempts: 3
+    backoff_ms: 500
+  api:
+    max_attempts: 3
+    backoff_ms: 500
+  cli:
+    max_attempts: 3
+    backoff_ms: 500
+
+queue:
+  auto_drain: true
+  poll_interval_seconds: 5
+  batch_size: 20
+  replay_cooldown_seconds: 60
+  max_replays_per_hour: 10
+  alert_pending_threshold: 10
+  alert_dead_letter_threshold: 3
+
+# Destinations are added through FE itself via CLI/API/MCP.
+# See README.md for real examples of:
+# - mcp.nil_inbox
+# - api.nanite_user_mailbox
+# - api.nanite_messaging
+
+recall:
+  backend: sqlite
+  vanta:
+    root: ./data/vanta
+    embedding_provider: ollama
+    embedding_model: nomic-embed-text
+
+analysis:
+  attachments:
+    backend: openai
+    fallback_backend: none
+    min_confidence: 0
+    ollama:
+      host: http://localhost:11434
+      model: gemma3
+      timeout_seconds: 30
+      prompt: ""
+    openai:
+      base_url: https://api.openai.com/v1
+      api_key_env: OPENAI_API_KEY
+      model: gpt-5.4-mini
+      detail: low
+      timeout_seconds: 30
+      prompt: ""
+
+ingests:
+  - name: claude-default
+    kind: claude_code
+    enabled: true
+    source:
+      root: ~/.claude
+    routing:
+      namespace: fragments/chats/claude
+    rules:
+      max_file_size_mb: 50
+  - name: chatgpt-export
+    kind: chatgpt_export
+    enabled: false
+    source:
+      root: ~/Downloads
+    routing:
+      namespace: fragments/chats/chatgpt
+    rules:
+      max_file_size_mb: 50
+      archive_root: ~/Documents/corpus/ai-chat-logs/chatgpt/logs
+      copy_text_exports: true
+      delete_copied_source: false
+  - name: saved-urls
+    kind: url_source
+    enabled: false
+    source:
+      root: ~/Documents/corpus/url-inbox
+    routing:
+      namespace: fragments/web
+    rules:
+      request_timeout_seconds: 20
+      max_body_mb: 5
+      user_agent: FragmentsEngine/0.1 (+url_source)

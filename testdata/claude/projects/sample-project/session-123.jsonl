@@ -1,0 +1,2 @@
+{"type":"user","timestamp":"2026-04-25T10:00:00Z","sessionId":"session-123","slug":"roadmap-review","cwd":"/Users/chrispian/Projects-apps/sample","message":{"content":"Summarize the roadmap."}}
+{"type":"assistant","timestamp":"2026-04-25T10:00:05Z","sessionId":"session-123","slug":"roadmap-review","cwd":"/Users/chrispian/Projects-apps/sample","message":{"content":[{"type":"text","text":"The roadmap starts with deterministic ingest and search."}]}}

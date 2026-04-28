@@ -1,0 +1,79 @@
+[
+  {
+    "id": "conv-123",
+    "title": "Roadmap planning",
+    "create_time": 1714140000.0,
+    "update_time": 1714140060.0,
+    "current_node": "node-assistant",
+    "mapping": {
+      "node-root": {
+        "id": "node-root",
+        "parent": null,
+        "message": {
+          "id": "",
+          "create_time": 0,
+          "author": {
+            "role": ""
+          },
+          "content": {
+            "content_type": "",
+            "parts": []
+          }
+        }
+      },
+      "node-user": {
+        "id": "node-user",
+        "parent": "node-root",
+        "message": {
+          "id": "msg-user-1",
+          "create_time": 1714140001.0,
+          "author": {
+            "role": "user"
+          },
+          "content": {
+            "content_type": "text",
+            "parts": [
+              "Summarize the roadmap."
+            ]
+          },
+          "metadata": {
+            "attachments": [
+              {
+                "id": "file-123",
+                "mimeType": "image/png",
+                "name": "diagram.png"
+              },
+              {
+                "id": "file-456",
+                "mimeType": "text/markdown",
+                "name": "roadmap-note.md"
+              }
+            ]
+          }
+        }
+      },
+      "node-assistant": {
+        "id": "node-assistant",
+        "parent": "node-user",
+        "message": {
+          "id": "msg-assistant-1",
+          "create_time": 1714140005.0,
+          "author": {
+            "role": "assistant"
+          },
+          "content": {
+            "content_type": "text",
+            "parts": [
+              "The roadmap starts with deterministic ingest and search."
+            ]
+          },
+          "metadata": {
+            "safe_urls": [
+              "https://example.com/roadmap.pdf"
+            ]
+          }
+        }
+      }
+    }
+  }
+]

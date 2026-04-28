@@ -1,0 +1,23 @@
+database:
+  path: ./.tmp/fragments-smoke.db
+
+# Destinations are not declared here. Add them through:
+# `fragments-engine route destination-add ...`
+
+recall:
+  backend: sqlite
+  vanta:
+    root: ./.tmp/vanta
+    embedding_provider: ollama
+    embedding_model: nomic-embed-text
+
+ingests:
+  - name: claude-smoke
+    kind: claude_code
+    enabled: true
+    source:
+      root: ./testdata/claude
+    routing:
+      namespace: fragments/chats/claude
+    rules:
+      max_file_size_mb: 5

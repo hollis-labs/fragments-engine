@@ -1,0 +1,154 @@
+package service
+
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/hollis-labs/fragments-engine/internal/config"
+)
+
+func TestIngestAdminService_ListValidatePreviewAndArchivePolicy(t *testing.T) {
+	claudeRoot, err := filepath.Abs(filepath.Join("..", "..", "testdata", "claude"))
+	if err != nil {
+		t.Fatalf("resolve claude fixture: %v", err)
+	}
+	chatGPTRoot, err := filepath.Abs(filepath.Join("..", "..", "testdata", "chatgpt-export"))
+	if err != nil {
+		t.Fatalf("resolve chatgpt fixture: %v", err)
+	}
+
+	cfgPath := filepath.Join(t.TempDir(), "fragments.yaml")
+	cfg := config.Config{
+		Database: config.DatabaseConfig{Path: filepath.Join(t.TempDir(), "fragments.db")},
+		Recall:   config.RecallConfig{Backend: "sqlite"},
+		Ingests: []config.IngestConfig{
+			{
+				Name:    "claude-fixture",
+				Kind:    "claude_code",
+				Enabled: true,
+				Source:  config.IngestSource{Root: claudeRoot},
+				Routing: config.IngestRouting{Namespace: "fragments/chats/claude"},
+				Rules:   map[string]any{"max_file_size_mb": 50},
+			},
+			{
+				Name:    "chatgpt-fixture",
+				Kind:    "chatgpt_export",
+				Enabled: true,
+				Source:  config.IngestSource{Root: chatGPTRoot},
+				Routing: config.IngestRouting{Namespace: "fragments/chats/chatgpt"},
+				Rules: map[string]any{
+					"max_file_size_mb":     50,
+					"archive_root":         "~/Documents/corpus/ai-chat-logs/chatgpt/logs/test-fixture",
+					"copy_text_exports":    true,
+					"delete_copied_source": false,
+				},
+			},
+		},
+	}
+	if err := config.Save(cfgPath, cfg); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+
+	svc := NewIngestAdminService(cfgPath)
+
+	list, err := svc.List(context.Background())
+	if err != nil {
+		t.Fatalf("list ingests: %v", err)
+	}
+	if len(list) != 2 {
+		t.Fatalf("expected 2 ingests, got %d", len(list))
+	}
+	if list[1].ArchiveRoot != "~/Documents/corpus/ai-chat-logs/chatgpt/logs/test-fixture" || !list[1].CopyTextExports {
+		t.Fatalf("expected chatgpt archive policy in list output: %+v", list[1])
+	}
+
+	validation, err := svc.Validate(context.Background(), "chatgpt-fixture")
+	if err != nil {
+		t.Fatalf("validate ingest: %v", err)
+	}
+	if !validation.Valid {
+		t.Fatalf("expected valid chatgpt ingest: %+v", validation)
+	}
+
+	preview, err := svc.Preview(context.Background(), "chatgpt-fixture", 5)
+	if err != nil {
+		t.Fatalf("preview ingest: %v", err)
+	}
+	if preview.PreviewCount != 1 {
+		t.Fatalf("expected 1 preview fragment, got %d", preview.PreviewCount)
+	}
+	if len(preview.Items) != 1 || !strings.Contains(preview.Items[0].Title, "Roadmap planning") {
+		t.Fatalf("unexpected preview items: %+v", preview.Items)
+	}
+	if _, err := os.Stat(config.ExpandHome(list[1].ArchiveRoot)); !os.IsNotExist(err) {
+		t.Fatalf("preview should not create archive root, got err=%v", err)
+	}
+
+	policy, err := svc.UpdateArchivePolicy(context.Background(), "chatgpt-fixture", list[1].ArchiveRoot, true, false)
+	if err != nil {
+		t.Fatalf("update archive policy: %v", err)
+	}
+	if !policy.CopyTextExports || policy.DeleteCopiedSource {
+		t.Fatalf("unexpected archive policy result: %+v", policy)
+	}
+
+	reloaded, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatalf("reload config: %v", err)
+	}
+	ingestCfg, _, err := config.FindIngest(reloaded, "chatgpt-fixture")
+	if err != nil {
+		t.Fatalf("find updated ingest: %v", err)
+	}
+	rules, err := config.DecodeRules[config.ChatGPTExportRules](ingestCfg)
+	if err != nil {
+		t.Fatalf("decode updated rules: %v", err)
+	}
+	if rules.ArchiveRoot != list[1].ArchiveRoot || !rules.CopyTextExports || rules.DeleteCopiedSource {
+		t.Fatalf("unexpected persisted rules: %+v", rules)
+	}
+}
+
+func TestIngestAdminService_ValidateRejectsUnsafeArchivePolicy(t *testing.T) {
+	root, err := filepath.Abs(filepath.Join("..", "..", "testdata", "chatgpt-export"))
+	if err != nil {
+		t.Fatalf("resolve chatgpt fixture: %v", err)
+	}
+
+	cfgPath := filepath.Join(t.TempDir(), "fragments.yaml")
+	cfg := config.Config{
+		Database: config.DatabaseConfig{Path: filepath.Join(t.TempDir(), "fragments.db")},
+		Recall:   config.RecallConfig{Backend: "sqlite"},
+		Ingests: []config.IngestConfig{
+			{
+				Name:    "bad-chatgpt",
+				Kind:    "chatgpt_export",
+				Enabled: true,
+				Source:  config.IngestSource{Root: root},
+				Routing: config.IngestRouting{Namespace: "fragments/chats/chatgpt"},
+				Rules: map[string]any{
+					"delete_copied_source": true,
+					"copy_text_exports":    false,
+				},
+			},
+		},
+	}
+	if err := config.Save(cfgPath, cfg); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+
+	svc := NewIngestAdminService(cfgPath)
+	result, err := svc.Validate(context.Background(), "bad-chatgpt")
+	if err != nil {
+		t.Fatalf("validate bad ingest: %v", err)
+	}
+	if result.Valid {
+		t.Fatalf("expected invalid result: %+v", result)
+	}
+	if len(result.Errors) == 0 || !strings.Contains(strings.Join(result.Errors, " "), "delete_copied_source requires copy_text_exports=true") {
+		t.Fatalf("expected archive policy validation error: %+v", result)
+	}
+}
