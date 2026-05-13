@@ -52,6 +52,11 @@ func NewPipeline(repo *repository.FragmentRepository, vision analyze.VisionAnaly
 	}
 }
 
+// Stages returns the pipeline stages so callers can drive them directly.
+func (p *Pipeline) Stages() []Stage {
+	return p.stages
+}
+
 func (p *Pipeline) Run(ctx context.Context, ingestCfg config.IngestConfig) (domain.IngestRun, error) {
 	source, ok := p.sources[ingestCfg.Kind]
 	if !ok {

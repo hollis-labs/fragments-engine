@@ -61,6 +61,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/routes/delete", s.handleRouteDelete)
 	mux.HandleFunc("/v1/routes/apply-entity", s.handleRouteApplyEntity)
 	mux.HandleFunc("/v1/route-log", s.handleRouteLog)
+	mux.HandleFunc("/v1/intake", s.handleIntake)
 	return mux
 }
 
@@ -1188,6 +1189,51 @@ func (s *Server) handleRouteLog(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+type intakeRequest struct {
+	Content    string   `json:"content"`
+	Title      string   `json:"title"`
+	SourceType string   `json:"source_type"`
+	Tags       []string `json:"tags"`
+}
+
+func (s *Server) handleIntake(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var input intakeRequest
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil && err != io.EOF {
+		http.Error(w, "invalid json body", http.StatusBadRequest)
+		return
+	}
+	if input.Content == "" {
+		http.Error(w, "content is required", http.StatusBadRequest)
+		return
+	}
+	cfg, err := config.Load(s.cfgPath)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	instance, err := app.Open(r.Context(), cfg)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer instance.Close()
+	result, err := instance.Fragments.Intake(r.Context(), service.IntakeRequest{
+		Content:    input.Content,
+		Title:      input.Title,
+		SourceType: input.SourceType,
+		Tags:       input.Tags,
+	})
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]any{"result": result})
 }
 
 func writeJSON(w http.ResponseWriter, status int, value any) {

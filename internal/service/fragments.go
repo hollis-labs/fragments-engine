@@ -2,7 +2,11 @@ package service
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
+	"strings"
+	"time"
 
 	"github.com/hollis-labs/fragments-engine/internal/analyze"
 	"github.com/hollis-labs/fragments-engine/internal/config"
@@ -185,6 +189,171 @@ func (s *FragmentService) ReanalyzeAttachments(ctx context.Context, fragmentID, 
 	}
 	result.ProviderBackend = s.vision.Backend()
 	return result, nil
+}
+
+// IntakeRequest is a manually submitted fragment (e.g. from Raycast, CLI, etc.)
+type IntakeRequest struct {
+	Content    string   // required
+	Title      string   // optional; derived from content if blank
+	SourceType string   // optional hint: "url", "youtube", "code", "markdown", "text"
+	Tags       []string // optional tag entities written as kind="tag"
+}
+
+// IntakeResult is returned after a successful intake.
+type IntakeResult struct {
+	FragmentID string `json:"fragment_id"`
+	Outcome    string `json:"outcome"` // "inserted" | "updated" | "skipped"
+	Status     string `json:"status"`  // "inbox" | "routed"
+}
+
+// Intake accepts a manually submitted fragment, writes it to the DB, runs all
+// pipeline stages (route, inbox, recall), and optionally attaches tag entities.
+func (s *FragmentService) Intake(ctx context.Context, req IntakeRequest) (IntakeResult, error) {
+	if strings.TrimSpace(req.Content) == "" {
+		return IntakeResult{}, fmt.Errorf("intake: content is required")
+	}
+
+	title := strings.TrimSpace(req.Title)
+	if title == "" {
+		title = deriveTitle(req.Content)
+	}
+
+	sourceType := strings.TrimSpace(req.SourceType)
+	if sourceType == "" {
+		sourceType = detectSourceType(req.Content)
+	}
+
+	now := time.Now().UTC()
+	// Use a content-address as the source_id so identical submissions dedup.
+	sourceID := hashContent(req.Content)
+
+	candidate := domain.PipelineFragment{
+		Source:        "manual",
+		SourceType:    sourceType,
+		SourceID:      sourceID,
+		Title:         title,
+		Content:       req.Content,
+		CreatedAt:     now,
+		CanonicalPath: "fragments/manual/" + sourceType + "/" + sourceID,
+	}
+
+	fragment, err := repository.BuildFragment(candidate, "manual-intake", now)
+	if err != nil {
+		return IntakeResult{}, fmt.Errorf("intake: build fragment: %w", err)
+	}
+
+	outcome, err := s.repo.Upsert(ctx, fragment)
+	if err != nil {
+		return IntakeResult{}, fmt.Errorf("intake: upsert: %w", err)
+	}
+
+	// Write tag entities immediately (even on skipped, so tags can be updated).
+	if len(req.Tags) > 0 {
+		tagEntities := make([]domain.FragmentEntity, 0, len(req.Tags))
+		for _, t := range req.Tags {
+			t = strings.TrimSpace(t)
+			if t == "" {
+				continue
+			}
+			tagEntities = append(tagEntities, domain.FragmentEntity{
+				Kind:       "tag",
+				Value:      t,
+				Source:     "manual-intake",
+				Confidence: 1.0,
+			})
+		}
+		if err := s.entities.ReplaceFragmentEntities(ctx, fragment.ID, tagEntities); err != nil {
+			return IntakeResult{}, fmt.Errorf("intake: write tags: %w", err)
+		}
+	}
+
+	if outcome == repository.UpsertSkipped {
+		// Fetch the real status from the DB, since BuildFragment always sets inbox.
+		existing, fetchErr := s.repo.GetByID(ctx, fragment.ID)
+		status := string(fragment.Status)
+		if fetchErr == nil {
+			status = string(existing.Status)
+		}
+		return IntakeResult{
+			FragmentID: fragment.ID,
+			Outcome:    "skipped",
+			Status:     status,
+		}, nil
+	}
+
+	// Run through the ingest pipeline stages.
+	stageCtx := &ingest.StageContext{
+		IngestConfig: config.IngestConfig{Name: "manual-intake", Kind: "manual"},
+		Candidate:    candidate,
+		Fragment:     fragment,
+		Outcome:      outcome,
+		Now:          now,
+	}
+	for _, stage := range s.pipeline.Stages() {
+		if err := stage.Run(ctx, stageCtx); err != nil {
+			return IntakeResult{}, fmt.Errorf("intake: stage %s: %w", stage.Name(), err)
+		}
+	}
+
+	return IntakeResult{
+		FragmentID: stageCtx.Fragment.ID,
+		Outcome:    string(outcome),
+		Status:     string(stageCtx.Fragment.Status),
+	}, nil
+}
+
+func deriveTitle(content string) string {
+	content = strings.TrimSpace(content)
+	// Use first non-empty line, truncated to 80 chars.
+	for _, line := range strings.SplitN(content, "\n", 5) {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		if len(line) > 80 {
+			return line[:80] + "…"
+		}
+		return line
+	}
+	return "Manual fragment"
+}
+
+func detectSourceType(content string) string {
+	c := strings.TrimSpace(content)
+	// YouTube
+	if strings.Contains(c, "youtube.com/watch") || strings.Contains(c, "youtu.be/") {
+		return "youtube"
+	}
+	// URL
+	if strings.HasPrefix(c, "http://") || strings.HasPrefix(c, "https://") {
+		// Check it's a single-line URL (no whitespace other than trailing newline)
+		if !strings.ContainsAny(strings.TrimSpace(c), " \t\n") {
+			return "url"
+		}
+		return "article"
+	}
+	// File path
+	if strings.HasPrefix(c, "/") || strings.HasPrefix(c, "~/") {
+		if !strings.Contains(c, "\n") {
+			return "file"
+		}
+	}
+	// Markdown heuristic
+	if strings.Contains(c, "```") || strings.Contains(c, "## ") || strings.Contains(c, "**") {
+		return "markdown"
+	}
+	// Code heuristic
+	if strings.Contains(c, "func ") || strings.Contains(c, "def ") ||
+		strings.Contains(c, "class ") || strings.Contains(c, "import ") ||
+		strings.Contains(c, "const ") || strings.Contains(c, "var ") {
+		return "code"
+	}
+	return "text"
+}
+
+func hashContent(s string) string {
+	sum := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(sum[:])
 }
 
 func max(a, b int) int {
