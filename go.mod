@@ -13,23 +13,23 @@ require (
 	modernc.org/sqlite v1.48.1
 )
 
-replace github.com/hollis-labs/vanta-conduit => /Users/chrispian/Projects-apps/vanta-conduit
+replace github.com/hollis-labs/vanta-conduit => /Users/chrispian/dev/hollis-labs/apps/vanta-conduit
 
-replace github.com/hollis-labs/go-providers => /Users/chrispian/Projects-apps/go-providers
+replace github.com/hollis-labs/go-providers => /Users/chrispian/dev/hollis-labs/libs/go-providers
 
-replace github.com/hollis-labs/go-queue => /Users/chrispian/Projects-apps/framework/libs/go-queue
+replace github.com/hollis-labs/go-queue => /Users/chrispian/dev/hollis-labs/libs/go-queue
 
-replace github.com/hollis-labs/go-otel => /Users/chrispian/Projects-apps/framework/libs/go-otel
+replace github.com/hollis-labs/go-otel => /Users/chrispian/dev/hollis-labs/libs/go-otel
 
-replace github.com/hollis-labs/mcp-helpers => /Users/chrispian/Projects-apps/framework/libs/go-mcp
+replace github.com/hollis-labs/mcp-helpers => /Users/chrispian/dev/hollis-labs/libs/go-mcp
 
-replace github.com/hollis-labs/go-embed-contracts => /Users/chrispian/Projects-apps/go-embed-contracts
+replace github.com/hollis-labs/go-embed-contracts => /Users/chrispian/dev/hollis-labs/libs/go-embed-contracts
 
-replace github.com/hollis-labs/go-modelsdev => /Users/chrispian/Projects-apps/go-modelsdev
+replace github.com/hollis-labs/go-modelsdev => /Users/chrispian/dev/hollis-labs/libs/go-modelsdev
 
-replace github.com/hollis-labs/go-llm-types => /Users/chrispian/Projects-apps/go-llm-types
+replace github.com/hollis-labs/go-llm-types => /Users/chrispian/dev/hollis-labs/libs/go-llm-types
 
-replace github.com/hollis-labs/go-llm-contracts => /Users/chrispian/Projects-apps/go-llm-contracts
+replace github.com/hollis-labs/go-llm-contracts => /Users/chrispian/dev/hollis-labs/libs/go-llm-contracts
 
 require (
 	github.com/creack/pty v1.1.24 // indirect
