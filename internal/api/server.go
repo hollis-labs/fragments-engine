@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -25,11 +26,16 @@ func NewServer(cfgPath string) *Server {
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", s.handleHealth)
+	mux.Handle(sysopBasePath+"/", newSysopSPAHandler())
 	mux.HandleFunc("/v1/ingests", s.handleListIngests)
 	mux.HandleFunc("/v1/ingests/run", s.handleRunIngests)
 	mux.HandleFunc("/v1/ingests/validate", s.handleValidateIngest)
 	mux.HandleFunc("/v1/ingests/preview", s.handlePreviewIngest)
 	mux.HandleFunc("/v1/ingests/archive-policy", s.handleArchivePolicyIngest)
+	mux.HandleFunc("/v1/ingests/create", s.handleCreateIngest)
+	mux.HandleFunc("/v1/ingests/update", s.handleUpdateIngest)
+	mux.HandleFunc("/v1/ingests/delete", s.handleDeleteIngest)
+	mux.HandleFunc("/v1/ingests/set-enabled", s.handleSetEnabledIngest)
 	mux.HandleFunc("/v1/search", s.handleSearch)
 	mux.HandleFunc("/v1/fragments/get", s.handleFragmentGet)
 	mux.HandleFunc("/v1/fragments/related", s.handleFragmentRelated)
@@ -49,6 +55,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/queue/replay", s.handleQueueReplay)
 	mux.HandleFunc("/v1/queue/purge", s.handleQueuePurge)
 	mux.HandleFunc("/v1/destinations", s.handleDestinations)
+	mux.HandleFunc("/v1/destinations/create", s.handleDestinationCreate)
 	mux.HandleFunc("/v1/destinations/status", s.handleDestinationStatus)
 	mux.HandleFunc("/v1/destinations/validate", s.handleDestinationValidate)
 	mux.HandleFunc("/v1/destinations/rename", s.handleDestinationRename)
@@ -56,6 +63,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/destinations/retry", s.handleDestinationRetry)
 	mux.HandleFunc("/v1/destinations/queue-policy", s.handleDestinationQueuePolicy)
 	mux.HandleFunc("/v1/routes", s.handleRoutes)
+	mux.HandleFunc("/v1/routes/create", s.handleRouteCreate)
 	mux.HandleFunc("/v1/routes/rename", s.handleRouteRename)
 	mux.HandleFunc("/v1/routes/preview", s.handleRoutePreview)
 	mux.HandleFunc("/v1/routes/delete", s.handleRouteDelete)
@@ -116,6 +124,23 @@ type destinationValidateRequest struct {
 	ConfigJSON string `json:"config_json"`
 }
 
+type destinationCreateRequest struct {
+	Name       string `json:"name"`
+	Kind       string `json:"kind"`
+	ConfigJSON string `json:"config_json"`
+}
+
+type routeCreateRequest struct {
+	Name             string  `json:"name"`
+	MatchSource      string  `json:"match_source"`
+	MatchType        string  `json:"match_type"`
+	MatchEntityKind  string  `json:"match_entity_kind"`
+	MatchEntityValue string  `json:"match_entity_value"`
+	DestinationID    string  `json:"destination_id"`
+	AutoRoute        bool    `json:"auto_route"`
+	ConfidenceMin    float64 `json:"confidence_min"`
+}
+
 type destinationRenameRequest struct {
 	DestinationID string `json:"destination_id"`
 	Name          string `json:"name"`
@@ -136,6 +161,37 @@ type ingestArchivePolicyRequest struct {
 	ArchiveRoot        string `json:"archive_root"`
 	CopyTextExports    bool   `json:"copy_text_exports"`
 	DeleteCopiedSource bool   `json:"delete_copied_source"`
+}
+
+type ingestWriteRequest struct {
+	Name       string            `json:"name"`
+	Kind       string            `json:"kind"`
+	Enabled    bool              `json:"enabled"`
+	SourceRoot string            `json:"source_root"`
+	Namespace  string            `json:"namespace"`
+	Rules      map[string]any    `json:"rules"`
+	Labels     map[string]string `json:"labels"`
+}
+
+func (req ingestWriteRequest) toInput() service.IngestSourceInput {
+	return service.IngestSourceInput{
+		Name:       req.Name,
+		Kind:       req.Kind,
+		Enabled:    req.Enabled,
+		SourceRoot: req.SourceRoot,
+		Namespace:  req.Namespace,
+		Rules:      req.Rules,
+		Labels:     req.Labels,
+	}
+}
+
+type ingestDeleteRequest struct {
+	Name string `json:"name"`
+}
+
+type ingestSetEnabledRequest struct {
+	Name    string `json:"name"`
+	Enabled bool   `json:"enabled"`
 }
 
 type fragmentReanalyzeRequest struct {
@@ -267,6 +323,95 @@ func (s *Server) handleArchivePolicyIngest(w http.ResponseWriter, r *http.Reques
 	writeJSON(w, http.StatusOK, map[string]any{"archive_policy": result})
 }
 
+func (s *Server) handleCreateIngest(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var input ingestWriteRequest
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil && err != io.EOF {
+		http.Error(w, "invalid json body", http.StatusBadRequest)
+		return
+	}
+	result, err := service.NewIngestAdminService(s.cfgPath).Create(r.Context(), input.toInput())
+	if err != nil {
+		writeIngestAdminError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ingest": result})
+}
+
+func (s *Server) handleUpdateIngest(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var input ingestWriteRequest
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil && err != io.EOF {
+		http.Error(w, "invalid json body", http.StatusBadRequest)
+		return
+	}
+	result, err := service.NewIngestAdminService(s.cfgPath).Update(r.Context(), input.toInput())
+	if err != nil {
+		writeIngestAdminError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ingest": result})
+}
+
+func (s *Server) handleDeleteIngest(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var input ingestDeleteRequest
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil && err != io.EOF {
+		http.Error(w, "invalid json body", http.StatusBadRequest)
+		return
+	}
+	if input.Name == "" {
+		http.Error(w, "name is required", http.StatusBadRequest)
+		return
+	}
+	if err := service.NewIngestAdminService(s.cfgPath).Delete(r.Context(), input.Name); err != nil {
+		writeIngestAdminError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"deleted": input.Name})
+}
+
+func (s *Server) handleSetEnabledIngest(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var input ingestSetEnabledRequest
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil && err != io.EOF {
+		http.Error(w, "invalid json body", http.StatusBadRequest)
+		return
+	}
+	if input.Name == "" {
+		http.Error(w, "name is required", http.StatusBadRequest)
+		return
+	}
+	result, err := service.NewIngestAdminService(s.cfgPath).SetEnabled(r.Context(), input.Name, input.Enabled)
+	if err != nil {
+		writeIngestAdminError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ingest": result})
+}
+
+// writeIngestAdminError maps a ValidationError to HTTP 400 and anything else to 500.
+func writeIngestAdminError(w http.ResponseWriter, err error) {
+	var verr service.ValidationError
+	if errors.As(err, &verr) {
+		http.Error(w, verr.Error(), http.StatusBadRequest)
+		return
+	}
+	http.Error(w, err.Error(), http.StatusInternalServerError)
+}
+
 func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -314,7 +459,7 @@ func (s *Server) handleInboxList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer instance.Close()
-	items, err := instance.Inbox.List(r.Context(), 50)
+	items, err := instance.Inbox.ListDetailed(r.Context(), 50)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -618,7 +763,7 @@ func (s *Server) handleInboxEntityItems(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	defer instance.Close()
-	items, err := instance.Inbox.ListByEntity(r.Context(), kind, value, 50)
+	items, err := instance.Inbox.ListByEntityDetailed(r.Context(), kind, value, 50)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -826,6 +971,45 @@ func (s *Server) handleDestinations(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+func (s *Server) handleDestinationCreate(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var input destinationCreateRequest
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil && err != io.EOF {
+		http.Error(w, "invalid json body", http.StatusBadRequest)
+		return
+	}
+	if input.Name == "" || input.Kind == "" {
+		http.Error(w, "missing name or kind", http.StatusBadRequest)
+		return
+	}
+	cfg, err := config.Load(s.cfgPath)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	instance, err := app.Open(r.Context(), cfg)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer instance.Close()
+	// AddDestination normalizes + validates the config internally via
+	// normalizeDestination, so no separate ValidateDestination call is needed.
+	item, err := instance.Routing.AddDestination(r.Context(), domain.Destination{
+		Name:       input.Name,
+		Kind:       input.Kind,
+		ConfigJSON: input.ConfigJSON,
+	})
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"item": item})
 }
 
 func (s *Server) handleDestinationStatus(w http.ResponseWriter, r *http.Request) {
@@ -1061,6 +1245,48 @@ func (s *Server) handleRoutes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+func (s *Server) handleRouteCreate(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var input routeCreateRequest
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil && err != io.EOF {
+		http.Error(w, "invalid json body", http.StatusBadRequest)
+		return
+	}
+	if input.Name == "" || input.DestinationID == "" {
+		http.Error(w, "missing name or destination_id", http.StatusBadRequest)
+		return
+	}
+	cfg, err := config.Load(s.cfgPath)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	instance, err := app.Open(r.Context(), cfg)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer instance.Close()
+	item, err := instance.Routing.AddRoute(r.Context(), domain.Route{
+		Name:             input.Name,
+		MatchSource:      input.MatchSource,
+		MatchType:        input.MatchType,
+		MatchEntityKind:  input.MatchEntityKind,
+		MatchEntityValue: input.MatchEntityValue,
+		DestinationID:    input.DestinationID,
+		AutoRoute:        input.AutoRoute,
+		ConfidenceMin:    input.ConfidenceMin,
+	})
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"item": item})
 }
 
 func (s *Server) handleRouteRename(w http.ResponseWriter, r *http.Request) {
