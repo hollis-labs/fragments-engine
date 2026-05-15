@@ -12,6 +12,21 @@ type IngestRun struct {
 	Skipped    int
 }
 
+// IngestRunRecord is a persisted ingest run row, including async lifecycle
+// status. Statuses: queued, running, done, failed.
+type IngestRunRecord struct {
+	ID         int64  `json:"id"`
+	Name       string `json:"name"`
+	Kind       string `json:"kind"`
+	Status     string `json:"status"`
+	StartedAt  string `json:"started_at,omitempty"`
+	FinishedAt string `json:"finished_at,omitempty"`
+	Inserted   int    `json:"inserted"`
+	Updated    int    `json:"updated"`
+	Skipped    int    `json:"skipped"`
+	Error      string `json:"error,omitempty"`
+}
+
 type PipelineFragment struct {
 	Source        string
 	SourceType    string

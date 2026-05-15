@@ -6,6 +6,9 @@ import (
 	"os"
 	"path/filepath"
 
+	queue "github.com/hollis-labs/go-queue"
+	queuesqlite "github.com/hollis-labs/go-queue/driver/sqlite"
+
 	"github.com/hollis-labs/fragments-engine/internal/analyze"
 	"github.com/hollis-labs/fragments-engine/internal/config"
 	"github.com/hollis-labs/fragments-engine/internal/ingest"
@@ -18,13 +21,21 @@ import (
 	"github.com/hollis-labs/fragments-engine/internal/store"
 )
 
+// go-queue tables for async ingest jobs. Created on demand by the sqlite
+// driver; distinct from the hand-rolled delivery queue tables.
+const (
+	ingestJobsTable       = "ingest_jobs"
+	ingestFailedJobsTable = "ingest_failed_jobs"
+)
+
 type App struct {
-	store     *store.Store
-	recall    recall.Indexer
-	Fragments *service.FragmentService
-	Inbox     *service.InboxService
-	Routing   *service.RoutingService
-	Queue     *service.DeliveryQueueService
+	store       *store.Store
+	recall      recall.Indexer
+	Fragments   *service.FragmentService
+	Inbox       *service.InboxService
+	Routing     *service.RoutingService
+	Queue       *service.DeliveryQueueService
+	IngestQueue queue.Queue
 }
 
 func Open(ctx context.Context, cfg config.Config) (*App, error) {
@@ -52,6 +63,14 @@ func Open(ctx context.Context, cfg config.Config) (*App, error) {
 		_ = st.Close()
 		return nil, err
 	}
+	ingestQueue, err := queuesqlite.New(st.DB, queuesqlite.Opts{
+		Table:       ingestJobsTable,
+		FailedTable: ingestFailedJobsTable,
+	})
+	if err != nil {
+		_ = st.Close()
+		return nil, err
+	}
 	routingSvc := service.NewRoutingService(routingRepo, fragmentRepo, entityRepo, inboxRepo, cfg.Delivery, cfg.Queue)
 	routingSvc.SetDeliveryQueue(deliveryQueue)
 	routingSvc.SetAttachmentRepository(attachmentRepo)
@@ -63,12 +82,13 @@ func Open(ctx context.Context, cfg config.Config) (*App, error) {
 		ingest.NewRecallStage(recallIndex),
 	}, claude.Source{}, chatgpt.Source{}, urlsource.Source{})
 	return &App{
-		store:     st,
-		recall:    recallIndex,
-		Fragments: service.NewFragmentService(fragmentRepo, entityRepo, attachmentRepo, routingRepo, recallIndex, pipeline, visionAnalyzer),
-		Inbox:     service.NewInboxService(inboxRepo),
-		Routing:   routingSvc,
-		Queue:     deliveryQueue,
+		store:       st,
+		recall:      recallIndex,
+		Fragments:   service.NewFragmentService(fragmentRepo, entityRepo, attachmentRepo, routingRepo, recallIndex, pipeline, visionAnalyzer),
+		Inbox:       service.NewInboxService(inboxRepo),
+		Routing:     routingSvc,
+		Queue:       deliveryQueue,
+		IngestQueue: ingestQueue,
 	}, nil
 }
 

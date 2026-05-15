@@ -218,6 +218,85 @@ INSERT INTO ingest_runs (
 	return nil
 }
 
+// CreateIngestRun inserts a queued ingest run row and returns its id. The
+// async worker later marks it running and completes/fails it.
+func (r *FragmentRepository) CreateIngestRun(ctx context.Context, name, kind string) (int64, error) {
+	res, err := r.db.ExecContext(ctx, `
+INSERT INTO ingest_runs (
+  ingest_name, ingest_kind, started_at, finished_at, status, error
+) VALUES (?, ?, '', '', 'queued', '')`, name, kind)
+	if err != nil {
+		return 0, fmt.Errorf("create ingest run: %w", err)
+	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		return 0, fmt.Errorf("create ingest run id: %w", err)
+	}
+	return id, nil
+}
+
+// MarkIngestRunRunning flips a queued run to running and stamps started_at.
+func (r *FragmentRepository) MarkIngestRunRunning(ctx context.Context, id int64, startedAt time.Time) error {
+	_, err := r.db.ExecContext(ctx, `
+UPDATE ingest_runs SET status = 'running', started_at = ? WHERE id = ?`,
+		startedAt.Format(time.RFC3339), id)
+	if err != nil {
+		return fmt.Errorf("mark ingest run running: %w", err)
+	}
+	return nil
+}
+
+// CompleteIngestRun records a successful run's counts and finish time.
+func (r *FragmentRepository) CompleteIngestRun(ctx context.Context, id int64, run domain.IngestRun, finishedAt time.Time) error {
+	_, err := r.db.ExecContext(ctx, `
+UPDATE ingest_runs
+SET status = 'done', finished_at = ?, inserted_count = ?, updated_count = ?, skipped_count = ?, error = ''
+WHERE id = ?`,
+		finishedAt.Format(time.RFC3339), run.Inserted, run.Updated, run.Skipped, id)
+	if err != nil {
+		return fmt.Errorf("complete ingest run: %w", err)
+	}
+	return nil
+}
+
+// FailIngestRun marks a run failed with an error message.
+func (r *FragmentRepository) FailIngestRun(ctx context.Context, id int64, finishedAt time.Time, errMsg string) error {
+	_, err := r.db.ExecContext(ctx, `
+UPDATE ingest_runs SET status = 'failed', finished_at = ?, error = ? WHERE id = ?`,
+		finishedAt.Format(time.RFC3339), errMsg, id)
+	if err != nil {
+		return fmt.Errorf("fail ingest run: %w", err)
+	}
+	return nil
+}
+
+// ListIngestRuns returns recent ingest runs, newest first.
+func (r *FragmentRepository) ListIngestRuns(ctx context.Context, limit int) ([]domain.IngestRunRecord, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	rows, err := r.db.QueryContext(ctx, `
+SELECT id, ingest_name, ingest_kind, status, started_at, finished_at,
+       inserted_count, updated_count, skipped_count, error
+FROM ingest_runs
+ORDER BY id DESC
+LIMIT ?`, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list ingest runs: %w", err)
+	}
+	defer rows.Close()
+	out := make([]domain.IngestRunRecord, 0, limit)
+	for rows.Next() {
+		var rec domain.IngestRunRecord
+		if err := rows.Scan(&rec.ID, &rec.Name, &rec.Kind, &rec.Status,
+			&rec.StartedAt, &rec.FinishedAt, &rec.Inserted, &rec.Updated, &rec.Skipped, &rec.Error); err != nil {
+			return nil, fmt.Errorf("scan ingest run: %w", err)
+		}
+		out = append(out, rec)
+	}
+	return out, rows.Err()
+}
+
 func (r *FragmentRepository) UpdateStatus(ctx context.Context, fragmentID string, status domain.FragmentStatus) error {
 	_, err := r.db.ExecContext(ctx, `
 UPDATE fragments

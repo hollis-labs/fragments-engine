@@ -57,7 +57,24 @@ func (p *Pipeline) Stages() []Stage {
 	return p.stages
 }
 
+// Run executes an ingest and records the result as a new ingest_runs row.
+// Used by synchronous callers (CLI). The async worker uses RunOnce against a
+// pre-created run row instead.
 func (p *Pipeline) Run(ctx context.Context, ingestCfg config.IngestConfig) (domain.IngestRun, error) {
+	run, err := p.RunOnce(ctx, ingestCfg)
+	if err != nil {
+		return domain.IngestRun{}, err
+	}
+	if err := p.repo.RecordIngestRun(ctx, run); err != nil {
+		return domain.IngestRun{}, err
+	}
+	return run, nil
+}
+
+// RunOnce executes an ingest and returns the run result WITHOUT persisting an
+// ingest_runs row. Callers that track the run themselves (async worker) own
+// the row lifecycle.
+func (p *Pipeline) RunOnce(ctx context.Context, ingestCfg config.IngestConfig) (domain.IngestRun, error) {
 	source, ok := p.sources[ingestCfg.Kind]
 	if !ok {
 		return domain.IngestRun{}, fmt.Errorf("pipeline: unsupported ingest kind %q", ingestCfg.Kind)
@@ -112,9 +129,6 @@ func (p *Pipeline) Run(ctx context.Context, ingestCfg config.IngestConfig) (doma
 		}
 	}
 	run.FinishedAt = p.now().UTC()
-	if err := p.repo.RecordIngestRun(ctx, run); err != nil {
-		return domain.IngestRun{}, err
-	}
 	return run, nil
 }
 

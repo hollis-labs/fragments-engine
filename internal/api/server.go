@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/hollis-labs/fragments-engine/internal/app"
@@ -36,6 +37,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/ingests/update", s.handleUpdateIngest)
 	mux.HandleFunc("/v1/ingests/delete", s.handleDeleteIngest)
 	mux.HandleFunc("/v1/ingests/set-enabled", s.handleSetEnabledIngest)
+	mux.HandleFunc("/v1/ingests/run-ingest", s.handleRunIngest)
+	mux.HandleFunc("/v1/ingests/runs", s.handleListIngestRuns)
 	mux.HandleFunc("/v1/search", s.handleSearch)
 	mux.HandleFunc("/v1/fragments/get", s.handleFragmentGet)
 	mux.HandleFunc("/v1/fragments/related", s.handleFragmentRelated)
@@ -203,6 +206,7 @@ func (s *Server) ListenAndServe(addr string) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go app.RunQueueDrainer(ctx, s.cfgPath)
+	go app.RunIngestWorker(ctx, s.cfgPath)
 
 	srv := &http.Server{
 		Addr:              addr,
@@ -216,6 +220,8 @@ func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
+// handleRunIngests enqueues an async run for every enabled ingest and returns
+// the created run ids immediately.
 func (s *Server) handleRunIngests(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -233,12 +239,85 @@ func (s *Server) handleRunIngests(w http.ResponseWriter, r *http.Request) {
 	}
 	defer instance.Close()
 
-	results, err := instance.Fragments.RunAllIngests(r.Context(), cfg)
+	runs, err := instance.Fragments.EnqueueAllIngests(r.Context(), instance.IngestQueue, cfg)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"runs": results})
+	writeJSON(w, http.StatusOK, map[string]any{"runs": runs})
+}
+
+// handleRunIngest enqueues an async run for a single named ingest source.
+func (s *Server) handleRunIngest(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var input ingestByNameRequest
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil && err != io.EOF {
+		http.Error(w, "invalid json body", http.StatusBadRequest)
+		return
+	}
+	if input.Name == "" {
+		http.Error(w, "name is required", http.StatusBadRequest)
+		return
+	}
+	cfg, err := config.Load(s.cfgPath)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	ingestCfg, _, err := config.FindIngest(cfg, input.Name)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	instance, err := app.Open(r.Context(), cfg)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer instance.Close()
+
+	runID, err := instance.Fragments.EnqueueIngestRun(r.Context(), instance.IngestQueue, ingestCfg)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"run_id": runID, "ingest_name": ingestCfg.Name})
+}
+
+// handleListIngestRuns returns recent ingest runs (newest first) for progress
+// display in the Sysop Ingest page.
+func (s *Server) handleListIngestRuns(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	limit := 50
+	if v := r.URL.Query().Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			limit = n
+		}
+	}
+	cfg, err := config.Load(s.cfgPath)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	instance, err := app.Open(r.Context(), cfg)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer instance.Close()
+
+	runs, err := instance.Fragments.ListIngestRuns(r.Context(), limit)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"runs": runs})
 }
 
 func (s *Server) handleListIngests(w http.ResponseWriter, r *http.Request) {
