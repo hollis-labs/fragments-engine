@@ -4,9 +4,12 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
+
+	queue "github.com/hollis-labs/go-queue"
 
 	"github.com/hollis-labs/fragments-engine/internal/analyze"
 	"github.com/hollis-labs/fragments-engine/internal/config"
@@ -52,6 +55,85 @@ func (s *FragmentService) RunAllIngests(ctx context.Context, cfg config.Config) 
 		results = append(results, run)
 	}
 	return results, nil
+}
+
+// go-queue identifiers for async ingest jobs. Shared between the enqueue path
+// (EnqueueIngestRun) and the worker that registers the handler.
+const (
+	IngestQueueName  = "ingests"
+	IngestRunJobType = "ingest_run"
+)
+
+// IngestRunPayload is the go-queue job payload for an ingest run. RunID points
+// at the ingest_runs row the worker updates as it executes.
+type IngestRunPayload struct {
+	RunID      int64  `json:"run_id"`
+	IngestName string `json:"ingest_name"`
+}
+
+// EnqueuedIngestRun identifies a queued ingest run returned to API callers.
+type EnqueuedIngestRun struct {
+	RunID      int64  `json:"run_id"`
+	IngestName string `json:"ingest_name"`
+}
+
+// EnqueueIngestRun creates a queued ingest_runs row and pushes a go-queue job
+// for the worker to execute. Returns the run id immediately.
+func (s *FragmentService) EnqueueIngestRun(ctx context.Context, q queue.Queue, ingestCfg config.IngestConfig) (int64, error) {
+	runID, err := s.repo.CreateIngestRun(ctx, ingestCfg.Name, ingestCfg.Kind)
+	if err != nil {
+		return 0, err
+	}
+	payload, err := json.Marshal(IngestRunPayload{RunID: runID, IngestName: ingestCfg.Name})
+	if err != nil {
+		return 0, err
+	}
+	if err := q.Push(ctx, IngestRunJobType, payload, queue.OnQueue(IngestQueueName)); err != nil {
+		_ = s.repo.FailIngestRun(ctx, runID, time.Now().UTC(), "enqueue failed: "+err.Error())
+		return 0, fmt.Errorf("enqueue ingest run: %w", err)
+	}
+	return runID, nil
+}
+
+// EnqueueAllIngests queues a run for every enabled ingest source.
+func (s *FragmentService) EnqueueAllIngests(ctx context.Context, q queue.Queue, cfg config.Config) ([]EnqueuedIngestRun, error) {
+	out := make([]EnqueuedIngestRun, 0, len(cfg.Ingests))
+	for _, ingestCfg := range cfg.Ingests {
+		if !ingestCfg.Enabled {
+			continue
+		}
+		runID, err := s.EnqueueIngestRun(ctx, q, ingestCfg)
+		if err != nil {
+			return out, err
+		}
+		out = append(out, EnqueuedIngestRun{RunID: runID, IngestName: ingestCfg.Name})
+	}
+	return out, nil
+}
+
+// ExecuteIngestRun runs a single ingest against a pre-created run row, driving
+// it through running → done/failed. Called by the go-queue worker.
+func (s *FragmentService) ExecuteIngestRun(ctx context.Context, runID int64, ingestCfg config.IngestConfig) error {
+	if err := s.repo.MarkIngestRunRunning(ctx, runID, time.Now().UTC()); err != nil {
+		return err
+	}
+	run, err := s.pipeline.RunOnce(ctx, ingestCfg)
+	if err != nil {
+		_ = s.repo.FailIngestRun(ctx, runID, time.Now().UTC(), err.Error())
+		return err
+	}
+	return s.repo.CompleteIngestRun(ctx, runID, run, time.Now().UTC())
+}
+
+// FailIngestRun marks a run failed; used when a worker cannot resolve a job's
+// target ingest before ExecuteIngestRun takes over the row lifecycle.
+func (s *FragmentService) FailIngestRun(ctx context.Context, runID int64, errMsg string) error {
+	return s.repo.FailIngestRun(ctx, runID, time.Now().UTC(), errMsg)
+}
+
+// ListIngestRuns returns recent ingest runs, newest first.
+func (s *FragmentService) ListIngestRuns(ctx context.Context, limit int) ([]domain.IngestRunRecord, error) {
+	return s.repo.ListIngestRuns(ctx, limit)
 }
 
 func (s *FragmentService) Search(ctx context.Context, query string, limit int) ([]domain.SearchResult, error) {

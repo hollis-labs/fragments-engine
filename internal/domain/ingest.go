@@ -12,6 +12,21 @@ type IngestRun struct {
 	Skipped    int
 }
 
+// IngestRunRecord is a persisted ingest run row, including async lifecycle
+// status. Statuses: queued, running, done, failed.
+type IngestRunRecord struct {
+	ID         int64  `json:"id"`
+	Name       string `json:"name"`
+	Kind       string `json:"kind"`
+	Status     string `json:"status"`
+	StartedAt  string `json:"started_at,omitempty"`
+	FinishedAt string `json:"finished_at,omitempty"`
+	Inserted   int    `json:"inserted"`
+	Updated    int    `json:"updated"`
+	Skipped    int    `json:"skipped"`
+	Error      string `json:"error,omitempty"`
+}
+
 type PipelineFragment struct {
 	Source        string
 	SourceType    string
@@ -36,6 +51,25 @@ type PipelineAttachment struct {
 	Metadata     map[string]any `json:"metadata,omitempty"`
 	Source       string         `json:"source"`
 	SourceItemID string         `json:"source_item_id"`
+}
+
+// IngestSchedule is a cron schedule for an ingest source. Times are RFC3339
+// strings; empty last_run / next_run mean "never".
+type IngestSchedule struct {
+	ID         string `json:"id"`
+	IngestName string `json:"ingest_name"`
+	CronExpr   string `json:"cron_expr"`
+	Enabled    bool   `json:"enabled"`
+	LastRun    string `json:"last_run,omitempty"`
+	NextRun    string `json:"next_run,omitempty"`
+	CreatedAt  string `json:"created_at"`
+	UpdatedAt  string `json:"updated_at"`
+}
+
+// IngestSchedulePayload is the opaque go-scheduler job payload carried by an
+// ingest schedule — just enough for the runner to enqueue the ingest run.
+type IngestSchedulePayload struct {
+	IngestName string `json:"ingest_name"`
 }
 
 type IngestSummary struct {

@@ -5,6 +5,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
+
+	queue "github.com/hollis-labs/go-queue"
+	queuesqlite "github.com/hollis-labs/go-queue/driver/sqlite"
 
 	"github.com/hollis-labs/fragments-engine/internal/analyze"
 	"github.com/hollis-labs/fragments-engine/internal/config"
@@ -18,13 +22,22 @@ import (
 	"github.com/hollis-labs/fragments-engine/internal/store"
 )
 
+// go-queue tables for async ingest jobs. Created on demand by the sqlite
+// driver; distinct from the hand-rolled delivery queue tables.
+const (
+	ingestJobsTable       = "ingest_jobs"
+	ingestFailedJobsTable = "ingest_failed_jobs"
+)
+
 type App struct {
-	store     *store.Store
-	recall    recall.Indexer
-	Fragments *service.FragmentService
-	Inbox     *service.InboxService
-	Routing   *service.RoutingService
-	Queue     *service.DeliveryQueueService
+	store           *store.Store
+	recall          recall.Indexer
+	Fragments       *service.FragmentService
+	Inbox           *service.InboxService
+	Routing         *service.RoutingService
+	Queue           *service.DeliveryQueueService
+	IngestQueue     queue.Queue
+	IngestSchedules *service.IngestScheduleService
 }
 
 func Open(ctx context.Context, cfg config.Config) (*App, error) {
@@ -52,6 +65,14 @@ func Open(ctx context.Context, cfg config.Config) (*App, error) {
 		_ = st.Close()
 		return nil, err
 	}
+	ingestQueue, err := queuesqlite.New(st.DB, queuesqlite.Opts{
+		Table:       ingestJobsTable,
+		FailedTable: ingestFailedJobsTable,
+	})
+	if err != nil {
+		_ = st.Close()
+		return nil, err
+	}
 	routingSvc := service.NewRoutingService(routingRepo, fragmentRepo, entityRepo, inboxRepo, cfg.Delivery, cfg.Queue)
 	routingSvc.SetDeliveryQueue(deliveryQueue)
 	routingSvc.SetAttachmentRepository(attachmentRepo)
@@ -63,12 +84,14 @@ func Open(ctx context.Context, cfg config.Config) (*App, error) {
 		ingest.NewRecallStage(recallIndex),
 	}, claude.Source{}, chatgpt.Source{}, urlsource.Source{})
 	return &App{
-		store:     st,
-		recall:    recallIndex,
-		Fragments: service.NewFragmentService(fragmentRepo, entityRepo, attachmentRepo, routingRepo, recallIndex, pipeline, visionAnalyzer),
-		Inbox:     service.NewInboxService(inboxRepo),
-		Routing:   routingSvc,
-		Queue:     deliveryQueue,
+		store:           st,
+		recall:          recallIndex,
+		Fragments:       service.NewFragmentService(fragmentRepo, entityRepo, attachmentRepo, routingRepo, recallIndex, pipeline, visionAnalyzer),
+		Inbox:           service.NewInboxService(inboxRepo),
+		Routing:         routingSvc,
+		Queue:           deliveryQueue,
+		IngestQueue:     ingestQueue,
+		IngestSchedules: service.NewIngestScheduleService(repository.NewIngestScheduleRepository(st.DB)),
 	}, nil
 }
 
@@ -90,6 +113,24 @@ func (a *App) RecallStatus() recall.Status {
 		return recall.Status{}
 	}
 	return a.recall.Status()
+}
+
+// openStoreWithRetry opens the store, retrying briefly to ride out the
+// transient "database is locked" error that can occur when several runtime
+// goroutines (queue drainer, ingest worker, scheduler) open the SQLite DB
+// concurrently at startup. Long-lived runtimes open the store once, so a
+// single transient failure must not kill them permanently.
+func openStoreWithRetry(dbPath string) (*store.Store, error) {
+	var lastErr error
+	for attempt := 0; attempt < 20; attempt++ {
+		st, err := store.Open(dbPath)
+		if err == nil {
+			return st, nil
+		}
+		lastErr = err
+		time.Sleep(250 * time.Millisecond)
+	}
+	return nil, fmt.Errorf("open store after retries: %w", lastErr)
 }
 
 func InitDB(cfg config.Config) error {
