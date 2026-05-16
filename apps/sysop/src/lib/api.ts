@@ -80,6 +80,59 @@ export interface IngestSummary {
   source_root: string
   namespace: string
   labels?: Record<string, string>
+  archive_root?: string
+  copy_text_exports?: boolean
+  delete_copied_source?: boolean
+}
+
+/** Mutable surface of an ingest source — input to createIngest / updateIngest. */
+export interface IngestSourceInput {
+  name: string
+  kind: string
+  enabled: boolean
+  sourceRoot: string
+  namespace: string
+  rules?: JsonObject
+  labels?: Record<string, string>
+}
+
+/** A run queued by /v1/ingests/run or /v1/ingests/run-ingest. */
+export interface EnqueuedIngestRun {
+  run_id: number
+  ingest_name: string
+}
+
+/** A row of ingest run history from /v1/ingests/runs. */
+export interface IngestRunRecord {
+  id: number
+  name: string
+  kind: string
+  status: string
+  started_at?: string
+  finished_at?: string
+  inserted: number
+  updated: number
+  skipped: number
+  error?: string
+}
+
+/** A cron schedule for an ingest source. */
+export interface IngestSchedule {
+  id: string
+  ingest_name: string
+  cron_expr: string
+  enabled: boolean
+  last_run?: string
+  next_run?: string
+  created_at: string
+  updated_at: string
+}
+
+/** Mutable surface of an ingest schedule — input to create/update. */
+export interface IngestScheduleInput {
+  ingestName: string
+  cronExpr: string
+  enabled: boolean
 }
 
 export interface FetchEntityFragmentsParams {
@@ -433,6 +486,18 @@ function mapIngestSummary(value: unknown): IngestSummary {
   return normalizeKeys(value) as IngestSummary
 }
 
+function mapEnqueuedIngestRun(value: unknown): EnqueuedIngestRun {
+  return normalizeKeys(value) as EnqueuedIngestRun
+}
+
+function mapIngestRunRecord(value: unknown): IngestRunRecord {
+  return normalizeKeys(value) as IngestRunRecord
+}
+
+function mapIngestSchedule(value: unknown): IngestSchedule {
+  return normalizeKeys(value) as IngestSchedule
+}
+
 function mapRoutePreviewResult(value: unknown): RoutePreviewResult {
   return normalizeKeys(value) as RoutePreviewResult
 }
@@ -638,10 +703,103 @@ export async function fetchIngests(): Promise<IngestSummary[]> {
   return data.ingests.map((item) => mapIngestSummary(item))
 }
 
-/** POST /v1/ingests/run — runs every configured ingest. Returns the run report. */
-export async function runIngests(): Promise<unknown> {
-  const data = await postJson<{ runs: unknown }>('/v1/ingests/run')
-  return data.runs
+function ingestSourceBody(input: IngestSourceInput): JsonObject {
+  return {
+    name: input.name,
+    kind: input.kind,
+    enabled: input.enabled,
+    source_root: input.sourceRoot,
+    namespace: input.namespace,
+    rules: input.rules ?? {},
+    labels: input.labels ?? {},
+  }
+}
+
+/** POST /v1/ingests/create — add a new ingest source. */
+export async function createIngest(input: IngestSourceInput): Promise<IngestSummary> {
+  const data = await postJson<{ ingest: IngestSummary }>(
+    '/v1/ingests/create',
+    ingestSourceBody(input),
+  )
+  return mapIngestSummary(data.ingest)
+}
+
+/** POST /v1/ingests/update — full-record replace of an ingest source, keyed by name. */
+export async function updateIngest(input: IngestSourceInput): Promise<IngestSummary> {
+  const data = await postJson<{ ingest: IngestSummary }>(
+    '/v1/ingests/update',
+    ingestSourceBody(input),
+  )
+  return mapIngestSummary(data.ingest)
+}
+
+/** POST /v1/ingests/delete — remove an ingest source by name. */
+export async function deleteIngest(name: string): Promise<string> {
+  const data = await postJson<{ deleted: string }>('/v1/ingests/delete', { name })
+  return data.deleted
+}
+
+/** POST /v1/ingests/set-enabled — toggle an ingest source on or off. */
+export async function setIngestEnabled(name: string, enabled: boolean): Promise<IngestSummary> {
+  const data = await postJson<{ ingest: IngestSummary }>('/v1/ingests/set-enabled', {
+    name,
+    enabled,
+  })
+  return mapIngestSummary(data.ingest)
+}
+
+/** POST /v1/ingests/run — enqueues a run for every enabled ingest. Returns the queued runs. */
+export async function runIngests(): Promise<EnqueuedIngestRun[]> {
+  const data = await postJson<{ runs: unknown[] }>('/v1/ingests/run')
+  return (data.runs ?? []).map((item) => mapEnqueuedIngestRun(item))
+}
+
+/** POST /v1/ingests/run-ingest — enqueues a run for one ingest by name. */
+export async function runIngest(name: string): Promise<EnqueuedIngestRun> {
+  const data = await postJson<EnqueuedIngestRun>('/v1/ingests/run-ingest', { name })
+  return mapEnqueuedIngestRun(data)
+}
+
+/** GET /v1/ingests/runs — recent ingest runs, newest first. */
+export async function fetchIngestRuns(limit = 50): Promise<IngestRunRecord[]> {
+  const data = await apiFetch<{ runs: unknown[] }>('/v1/ingests/runs', undefined, { limit })
+  return (data.runs ?? []).map((item) => mapIngestRunRecord(item))
+}
+
+/** GET /v1/ingests/schedules — all ingest cron schedules. */
+export async function fetchIngestSchedules(): Promise<IngestSchedule[]> {
+  const data = await apiFetch<{ schedules: unknown[] }>('/v1/ingests/schedules')
+  return (data.schedules ?? []).map((item) => mapIngestSchedule(item))
+}
+
+/** POST /v1/ingests/schedules — create a cron schedule. */
+export async function createIngestSchedule(input: IngestScheduleInput): Promise<IngestSchedule> {
+  const data = await postJson<{ schedule: IngestSchedule }>('/v1/ingests/schedules', {
+    ingest_name: input.ingestName,
+    cron_expr: input.cronExpr,
+    enabled: input.enabled,
+  })
+  return mapIngestSchedule(data.schedule)
+}
+
+/** POST /v1/ingests/schedules/update — update a cron schedule by id. */
+export async function updateIngestSchedule(
+  id: string,
+  input: IngestScheduleInput,
+): Promise<IngestSchedule> {
+  const data = await postJson<{ schedule: IngestSchedule }>('/v1/ingests/schedules/update', {
+    id,
+    ingest_name: input.ingestName,
+    cron_expr: input.cronExpr,
+    enabled: input.enabled,
+  })
+  return mapIngestSchedule(data.schedule)
+}
+
+/** POST /v1/ingests/schedules/delete — delete a cron schedule by id. */
+export async function deleteIngestSchedule(id: string): Promise<string> {
+  const data = await postJson<{ deleted: string }>('/v1/ingests/schedules/delete', { id })
+  return data.deleted
 }
 
 /** POST /v1/ingests/validate — dry-check one ingest source by name. */
@@ -898,7 +1056,17 @@ export const apiClient = {
   fetchRecallStatus,
   fetchEntities,
   fetchIngests,
+  createIngest,
+  updateIngest,
+  deleteIngest,
+  setIngestEnabled,
   runIngests,
+  runIngest,
+  fetchIngestRuns,
+  fetchIngestSchedules,
+  createIngestSchedule,
+  updateIngestSchedule,
+  deleteIngestSchedule,
   validateIngest,
   previewIngest,
   fetchEntityFragments,
