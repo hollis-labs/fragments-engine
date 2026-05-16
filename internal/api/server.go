@@ -43,6 +43,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/ingests/schedules/update", s.handleUpdateIngestSchedule)
 	mux.HandleFunc("/v1/ingests/schedules/delete", s.handleDeleteIngestSchedule)
 	mux.HandleFunc("/v1/search", s.handleSearch)
+	mux.HandleFunc("/v1/fragments", s.handleFragmentList)
 	mux.HandleFunc("/v1/fragments/get", s.handleFragmentGet)
 	mux.HandleFunc("/v1/fragments/related", s.handleFragmentRelated)
 	mux.HandleFunc("/v1/fragments/reanalyze-attachments", s.handleFragmentReanalyzeAttachments)
@@ -983,6 +984,53 @@ func (s *Server) handleInboxEntityItems(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+func (s *Server) handleFragmentList(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	q := r.URL.Query()
+	status := q.Get("status")
+	limit := 0
+	if v := q.Get("limit"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 0 {
+			http.Error(w, "invalid limit", http.StatusBadRequest)
+			return
+		}
+		limit = n
+	}
+	offset := 0
+	if v := q.Get("offset"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 0 {
+			http.Error(w, "invalid offset", http.StatusBadRequest)
+			return
+		}
+		offset = n
+	}
+	cfg, err := config.Load(s.cfgPath)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	instance, err := app.Open(r.Context(), cfg)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer instance.Close()
+	items, total, err := instance.Fragments.List(r.Context(), status, limit, offset)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if items == nil {
+		items = []domain.Fragment{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items, "total": total})
 }
 
 func (s *Server) handleFragmentGet(w http.ResponseWriter, r *http.Request) {
