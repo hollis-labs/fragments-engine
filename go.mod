@@ -3,36 +3,16 @@ module github.com/hollis-labs/fragments-engine
 go 1.26.1
 
 require (
-	github.com/hollis-labs/go-embed-contracts v0.0.0-00010101000000-000000000000
-	github.com/hollis-labs/go-queue v0.0.0
+	github.com/hollis-labs/go-embed-contracts v0.1.1
+	github.com/hollis-labs/go-queue v0.1.0
 	github.com/hollis-labs/go-scheduler v0.1.0
-	github.com/hollis-labs/tesseract v0.0.0
+	github.com/hollis-labs/tesseract v0.7.0
 	github.com/ledongthuc/pdf v0.0.0-20250511090121-5959a4027728
 	github.com/mackee/go-readability v0.3.1
 	github.com/mark3labs/mcp-go v0.47.0
 	gopkg.in/yaml.v3 v3.0.1
 	modernc.org/sqlite v1.48.1
 )
-
-replace github.com/hollis-labs/tesseract => /Users/chrispian/dev/hollis-labs/apps/vanta-conduit
-
-replace github.com/hollis-labs/go-providers => /Users/chrispian/dev/hollis-labs/libs/go-providers
-
-replace github.com/hollis-labs/go-queue => /Users/chrispian/dev/hollis-labs/libs/go-queue
-
-replace github.com/hollis-labs/go-scheduler => /Users/chrispian/dev/hollis-labs/libs/go-scheduler
-
-replace github.com/hollis-labs/go-otel => /Users/chrispian/dev/hollis-labs/libs/go-otel
-
-replace github.com/hollis-labs/mcp-helpers => /Users/chrispian/dev/hollis-labs/libs/go-mcp
-
-replace github.com/hollis-labs/go-embed-contracts => /Users/chrispian/dev/hollis-labs/libs/go-embed-contracts
-
-replace github.com/hollis-labs/go-modelsdev => /Users/chrispian/dev/hollis-labs/libs/go-modelsdev
-
-replace github.com/hollis-labs/go-llm-types => /Users/chrispian/dev/hollis-labs/libs/go-llm-types
-
-replace github.com/hollis-labs/go-llm-contracts => /Users/chrispian/dev/hollis-labs/libs/go-llm-contracts
 
 require (
 	github.com/dustin/go-humanize v1.0.1 // indirect
