@@ -363,6 +363,61 @@ WHERE id = ?`, fragmentID).Scan(
 	return f, nil
 }
 
+// ListOptions filters and paginates FragmentRepository.List.
+type ListOptions struct {
+	Status domain.FragmentStatus // optional; empty = all statuses
+	Limit  int                   // defaults to 50, capped at 200
+	Offset int
+}
+
+// List returns fragments newest-first, optionally filtered by status, plus the
+// total count of the (status-filtered) set so callers can paginate.
+func (r *FragmentRepository) List(ctx context.Context, opts ListOptions) ([]domain.Fragment, int, error) {
+	limit := opts.Limit
+	if limit <= 0 {
+		limit = 50
+	}
+	if limit > 200 {
+		limit = 200
+	}
+	offset := opts.Offset
+	if offset < 0 {
+		offset = 0
+	}
+
+	var (
+		where string
+		args  []any
+	)
+	if opts.Status != "" {
+		where = " WHERE status = ?"
+		args = append(args, opts.Status)
+	}
+
+	var total int
+	if err := r.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM fragments`+where, args...).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("count fragments: %w", err)
+	}
+
+	listArgs := append(append([]any{}, args...), limit, offset)
+	rows, err := r.db.QueryContext(ctx, `
+SELECT
+  id, source, source_type, source_id, title, content, content_hash, created_at,
+  ingested_at, status, summary_text, indexed_at, metadata_json, ingest_name, canonical_path
+FROM fragments`+where+`
+ORDER BY created_at DESC, id DESC
+LIMIT ? OFFSET ?`, listArgs...)
+	if err != nil {
+		return nil, 0, fmt.Errorf("list fragments: %w", err)
+	}
+	defer rows.Close()
+	items, err := scanFragments(rows)
+	if err != nil {
+		return nil, 0, err
+	}
+	return items, total, nil
+}
+
 func (r *FragmentRepository) FindRelationCandidates(ctx context.Context, fragment domain.Fragment, limit int) ([]domain.Fragment, error) {
 	if limit <= 0 {
 		limit = 5
