@@ -6,3 +6,6 @@ data/
 *.db
 *.db-shm
 *.db-wal
+
+# compiled server binary (built via `make` / `go build -o fragments-engine`)
+/fragments-engine

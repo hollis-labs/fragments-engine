@@ -3,18 +3,19 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 
-const apiTarget = process.env.SYSOP_API_ORIGIN || 'http://localhost:8990'
+const apiTarget = process.env.SYSOP_API_ORIGIN || 'http://localhost:8091'
 
 // https://vite.dev/config/
 export default defineConfig({
+  base: '/sysop/',
   plugins: [
     tailwindcss(),
     react(),
   ],
   server: {
-    port: 5175,
+    port: 5173,
     proxy: {
-      '/api': {
+      '/v1': {
         target: apiTarget,
         changeOrigin: true,
       },

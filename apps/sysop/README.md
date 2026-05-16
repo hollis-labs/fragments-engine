@@ -9,9 +9,28 @@ This copy is intentionally trimmed for Fragments Engine Phase 1. Only the inbox 
 ## Local commands
 
 ```bash
-npm install
-npm run build
+make sysop-build
+make sysop-dev
+make sysop-clean
 ```
+
+## Build flow
+
+`apps/sysop/dist` is embedded into the Fragments Engine Go binary at compile time. The normal repo build now runs the sysop bundle first:
+
+```bash
+make build
+```
+
+From a clean checkout, or after deleting frontend artifacts, the end-to-end flow is:
+
+```bash
+make sysop-build
+make build
+./fragments-engine serve-api
+```
+
+`make sysop-build` installs `apps/sysop/node_modules` when needed, then runs the Vite production build. `make sysop-clean` removes both `apps/sysop/dist` and `apps/sysop/node_modules`.
 
 ## Updating from upstream Torque
 
@@ -23,5 +42,5 @@ npm run build
    - product naming and env vars (`SYSOP_API_ORIGIN`)
    - this README
 3. Delete Phase 1-excluded pages and controls again before building.
-4. Run `npm install` and `npm run build`.
+4. Run `make sysop-build`.
 5. Commit the resync as a single vendor-style commit.

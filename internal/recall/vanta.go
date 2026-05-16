@@ -18,8 +18,8 @@ import (
 	"github.com/hollis-labs/fragments-engine/internal/config"
 	"github.com/hollis-labs/fragments-engine/internal/domain"
 	"github.com/hollis-labs/fragments-engine/internal/repository"
-	conduit "github.com/hollis-labs/vanta-conduit"
-	vmemory "github.com/hollis-labs/vanta-conduit/memory"
+	conduit "github.com/hollis-labs/tesseract"
+	vmemory "github.com/hollis-labs/tesseract/memory"
 )
 
 const vantaNamespace = "user/fragments-engine/knowledge/fragments"
