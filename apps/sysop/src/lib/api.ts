@@ -513,7 +513,13 @@ function mapIngestSchedule(value: unknown): IngestSchedule {
 }
 
 function mapIngestRecord(value: unknown): IngestRecord {
-  return normalizeKeys(value) as IngestRecord
+  const record = normalizeKeys(value) as IngestRecord
+  // normalizeKeys() recurses into nested objects; carry the free-form `rules`
+  // map through verbatim so its rule keys are never rewritten.
+  if (value && typeof value === 'object' && 'rules' in value) {
+    record.rules = (value as { rules?: JsonObject }).rules
+  }
+  return record
 }
 
 function mapRoutePreviewResult(value: unknown): RoutePreviewResult {

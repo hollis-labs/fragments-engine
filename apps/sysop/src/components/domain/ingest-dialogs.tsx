@@ -38,10 +38,12 @@ function Checkbox({
   label,
   checked,
   onChange,
+  disabled,
 }: {
   label: string
   checked: boolean
   onChange: (next: boolean) => void
+  disabled?: boolean
 }) {
   return (
     <label className="flex items-center gap-2 text-[13px] text-text">
@@ -49,6 +51,7 @@ function Checkbox({
         type="checkbox"
         checked={checked}
         onChange={(e) => onChange(e.target.checked)}
+        disabled={disabled}
         className="size-3.5 accent-[var(--color-text-soft)]"
       />
       {label}
@@ -235,6 +238,7 @@ export function IngestEditDialog({ open, onClose, onSaved, ingest }: IngestEditD
               className={FIELD}
               value={kind}
               onChange={(e) => setKind(e.target.value)}
+              disabled={rulesLoading}
             >
               {INGEST_KINDS.map((k) => (
                 <option key={k} value={k}>
@@ -249,6 +253,7 @@ export function IngestEditDialog({ open, onClose, onSaved, ingest }: IngestEditD
               value={sourceRoot}
               onChange={(e) => setSourceRoot(e.target.value)}
               placeholder="/Users/you/.claude/projects"
+              disabled={rulesLoading}
             />
           </Field>
           <Field label="Namespace">
@@ -257,9 +262,15 @@ export function IngestEditDialog({ open, onClose, onSaved, ingest }: IngestEditD
               value={namespace}
               onChange={(e) => setNamespace(e.target.value)}
               placeholder="inbox"
+              disabled={rulesLoading}
             />
           </Field>
-          <Checkbox label="Enabled" checked={enabled} onChange={setEnabled} />
+          <Checkbox
+            label="Enabled"
+            checked={enabled}
+            onChange={setEnabled}
+            disabled={rulesLoading}
+          />
 
           {/* Per-kind rules */}
           {kind === 'claude_code' && (
@@ -270,6 +281,7 @@ export function IngestEditDialog({ open, onClose, onSaved, ingest }: IngestEditD
                 onChange={(e) => setMaxFileSizeMb(e.target.value)}
                 inputMode="numeric"
                 placeholder="optional"
+                disabled={rulesLoading}
               />
             </Field>
           )}
@@ -282,6 +294,7 @@ export function IngestEditDialog({ open, onClose, onSaved, ingest }: IngestEditD
                   onChange={(e) => setMaxFileSizeMb(e.target.value)}
                   inputMode="numeric"
                   placeholder="optional"
+                  disabled={rulesLoading}
                 />
               </Field>
               <Field label="Archive root">
@@ -290,17 +303,20 @@ export function IngestEditDialog({ open, onClose, onSaved, ingest }: IngestEditD
                   value={archiveRoot}
                   onChange={(e) => setArchiveRoot(e.target.value)}
                   placeholder="optional"
+                  disabled={rulesLoading}
                 />
               </Field>
               <Checkbox
                 label="Copy text exports"
                 checked={copyTextExports}
                 onChange={setCopyTextExports}
+                disabled={rulesLoading}
               />
               <Checkbox
                 label="Delete copied source"
                 checked={deleteCopiedSource}
                 onChange={setDeleteCopiedSource}
+                disabled={rulesLoading}
               />
             </>
           )}
@@ -313,6 +329,7 @@ export function IngestEditDialog({ open, onClose, onSaved, ingest }: IngestEditD
                   onChange={(e) => setRequestTimeoutSeconds(e.target.value)}
                   inputMode="numeric"
                   placeholder="optional"
+                  disabled={rulesLoading}
                 />
               </Field>
               <Field label="Max body (MB)">
@@ -322,6 +339,7 @@ export function IngestEditDialog({ open, onClose, onSaved, ingest }: IngestEditD
                   onChange={(e) => setMaxBodyMb(e.target.value)}
                   inputMode="numeric"
                   placeholder="optional"
+                  disabled={rulesLoading}
                 />
               </Field>
               <Field label="User agent">
@@ -330,6 +348,7 @@ export function IngestEditDialog({ open, onClose, onSaved, ingest }: IngestEditD
                   value={userAgent}
                   onChange={(e) => setUserAgent(e.target.value)}
                   placeholder="optional"
+                  disabled={rulesLoading}
                 />
               </Field>
             </>
