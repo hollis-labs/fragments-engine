@@ -172,9 +172,11 @@ export default function IngestPage() {
 
   const [runs, setRuns] = useState<IngestRunRecord[]>([])
   const [runsLoading, setRunsLoading] = useState(true)
+  const [runsError, setRunsError] = useState<string | null>(null)
 
   const [schedules, setSchedules] = useState<IngestSchedule[]>([])
   const [schedulesLoading, setSchedulesLoading] = useState(true)
+  const [schedulesError, setSchedulesError] = useState<string | null>(null)
 
   const [running, setRunning] = useState(false)
   const [runNote, setRunNote] = useState<string | null>(null)
@@ -210,10 +212,11 @@ export default function IngestPage() {
 
   const loadRuns = useCallback(async () => {
     setRunsLoading(true)
+    setRunsError(null)
     try {
       setRuns(await api.fetchIngestRuns(50))
-    } catch {
-      // Surfaced via empty state; keep the page responsive.
+    } catch (err) {
+      setRunsError(errorMessage(err))
     } finally {
       setRunsLoading(false)
     }
@@ -221,10 +224,11 @@ export default function IngestPage() {
 
   const loadSchedules = useCallback(async () => {
     setSchedulesLoading(true)
+    setSchedulesError(null)
     try {
       setSchedules(await api.fetchIngestSchedules())
-    } catch {
-      // Surfaced via empty state; keep the page responsive.
+    } catch (err) {
+      setSchedulesError(errorMessage(err))
     } finally {
       setSchedulesLoading(false)
     }
@@ -315,6 +319,8 @@ export default function IngestPage() {
       await api.deleteIngest(deleteIngestTarget.name)
       setDeleteIngestTarget(null)
       await loadIngests()
+      await loadSchedules()
+      await loadRuns()
     } catch (err) {
       setConfirmError(errorMessage(err))
     } finally {
@@ -465,6 +471,8 @@ export default function IngestPage() {
                                 <Button
                                   size="xs"
                                   variant="outline"
+                                  aria-label="Edit ingest source"
+                                  title="Edit ingest source"
                                   onClick={() => setEditDialog({ open: true, ingest })}
                                 >
                                   <Pencil className="h-3 w-3" />
@@ -472,6 +480,8 @@ export default function IngestPage() {
                                 <Button
                                   size="xs"
                                   variant="destructive"
+                                  aria-label="Delete ingest source"
+                                  title="Delete ingest source"
                                   onClick={() => {
                                     setConfirmError(null)
                                     setDeleteIngestTarget(ingest)
@@ -515,6 +525,8 @@ export default function IngestPage() {
                 <Skeleton className="h-7 w-full" />
                 <Skeleton className="h-7 w-5/6" />
               </div>
+            ) : runsError ? (
+              <p className="text-[13px] text-danger-soft">{runsError}</p>
             ) : runs.length === 0 ? (
               <p className="text-[13px] text-text-muted">No runs yet.</p>
             ) : (
@@ -585,6 +597,8 @@ export default function IngestPage() {
                 <Skeleton className="h-7 w-full" />
                 <Skeleton className="h-7 w-5/6" />
               </div>
+            ) : schedulesError ? (
+              <p className="text-[13px] text-danger-soft">{schedulesError}</p>
             ) : schedules.length === 0 ? (
               <p className="text-[13px] text-text-muted">No schedules configured.</p>
             ) : (
@@ -629,6 +643,8 @@ export default function IngestPage() {
                             <Button
                               size="xs"
                               variant="outline"
+                              aria-label="Edit schedule"
+                              title="Edit schedule"
                               onClick={() => setScheduleDialog({ open: true, schedule })}
                             >
                               <Pencil className="h-3 w-3" />
@@ -636,6 +652,8 @@ export default function IngestPage() {
                             <Button
                               size="xs"
                               variant="destructive"
+                              aria-label="Delete schedule"
+                              title="Delete schedule"
                               onClick={() => {
                                 setConfirmError(null)
                                 setDeleteScheduleTarget(schedule)
