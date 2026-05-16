@@ -98,7 +98,7 @@ func TestFragmentList(t *testing.T) {
 	}
 
 	// Status filter.
-	inbox, inboxTotal, err := repo.List(ctx, ListOptions{Status: string(domain.FragmentStatusInbox)})
+	inbox, inboxTotal, err := repo.List(ctx, ListOptions{Status: domain.FragmentStatusInbox})
 	if err != nil {
 		t.Fatalf("list inbox: %v", err)
 	}

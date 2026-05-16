@@ -365,8 +365,8 @@ WHERE id = ?`, fragmentID).Scan(
 
 // ListOptions filters and paginates FragmentRepository.List.
 type ListOptions struct {
-	Status string // optional; empty = all statuses
-	Limit  int     // defaults to 50, capped at 200
+	Status domain.FragmentStatus // optional; empty = all statuses
+	Limit  int                   // defaults to 50, capped at 200
 	Offset int
 }
 
@@ -405,7 +405,7 @@ SELECT
   id, source, source_type, source_id, title, content, content_hash, created_at,
   ingested_at, status, summary_text, indexed_at, metadata_json, ingest_name, canonical_path
 FROM fragments`+where+`
-ORDER BY created_at DESC
+ORDER BY created_at DESC, id DESC
 LIMIT ? OFFSET ?`, listArgs...)
 	if err != nil {
 		return nil, 0, fmt.Errorf("list fragments: %w", err)

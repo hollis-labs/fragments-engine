@@ -213,7 +213,7 @@ func (s *FragmentService) GetDetail(ctx context.Context, fragmentID string, rela
 // List returns fragments newest-first with an optional status filter, plus the
 // total count of the filtered set for pagination.
 func (s *FragmentService) List(ctx context.Context, status string, limit, offset int) ([]domain.Fragment, int, error) {
-	return s.repo.List(ctx, repository.ListOptions{Status: status, Limit: limit, Offset: offset})
+	return s.repo.List(ctx, repository.ListOptions{Status: domain.FragmentStatus(status), Limit: limit, Offset: offset})
 }
 
 func (s *FragmentService) Related(ctx context.Context, fragmentID string, limit int) ([]domain.SearchResult, error) {
