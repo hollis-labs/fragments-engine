@@ -96,6 +96,20 @@ export interface IngestSourceInput {
   labels?: Record<string, string>
 }
 
+/**
+ * The full ingest source record from /v1/ingests/get — unlike IngestSummary,
+ * it carries the raw `rules` map verbatim so an editor can round-trip it.
+ */
+export interface IngestRecord {
+  name: string
+  kind: string
+  enabled: boolean
+  source_root: string
+  namespace: string
+  rules?: JsonObject
+  labels?: Record<string, string>
+}
+
 /** A run queued by /v1/ingests/run or /v1/ingests/run-ingest. */
 export interface EnqueuedIngestRun {
   run_id: number
@@ -498,6 +512,10 @@ function mapIngestSchedule(value: unknown): IngestSchedule {
   return normalizeKeys(value) as IngestSchedule
 }
 
+function mapIngestRecord(value: unknown): IngestRecord {
+  return normalizeKeys(value) as IngestRecord
+}
+
 function mapRoutePreviewResult(value: unknown): RoutePreviewResult {
   return normalizeKeys(value) as RoutePreviewResult
 }
@@ -713,6 +731,12 @@ function ingestSourceBody(input: IngestSourceInput): JsonObject {
     rules: input.rules ?? {},
     labels: input.labels ?? {},
   }
+}
+
+/** GET /v1/ingests/get — the full record (incl. raw rules) for one ingest source. */
+export async function fetchIngest(name: string): Promise<IngestRecord> {
+  const data = await apiFetch<{ ingest: IngestRecord }>('/v1/ingests/get', undefined, { name })
+  return mapIngestRecord(data.ingest)
 }
 
 /** POST /v1/ingests/create — add a new ingest source. */
@@ -1056,6 +1080,7 @@ export const apiClient = {
   fetchRecallStatus,
   fetchEntities,
   fetchIngests,
+  fetchIngest,
   createIngest,
   updateIngest,
   deleteIngest,

@@ -6,6 +6,18 @@ import { ApiError } from '@/lib/api'
 import type { IngestSchedule, IngestSummary } from '@/lib/api'
 import type { JsonObject } from '@/lib/types'
 
+/** Reads a string-valued rule, returning '' when absent or another type. */
+function ruleStr(rules: JsonObject, key: string): string {
+  const v = rules[key]
+  return typeof v === 'string' ? v : ''
+}
+
+/** Reads a number-valued rule as a string, returning '' when absent or another type. */
+function ruleNum(rules: JsonObject, key: string): string {
+  const v = rules[key]
+  return typeof v === 'number' ? String(v) : ''
+}
+
 const FIELD =
   'h-8 w-full rounded-md border border-border bg-bg px-2 text-sm text-text outline-none transition focus:border-border-strong'
 const LABEL = 'text-[10px] font-semibold uppercase tracking-[.18em] text-text-subtle'
@@ -87,26 +99,65 @@ export function IngestEditDialog({ open, onClose, onSaved, ingest }: IngestEditD
 
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // Edit mode fetches the full record (incl. rules) from /v1/ingests/get.
+  const [rulesLoading, setRulesLoading] = useState(false)
+  const [recordError, setRecordError] = useState<string | null>(null)
 
   useEffect(() => {
     if (!open) return
+    // Seed synchronously from the summary so the form is never blank.
     setName(ingest?.name ?? '')
     setKind(ingest?.kind ?? 'claude_code')
     setEnabled(ingest?.enabled ?? true)
     setSourceRoot(ingest?.source_root ?? '')
     setNamespace(ingest?.namespace ?? '')
-    // The IngestSummary only echoes chatgpt_export archive rules; other rules
-    // cannot be prefilled and submitting clears them (see dialog hint).
     setMaxFileSizeMb('')
-    setArchiveRoot(ingest?.archive_root ?? '')
-    setCopyTextExports(ingest?.copy_text_exports ?? false)
-    setDeleteCopiedSource(ingest?.delete_copied_source ?? false)
+    setArchiveRoot('')
+    setCopyTextExports(false)
+    setDeleteCopiedSource(false)
     setRequestTimeoutSeconds('')
     setMaxBodyMb('')
     setUserAgent('')
     setSubmitting(false)
     setError(null)
-  }, [open, ingest])
+    setRecordError(null)
+
+    if (!ingest) {
+      setRulesLoading(false)
+      return
+    }
+
+    // Edit mode: fetch the full record so per-kind rules can be prefilled —
+    // without this, a save would replace the record and clear unsent rules.
+    let cancelled = false
+    setRulesLoading(true)
+    api
+      .fetchIngest(ingest.name)
+      .then((record) => {
+        if (cancelled) return
+        setKind(record.kind)
+        setEnabled(record.enabled)
+        setSourceRoot(record.source_root)
+        setNamespace(record.namespace)
+        const rules = record.rules ?? {}
+        setMaxFileSizeMb(ruleNum(rules, 'max_file_size_mb'))
+        setArchiveRoot(ruleStr(rules, 'archive_root'))
+        setCopyTextExports(rules.copy_text_exports === true)
+        setDeleteCopiedSource(rules.delete_copied_source === true)
+        setRequestTimeoutSeconds(ruleNum(rules, 'request_timeout_seconds'))
+        setMaxBodyMb(ruleNum(rules, 'max_body_mb'))
+        setUserAgent(ruleStr(rules, 'user_agent'))
+      })
+      .catch((err) => {
+        if (!cancelled) setRecordError(errMessage(err))
+      })
+      .finally(() => {
+        if (!cancelled) setRulesLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [open, ingest, api])
 
   function buildRules(): JsonObject {
     const rules: JsonObject = {}
@@ -284,10 +335,13 @@ export function IngestEditDialog({ open, onClose, onSaved, ingest }: IngestEditD
             </>
           )}
 
-          {isEdit && (
-            <p className="text-[11px] text-text-subtle">
-              Update is a full-record replace. Rules fields left blank are cleared on save —
-              re-enter any rules you want to keep.
+          {isEdit && rulesLoading && (
+            <p className="text-[11px] text-text-subtle">Loading current configuration…</p>
+          )}
+          {isEdit && recordError && (
+            <p className="text-[11px] text-danger-soft">
+              Couldn't load the current rules ({recordError}). Update is a full-record
+              replace — saving will clear any rules left blank.
             </p>
           )}
           {error && <p className="text-sm text-danger-soft">{error}</p>}
@@ -295,7 +349,7 @@ export function IngestEditDialog({ open, onClose, onSaved, ingest }: IngestEditD
             <Button variant="ghost" size="sm" onClick={onClose}>
               Cancel
             </Button>
-            <Button size="sm" onClick={handleSubmit} disabled={submitting}>
+            <Button size="sm" onClick={handleSubmit} disabled={submitting || rulesLoading}>
               {submitting ? 'Saving…' : isEdit ? 'Save changes' : 'Create ingest'}
             </Button>
           </div>
