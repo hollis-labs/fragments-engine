@@ -112,6 +112,60 @@ func TestIngestAdminService_ListValidatePreviewAndArchivePolicy(t *testing.T) {
 	}
 }
 
+func TestIngestAdminService_Get(t *testing.T) {
+	claudeRoot, err := filepath.Abs(filepath.Join("..", "..", "testdata", "claude"))
+	if err != nil {
+		t.Fatalf("resolve claude fixture: %v", err)
+	}
+
+	cfgPath := filepath.Join(t.TempDir(), "fragments.yaml")
+	cfg := config.Config{
+		Database: config.DatabaseConfig{Path: filepath.Join(t.TempDir(), "fragments.db")},
+		Recall:   config.RecallConfig{Backend: "sqlite"},
+		Ingests: []config.IngestConfig{
+			{
+				Name:    "claude-fixture",
+				Kind:    "claude_code",
+				Enabled: true,
+				Source:  config.IngestSource{Root: claudeRoot},
+				Routing: config.IngestRouting{Namespace: "fragments/chats/claude"},
+				Rules:   map[string]any{"max_file_size_mb": 50},
+				Labels:  map[string]string{"team": "platform"},
+			},
+		},
+	}
+	if err := config.Save(cfgPath, cfg); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+
+	svc := NewIngestAdminService(cfgPath)
+
+	rec, err := svc.Get(context.Background(), "claude-fixture")
+	if err != nil {
+		t.Fatalf("get ingest: %v", err)
+	}
+	if rec.Name != "claude-fixture" || rec.Kind != "claude_code" || !rec.Enabled {
+		t.Fatalf("unexpected record header: %+v", rec)
+	}
+	if rec.SourceRoot != claudeRoot || rec.Namespace != "fragments/chats/claude" {
+		t.Fatalf("unexpected record source/namespace: %+v", rec)
+	}
+	if rec.Labels["team"] != "platform" {
+		t.Fatalf("expected labels carried verbatim: %+v", rec.Labels)
+	}
+	// The raw rules map must survive — this is the whole point of Get vs List.
+	if rec.Rules["max_file_size_mb"] != 50 {
+		t.Fatalf("expected rules map carried verbatim: %+v", rec.Rules)
+	}
+
+	// Unknown name is caller error → ValidationError (HTTP 400).
+	if _, err := svc.Get(context.Background(), "does-not-exist"); err == nil {
+		t.Fatal("expected error for unknown ingest name")
+	} else if _, ok := err.(ValidationError); !ok {
+		t.Fatalf("expected ValidationError for unknown name, got %T: %v", err, err)
+	}
+}
+
 func TestIngestAdminService_ValidateRejectsUnsafeArchivePolicy(t *testing.T) {
 	root, err := filepath.Abs(filepath.Join("..", "..", "testdata", "chatgpt-export"))
 	if err != nil {

@@ -84,6 +84,20 @@ type IngestSummary struct {
 	DeleteCopiedSource bool              `json:"delete_copied_source,omitempty"`
 }
 
+// IngestRecord is the complete config view of a single ingest source,
+// including the raw rules map. Unlike IngestSummary — which projects onto a
+// summary shape and decodes only chatgpt_export archive fields — this carries
+// rules verbatim so the Sysop edit UI can round-trip them without data loss.
+type IngestRecord struct {
+	Name       string            `json:"name"`
+	Kind       string            `json:"kind"`
+	Enabled    bool              `json:"enabled"`
+	SourceRoot string            `json:"source_root"`
+	Namespace  string            `json:"namespace"`
+	Rules      map[string]any    `json:"rules,omitempty"`
+	Labels     map[string]string `json:"labels,omitempty"`
+}
+
 type IngestValidationResult struct {
 	Name        string   `json:"name"`
 	Kind        string   `json:"kind"`

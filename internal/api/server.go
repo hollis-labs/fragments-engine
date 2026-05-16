@@ -29,6 +29,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/healthz", s.handleHealth)
 	mux.Handle(sysopBasePath+"/", newSysopSPAHandler())
 	mux.HandleFunc("/v1/ingests", s.handleListIngests)
+	mux.HandleFunc("/v1/ingests/get", s.handleGetIngest)
 	mux.HandleFunc("/v1/ingests/run", s.handleRunIngests)
 	mux.HandleFunc("/v1/ingests/validate", s.handleValidateIngest)
 	mux.HandleFunc("/v1/ingests/preview", s.handlePreviewIngest)
@@ -351,6 +352,23 @@ func (s *Server) handleListIngests(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ingests": items})
+}
+
+// handleGetIngest returns the complete config record for a single ingest
+// source — including the raw rules map — so the Sysop edit UI can round-trip
+// rules without data loss. Unknown name → 400.
+func (s *Server) handleGetIngest(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	name := r.URL.Query().Get("name")
+	result, err := service.NewIngestAdminService(s.cfgPath).Get(r.Context(), name)
+	if err != nil {
+		writeIngestAdminError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ingest": result})
 }
 
 func (s *Server) handleValidateIngest(w http.ResponseWriter, r *http.Request) {

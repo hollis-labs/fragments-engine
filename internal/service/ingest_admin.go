@@ -84,6 +84,36 @@ func ingestSummary(ic config.IngestConfig) domain.IngestSummary {
 	return item
 }
 
+// Get returns the complete config record for a single ingest source, keyed by
+// name, including the raw rules map. Unlike List — which projects onto
+// IngestSummary and drops rules — this lets the Sysop edit UI round-trip rules
+// without data loss. Unknown name → ValidationError (HTTP 400).
+func (s *IngestAdminService) Get(_ context.Context, name string) (domain.IngestRecord, error) {
+	cfg, err := config.Load(s.cfgPath)
+	if err != nil {
+		return domain.IngestRecord{}, err
+	}
+	ingestCfg, _, err := config.FindIngest(cfg, name)
+	if err != nil {
+		return domain.IngestRecord{}, ValidationError{Msg: err.Error()}
+	}
+	return ingestRecord(ingestCfg), nil
+}
+
+// ingestRecord projects an IngestConfig onto the full API record shape,
+// carrying the raw rules map verbatim.
+func ingestRecord(ic config.IngestConfig) domain.IngestRecord {
+	return domain.IngestRecord{
+		Name:       ic.Name,
+		Kind:       ic.Kind,
+		Enabled:    ic.Enabled,
+		SourceRoot: ic.Source.Root,
+		Namespace:  ic.Routing.Namespace,
+		Rules:      ic.Rules,
+		Labels:     ic.Labels,
+	}
+}
+
 // Create adds a new ingest source to the config and persists it.
 func (s *IngestAdminService) Create(_ context.Context, input IngestSourceInput) (domain.IngestSummary, error) {
 	cfg, err := config.Load(s.cfgPath)
