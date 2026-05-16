@@ -104,7 +104,10 @@ func (s *IngestAdminService) Create(_ context.Context, input IngestSourceInput) 
 	return ingestSummary(ic), nil
 }
 
-// Update replaces an existing ingest source, keyed by name.
+// Update replaces an existing ingest source, keyed by name. This is a
+// full-record (PUT-style) replace: every field is taken from the input, so a
+// caller must send the complete desired config — omitted fields are cleared,
+// not preserved. Name is the lookup key and cannot be changed here.
 func (s *IngestAdminService) Update(_ context.Context, input IngestSourceInput) (domain.IngestSummary, error) {
 	cfg, err := config.Load(s.cfgPath)
 	if err != nil {
@@ -134,6 +137,9 @@ func (s *IngestAdminService) Delete(_ context.Context, name string) error {
 	if err != nil {
 		return ValidationError{Msg: err.Error()}
 	}
+	// config.Validate (invoked by config.Save) requires at least one ingest,
+	// so removing the final source is rejected up front with a clear message
+	// rather than letting Save fail opaquely.
 	if len(cfg.Ingests) == 1 {
 		return ValidationError{Msg: "cannot delete the last ingest source"}
 	}

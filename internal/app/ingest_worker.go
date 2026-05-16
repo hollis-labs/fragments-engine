@@ -46,6 +46,10 @@ func RunIngestWorker(ctx context.Context, cfgPath string) {
 		RetryAfter:   30 * time.Second,
 		OnFailed: func(job *queue.QueuedJob, err error) {
 			log.Printf("ingest job %s permanently failed: %v", job.ID, err)
+			// Mark the run failed so it does not linger as `queued` forever
+			// when a job is exhausted by an early error (payload decode,
+			// config load, app.Open) that never reached ExecuteIngestRun.
+			failIngestRunForJob(context.Background(), cfgPath, job, err)
 		},
 		OnError: func(err error) {
 			log.Printf("ingest worker error: %v", err)
@@ -82,4 +86,25 @@ func runIngestJob(ctx context.Context, cfgPath string, job *queue.QueuedJob) err
 		return err
 	}
 	return instance.Fragments.ExecuteIngestRun(ctx, payload.RunID, ingestCfg)
+}
+
+// failIngestRunForJob marks the ingest_runs row referenced by a permanently
+// failed job as failed. It is the last-resort cleanup for early failure paths
+// (payload decode / config load / app.Open) that never reached
+// ExecuteIngestRun and so never transitioned the run out of `queued`.
+func failIngestRunForJob(ctx context.Context, cfgPath string, job *queue.QueuedJob, jobErr error) {
+	var payload service.IngestRunPayload
+	if err := json.Unmarshal(job.Payload, &payload); err != nil || payload.RunID == 0 {
+		return
+	}
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		return
+	}
+	instance, err := Open(ctx, cfg)
+	if err != nil {
+		return
+	}
+	defer instance.Close()
+	_ = instance.Fragments.FailIngestRun(ctx, payload.RunID, "ingest job permanently failed: "+jobErr.Error())
 }
