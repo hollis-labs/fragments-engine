@@ -39,6 +39,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/ingests/set-enabled", s.handleSetEnabledIngest)
 	mux.HandleFunc("/v1/ingests/run-ingest", s.handleRunIngest)
 	mux.HandleFunc("/v1/ingests/runs", s.handleListIngestRuns)
+	mux.HandleFunc("/v1/ingests/schedules", s.handleIngestSchedules)
+	mux.HandleFunc("/v1/ingests/schedules/update", s.handleUpdateIngestSchedule)
+	mux.HandleFunc("/v1/ingests/schedules/delete", s.handleDeleteIngestSchedule)
 	mux.HandleFunc("/v1/search", s.handleSearch)
 	mux.HandleFunc("/v1/fragments/get", s.handleFragmentGet)
 	mux.HandleFunc("/v1/fragments/related", s.handleFragmentRelated)
@@ -197,6 +200,21 @@ type ingestSetEnabledRequest struct {
 	Enabled bool   `json:"enabled"`
 }
 
+type ingestScheduleRequest struct {
+	ID         string `json:"id"`
+	IngestName string `json:"ingest_name"`
+	CronExpr   string `json:"cron_expr"`
+	Enabled    bool   `json:"enabled"`
+}
+
+func (req ingestScheduleRequest) toInput() service.IngestScheduleInput {
+	return service.IngestScheduleInput{
+		IngestName: req.IngestName,
+		CronExpr:   req.CronExpr,
+		Enabled:    req.Enabled,
+	}
+}
+
 type fragmentReanalyzeRequest struct {
 	FragmentID   string `json:"fragment_id"`
 	AttachmentID string `json:"attachment_id"`
@@ -207,6 +225,7 @@ func (s *Server) ListenAndServe(addr string) error {
 	defer cancel()
 	go app.RunQueueDrainer(ctx, s.cfgPath)
 	go app.RunIngestWorker(ctx, s.cfgPath)
+	go app.RunIngestScheduler(ctx, s.cfgPath)
 
 	srv := &http.Server{
 		Addr:              addr,
@@ -479,6 +498,122 @@ func (s *Server) handleSetEnabledIngest(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ingest": result})
+}
+
+// handleIngestSchedules lists ingest cron schedules (GET) or creates one (POST).
+func (s *Server) handleIngestSchedules(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		cfg, err := config.Load(s.cfgPath)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		instance, err := app.Open(r.Context(), cfg)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		defer instance.Close()
+		items, err := instance.IngestSchedules.List(r.Context())
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"schedules": items})
+	case http.MethodPost:
+		var input ingestScheduleRequest
+		if err := json.NewDecoder(r.Body).Decode(&input); err != nil && err != io.EOF {
+			http.Error(w, "invalid json body", http.StatusBadRequest)
+			return
+		}
+		cfg, err := config.Load(s.cfgPath)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		instance, err := app.Open(r.Context(), cfg)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		defer instance.Close()
+		result, err := instance.IngestSchedules.Create(r.Context(), cfg, input.toInput())
+		if err != nil {
+			writeIngestAdminError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"schedule": result})
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+// handleUpdateIngestSchedule updates an existing ingest cron schedule.
+func (s *Server) handleUpdateIngestSchedule(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var input ingestScheduleRequest
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil && err != io.EOF {
+		http.Error(w, "invalid json body", http.StatusBadRequest)
+		return
+	}
+	if input.ID == "" {
+		http.Error(w, "id is required", http.StatusBadRequest)
+		return
+	}
+	cfg, err := config.Load(s.cfgPath)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	instance, err := app.Open(r.Context(), cfg)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer instance.Close()
+	result, err := instance.IngestSchedules.Update(r.Context(), cfg, input.ID, input.toInput())
+	if err != nil {
+		writeIngestAdminError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"schedule": result})
+}
+
+// handleDeleteIngestSchedule removes an ingest cron schedule.
+func (s *Server) handleDeleteIngestSchedule(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var input ingestScheduleRequest
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil && err != io.EOF {
+		http.Error(w, "invalid json body", http.StatusBadRequest)
+		return
+	}
+	if input.ID == "" {
+		http.Error(w, "id is required", http.StatusBadRequest)
+		return
+	}
+	cfg, err := config.Load(s.cfgPath)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	instance, err := app.Open(r.Context(), cfg)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer instance.Close()
+	if err := instance.IngestSchedules.Delete(r.Context(), input.ID); err != nil {
+		writeIngestAdminError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"deleted": input.ID})
 }
 
 // writeIngestAdminError maps a ValidationError to HTTP 400 and anything else to 500.

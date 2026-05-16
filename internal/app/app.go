@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	queue "github.com/hollis-labs/go-queue"
 	queuesqlite "github.com/hollis-labs/go-queue/driver/sqlite"
@@ -29,13 +30,14 @@ const (
 )
 
 type App struct {
-	store       *store.Store
-	recall      recall.Indexer
-	Fragments   *service.FragmentService
-	Inbox       *service.InboxService
-	Routing     *service.RoutingService
-	Queue       *service.DeliveryQueueService
-	IngestQueue queue.Queue
+	store           *store.Store
+	recall          recall.Indexer
+	Fragments       *service.FragmentService
+	Inbox           *service.InboxService
+	Routing         *service.RoutingService
+	Queue           *service.DeliveryQueueService
+	IngestQueue     queue.Queue
+	IngestSchedules *service.IngestScheduleService
 }
 
 func Open(ctx context.Context, cfg config.Config) (*App, error) {
@@ -82,13 +84,14 @@ func Open(ctx context.Context, cfg config.Config) (*App, error) {
 		ingest.NewRecallStage(recallIndex),
 	}, claude.Source{}, chatgpt.Source{}, urlsource.Source{})
 	return &App{
-		store:       st,
-		recall:      recallIndex,
-		Fragments:   service.NewFragmentService(fragmentRepo, entityRepo, attachmentRepo, routingRepo, recallIndex, pipeline, visionAnalyzer),
-		Inbox:       service.NewInboxService(inboxRepo),
-		Routing:     routingSvc,
-		Queue:       deliveryQueue,
-		IngestQueue: ingestQueue,
+		store:           st,
+		recall:          recallIndex,
+		Fragments:       service.NewFragmentService(fragmentRepo, entityRepo, attachmentRepo, routingRepo, recallIndex, pipeline, visionAnalyzer),
+		Inbox:           service.NewInboxService(inboxRepo),
+		Routing:         routingSvc,
+		Queue:           deliveryQueue,
+		IngestQueue:     ingestQueue,
+		IngestSchedules: service.NewIngestScheduleService(repository.NewIngestScheduleRepository(st.DB)),
 	}, nil
 }
 
@@ -110,6 +113,24 @@ func (a *App) RecallStatus() recall.Status {
 		return recall.Status{}
 	}
 	return a.recall.Status()
+}
+
+// openStoreWithRetry opens the store, retrying briefly to ride out the
+// transient "database is locked" error that can occur when several runtime
+// goroutines (queue drainer, ingest worker, scheduler) open the SQLite DB
+// concurrently at startup. Long-lived runtimes open the store once, so a
+// single transient failure must not kill them permanently.
+func openStoreWithRetry(dbPath string) (*store.Store, error) {
+	var lastErr error
+	for attempt := 0; attempt < 20; attempt++ {
+		st, err := store.Open(dbPath)
+		if err == nil {
+			return st, nil
+		}
+		lastErr = err
+		time.Sleep(250 * time.Millisecond)
+	}
+	return nil, fmt.Errorf("open store after retries: %w", lastErr)
 }
 
 func InitDB(cfg config.Config) error {

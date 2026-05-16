@@ -12,7 +12,6 @@ import (
 
 	"github.com/hollis-labs/fragments-engine/internal/config"
 	"github.com/hollis-labs/fragments-engine/internal/service"
-	"github.com/hollis-labs/fragments-engine/internal/store"
 )
 
 // RunIngestWorker starts a go-queue worker that executes async ingest-run jobs.
@@ -24,7 +23,7 @@ func RunIngestWorker(ctx context.Context, cfgPath string) {
 		log.Printf("ingest worker config error: %v", err)
 		return
 	}
-	st, err := store.Open(config.ExpandHome(cfg.Database.Path))
+	st, err := openStoreWithRetry(config.ExpandHome(cfg.Database.Path))
 	if err != nil {
 		log.Printf("ingest worker store error: %v", err)
 		return

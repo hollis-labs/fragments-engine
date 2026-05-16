@@ -53,6 +53,25 @@ type PipelineAttachment struct {
 	SourceItemID string         `json:"source_item_id"`
 }
 
+// IngestSchedule is a cron schedule for an ingest source. Times are RFC3339
+// strings; empty last_run / next_run mean "never".
+type IngestSchedule struct {
+	ID         string `json:"id"`
+	IngestName string `json:"ingest_name"`
+	CronExpr   string `json:"cron_expr"`
+	Enabled    bool   `json:"enabled"`
+	LastRun    string `json:"last_run,omitempty"`
+	NextRun    string `json:"next_run,omitempty"`
+	CreatedAt  string `json:"created_at"`
+	UpdatedAt  string `json:"updated_at"`
+}
+
+// IngestSchedulePayload is the opaque go-scheduler job payload carried by an
+// ingest schedule — just enough for the runner to enqueue the ingest run.
+type IngestSchedulePayload struct {
+	IngestName string `json:"ingest_name"`
+}
+
 type IngestSummary struct {
 	Name               string            `json:"name"`
 	Kind               string            `json:"kind"`
