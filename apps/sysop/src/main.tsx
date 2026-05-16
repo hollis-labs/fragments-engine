@@ -2,12 +2,15 @@ import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import './index.css'
 import App from './App.tsx'
+import { ApiProvider } from '@/contexts/ApiContext'
+import { applyTheme, getInitialTheme } from '@/lib/theme'
 
-// Set dark mode as default
-document.documentElement.classList.add('dark')
+applyTheme(getInitialTheme())
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <App />
+    <ApiProvider>
+      <App />
+    </ApiProvider>
   </StrictMode>,
 )

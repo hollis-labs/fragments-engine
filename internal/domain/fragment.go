@@ -125,6 +125,21 @@ type InboxItem struct {
 	RouteID    string
 }
 
+// InboxItemDetail is an inbox row joined with its fragment so a UI can render
+// a meaningful table (title, source, status) without an extra round-trip per
+// row. JSON tags are snake_case so the sysop frontend consumes it directly.
+type InboxItemDetail struct {
+	FragmentID string    `json:"fragment_id"`
+	Reason     string    `json:"reason"`
+	StagedAt   time.Time `json:"staged_at"`
+	RouteID    string    `json:"route_id"`
+	Title      string    `json:"title"`
+	Source     string    `json:"source"`
+	SourceType string    `json:"source_type"`
+	Status     string    `json:"status"`
+	CreatedAt  time.Time `json:"created_at"`
+}
+
 type InboxEntityGroup struct {
 	Kind          string `json:"kind"`
 	Value         string `json:"value"`
