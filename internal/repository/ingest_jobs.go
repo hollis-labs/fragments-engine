@@ -39,10 +39,15 @@ type ingestJobPayload struct {
 	IngestName string `json:"ingest_name"`
 }
 
-func decodeIngestJobPayload(raw []byte) ingestJobPayload {
+// decodeIngestJobPayload decodes a go-queue job payload. A decode error is
+// returned (not swallowed) so callers can surface it rather than silently
+// emitting a record with an empty ingest name / run id.
+func decodeIngestJobPayload(raw []byte) (ingestJobPayload, error) {
 	var p ingestJobPayload
-	_ = json.Unmarshal(raw, &p)
-	return p
+	if err := json.Unmarshal(raw, &p); err != nil {
+		return ingestJobPayload{}, fmt.Errorf("decode ingest job payload: %w", err)
+	}
+	return p, nil
 }
 
 func unixToRFC3339(sec int64) string {
@@ -82,16 +87,22 @@ LIMIT ?`, limit)
 		if err := rows.Scan(&id, &jobType, &payload, &attempts, &maxTries, &reservedAt, &availableAt, &createdAt); err != nil {
 			return nil, fmt.Errorf("scan pending ingest job: %w", err)
 		}
-		p := decodeIngestJobPayload(payload)
+		p, decErr := decodeIngestJobPayload(payload)
 		status := "queued"
 		reserved := ""
 		if reservedAt.Valid && reservedAt.Int64 > 0 {
 			status = "running"
 			reserved = unixToRFC3339(reservedAt.Int64)
 		}
+		ingestName := p.IngestName
+		lastErr := ""
+		if decErr != nil {
+			ingestName = "(unknown — payload decode failed)"
+			lastErr = decErr.Error()
+		}
 		out = append(out, domain.IngestJobRecord{
 			ID:          id,
-			IngestName:  p.IngestName,
+			IngestName:  ingestName,
 			RunID:       p.RunID,
 			Type:        jobType,
 			Status:      status,
@@ -100,6 +111,7 @@ LIMIT ?`, limit)
 			EnqueuedAt:  unixToRFC3339(createdAt),
 			AvailableAt: unixToRFC3339(availableAt),
 			ReservedAt:  reserved,
+			LastError:   lastErr,
 		})
 	}
 	return out, rows.Err()
@@ -132,10 +144,14 @@ LIMIT ?`, limit)
 		if err := rows.Scan(&id, &jobType, &payload, &errMsg, &attempts, &failedAt); err != nil {
 			return nil, fmt.Errorf("scan failed ingest job: %w", err)
 		}
-		p := decodeIngestJobPayload(payload)
+		p, decErr := decodeIngestJobPayload(payload)
+		ingestName := p.IngestName
+		if decErr != nil {
+			ingestName = "(unknown — payload decode failed)"
+		}
 		out = append(out, domain.IngestJobRecord{
 			ID:         id,
-			IngestName: p.IngestName,
+			IngestName: ingestName,
 			RunID:      p.RunID,
 			Type:       jobType,
 			Status:     "failed",

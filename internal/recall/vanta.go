@@ -123,22 +123,33 @@ func (v *VantaIndexer) IndexFragment(ctx context.Context, fragment domain.Fragme
 }
 
 func (v *VantaIndexer) Search(ctx context.Context, query string, limit int) ([]domain.SearchResult, error) {
-	results, err := v.conduit.RecallMemory(ctx, vmemory.RecallInput{
+	results, _, err := v.searchVector(ctx, query, limit)
+	return results, err
+}
+
+// searchVector runs Vanta vector recall and reports whether it had to fall
+// back to the SQLite base (FTS) index — RecallMemory errored or yielded no
+// resolvable results. Callers use fellBack to report the retrieval mode that
+// actually ran, so `mode_used` is not overstated as semantic on a fallback.
+func (v *VantaIndexer) searchVector(ctx context.Context, query string, limit int) (results []domain.SearchResult, fellBack bool, err error) {
+	recalled, err := v.conduit.RecallMemory(ctx, vmemory.RecallInput{
 		Namespaces: []string{vantaNamespace},
 		Query:      query,
 		Limit:      limit,
 	})
 	if err != nil {
-		return v.base.Search(ctx, query, limit)
+		base, baseErr := v.base.Search(ctx, query, limit)
+		return base, true, baseErr
 	}
-	resolved, err := v.resolveResults(ctx, results, "", limit)
+	resolved, err := v.resolveResults(ctx, recalled, "", limit)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	if len(resolved) == 0 {
-		return v.base.Search(ctx, query, limit)
+		base, baseErr := v.base.Search(ctx, query, limit)
+		return base, true, baseErr
 	}
-	return resolved, nil
+	return resolved, false, nil
 }
 
 // SearchMode runs a search under an explicit retrieval mode.
@@ -158,15 +169,19 @@ func (v *VantaIndexer) SearchMode(ctx context.Context, query string, limit int, 
 			results, err := v.base.Search(ctx, query, limit)
 			return results, ModeKeyword, err
 		}
-		results, err := v.Search(ctx, query, limit)
-		return results, ModeSemantic, err
+		results, fellBack, err := v.searchVector(ctx, query, limit)
+		used := ModeSemantic
+		if fellBack {
+			used = ModeKeyword
+		}
+		return results, used, err
 	default: // ModeAuto
-		results, err := v.Search(ctx, query, limit)
+		results, fellBack, err := v.searchVector(ctx, query, limit)
 		if err != nil {
 			return nil, ModeAuto, err
 		}
 		used := ModeSemantic
-		if !v.status.EmbeddingsEnabled {
+		if fellBack || !v.status.EmbeddingsEnabled {
 			used = ModeKeyword
 		}
 		return results, used, nil

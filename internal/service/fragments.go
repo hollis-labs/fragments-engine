@@ -140,6 +140,11 @@ func (s *FragmentService) Search(ctx context.Context, query string, limit int) (
 	return s.recall.Search(ctx, query, limit)
 }
 
+// MaxSearchLimit caps the result count a single search may request. It bounds
+// downstream slice preallocation and over-fetch (limit*4), so a large
+// user-supplied limit cannot exhaust server memory.
+const MaxSearchLimit = 200
+
 func (s *FragmentService) SearchFiltered(ctx context.Context, query, entityKind, entityValue string, limit int) ([]domain.SearchResult, error) {
 	results, _, err := s.SearchFilteredMode(ctx, query, entityKind, entityValue, "", recall.ModeAuto, limit)
 	return results, err
@@ -152,6 +157,9 @@ func (s *FragmentService) SearchFiltered(ctx context.Context, query, entityKind,
 func (s *FragmentService) SearchFilteredMode(ctx context.Context, query, entityKind, entityValue, status string, mode recall.SearchMode, limit int) ([]domain.SearchResult, recall.SearchMode, error) {
 	if limit <= 0 {
 		limit = 20
+	}
+	if limit > MaxSearchLimit {
+		limit = MaxSearchLimit
 	}
 	statusFilter := domain.FragmentStatus(strings.TrimSpace(status))
 	keep := func(item domain.SearchResult) bool {
