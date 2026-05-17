@@ -853,6 +853,9 @@ func (s *Server) handleQueueEvents(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	if items == nil {
+		items = []domain.QueueJobEvent{}
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": items})
 }
 
@@ -877,6 +880,9 @@ func (s *Server) handleQueuePending(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	if items == nil {
+		items = []domain.PendingDeliveryJob{}
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": items})
 }
 
@@ -900,6 +906,9 @@ func (s *Server) handleQueueFailed(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
+	}
+	if items == nil {
+		items = []domain.FailedDeliveryJob{}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": items})
 }
