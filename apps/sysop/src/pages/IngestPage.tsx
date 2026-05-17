@@ -13,8 +13,6 @@ import { useApi } from '@/hooks/useApi'
 import { ApiError } from '@/lib/api'
 import type { IngestRunRecord, IngestSchedule, IngestSummary } from '@/lib/api'
 
-const COLUMN_LABEL = 'text-[10px] font-semibold uppercase tracking-[.18em] text-text-subtle'
-
 function errorMessage(err: unknown): string {
   if (err instanceof ApiError || err instanceof Error) return err.message
   return String(err)
@@ -384,123 +382,119 @@ export default function IngestPage() {
 
         {/* Sources */}
         <Section title="Ingest sources" count={loading ? undefined : ingests.length}>
-          <div className="px-4 pb-3">
-            {loading && (
-              <div className="space-y-2">
-                <Skeleton className="h-7 w-full" />
-                <Skeleton className="h-7 w-full" />
-                <Skeleton className="h-7 w-5/6" />
-              </div>
-            )}
+          {loading && (
+            <div className="space-y-2 px-4 pb-3">
+              <Skeleton className="h-7 w-full" />
+              <Skeleton className="h-7 w-full" />
+              <Skeleton className="h-7 w-5/6" />
+            </div>
+          )}
 
-            {!loading && loadError && (
-              <p className="text-[13px] text-danger-soft">{loadError}</p>
-            )}
+          {!loading && loadError && (
+            <p className="px-4 pb-3 text-[13px] text-danger-soft">{loadError}</p>
+          )}
 
-            {!loading && !loadError && ingests.length === 0 && (
-              <p className="text-[13px] text-text-muted">No ingest sources configured.</p>
-            )}
+          {!loading && !loadError && ingests.length === 0 && (
+            <p className="px-4 pb-3 text-[13px] text-text-muted">
+              No ingest sources configured.
+            </p>
+          )}
 
-            {!loading && !loadError && ingests.length > 0 && (
-              <div className="overflow-hidden rounded-md border border-border">
-                <table className="w-full border-collapse">
-                  <thead>
-                    <tr className="border-b border-border-soft bg-panel-2/50">
-                      <th className={`px-4 py-2 text-left ${COLUMN_LABEL}`}>Name</th>
-                      <th className={`px-4 py-2 text-left ${COLUMN_LABEL}`}>Kind</th>
-                      <th className={`px-4 py-2 text-left ${COLUMN_LABEL}`}>Enabled</th>
-                      <th className={`px-4 py-2 text-left ${COLUMN_LABEL}`}>Source root</th>
-                      <th className={`px-4 py-2 text-left ${COLUMN_LABEL}`}>Namespace</th>
-                      <th className={`px-4 py-2 text-right ${COLUMN_LABEL}`}>Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-border-soft">
-                    {ingests.map((ingest) => {
-                      const validation = validations[ingest.name]
-                      return (
-                        <tr key={ingest.name} className="hover:bg-panel-hover">
-                          <td className="px-4 py-2 align-top text-[13px] font-medium text-text">
-                            {ingest.name}
-                          </td>
-                          <td className="px-4 py-2 align-top text-[13px] text-text-muted">
-                            {ingest.kind}
-                          </td>
-                          <td className="px-4 py-2 align-top">
-                            <button
-                              type="button"
-                              onClick={() => void handleToggleEnabled(ingest)}
-                              className={`text-[11px] font-semibold transition hover:underline ${
-                                ingest.enabled ? 'text-status-indexed' : 'text-text-subtle'
-                              }`}
-                              title="Toggle enabled"
+          {!loading && !loadError && ingests.length > 0 && (
+            <table className="w-full text-[13px]">
+              <thead className="text-[10px] uppercase tracking-[.2em] text-text-subtle">
+                <tr className="border-b border-border-soft">
+                  <th className="px-4 py-1.5 text-left font-medium">Name</th>
+                  <th className="px-4 py-1.5 text-left font-medium">Kind</th>
+                  <th className="px-4 py-1.5 text-left font-medium">Enabled</th>
+                  <th className="px-4 py-1.5 text-left font-medium">Source root</th>
+                  <th className="px-4 py-1.5 text-left font-medium">Namespace</th>
+                  <th className="px-4 py-1.5 text-right font-medium">Actions</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border-soft">
+                {ingests.map((ingest) => {
+                  const validation = validations[ingest.name]
+                  return (
+                    <tr key={ingest.name} className="hover:bg-panel-hover">
+                      <td className="px-4 py-1.5 align-top font-medium text-text">
+                        {ingest.name}
+                      </td>
+                      <td className="px-4 py-1.5 align-top text-text-muted">{ingest.kind}</td>
+                      <td className="px-4 py-1.5 align-top">
+                        <button
+                          type="button"
+                          onClick={() => void handleToggleEnabled(ingest)}
+                          className={`text-[11px] font-semibold transition hover:underline ${
+                            ingest.enabled ? 'text-status-indexed' : 'text-text-subtle'
+                          }`}
+                          title="Toggle enabled"
+                        >
+                          {ingest.enabled ? 'Enabled' : 'Disabled'}
+                        </button>
+                      </td>
+                      <td className="px-4 py-1.5 align-top text-[12px] text-text-muted">
+                        {ingest.source_root}
+                      </td>
+                      <td className="px-4 py-1.5 align-top text-[12px] text-text-muted">
+                        {ingest.namespace}
+                      </td>
+                      <td className="px-4 py-1.5 align-top">
+                        <div className="flex flex-col items-end gap-1.5">
+                          <div className="flex flex-wrap justify-end gap-1.5">
+                            <Button
+                              size="xs"
+                              variant="outline"
+                              onClick={() => void handleRunOne(ingest.name)}
                             >
-                              {ingest.enabled ? 'Enabled' : 'Disabled'}
-                            </button>
-                          </td>
-                          <td className="px-4 py-2 align-top text-[12px] text-text-muted">
-                            {ingest.source_root}
-                          </td>
-                          <td className="px-4 py-2 align-top text-[12px] text-text-muted">
-                            {ingest.namespace}
-                          </td>
-                          <td className="px-4 py-2 align-top">
-                            <div className="flex flex-col items-end gap-1.5">
-                              <div className="flex flex-wrap justify-end gap-1.5">
-                                <Button
-                                  size="xs"
-                                  variant="outline"
-                                  onClick={() => void handleRunOne(ingest.name)}
-                                >
-                                  Run
-                                </Button>
-                                <Button
-                                  size="xs"
-                                  variant="outline"
-                                  onClick={() => void handleValidate(ingest.name)}
-                                  disabled={validation?.kind === 'loading'}
-                                >
-                                  Validate
-                                </Button>
-                                <Button
-                                  size="xs"
-                                  variant="outline"
-                                  onClick={() => void handlePreview(ingest.name)}
-                                >
-                                  Preview
-                                </Button>
-                                <Button
-                                  size="xs"
-                                  variant="outline"
-                                  aria-label="Edit ingest source"
-                                  title="Edit ingest source"
-                                  onClick={() => setEditDialog({ open: true, ingest })}
-                                >
-                                  <Pencil className="h-3 w-3" />
-                                </Button>
-                                <Button
-                                  size="xs"
-                                  variant="destructive"
-                                  aria-label="Delete ingest source"
-                                  title="Delete ingest source"
-                                  onClick={() => {
-                                    setConfirmError(null)
-                                    setDeleteIngestTarget(ingest)
-                                  }}
-                                >
-                                  <Trash2 className="h-3 w-3" />
-                                </Button>
-                              </div>
-                              {validation && <ValidationResult state={validation} />}
-                            </div>
-                          </td>
-                        </tr>
-                      )
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </div>
+                              Run
+                            </Button>
+                            <Button
+                              size="xs"
+                              variant="outline"
+                              onClick={() => void handleValidate(ingest.name)}
+                              disabled={validation?.kind === 'loading'}
+                            >
+                              Validate
+                            </Button>
+                            <Button
+                              size="xs"
+                              variant="outline"
+                              onClick={() => void handlePreview(ingest.name)}
+                            >
+                              Preview
+                            </Button>
+                            <Button
+                              size="xs"
+                              variant="outline"
+                              aria-label="Edit ingest source"
+                              title="Edit ingest source"
+                              onClick={() => setEditDialog({ open: true, ingest })}
+                            >
+                              <Pencil className="h-3 w-3" />
+                            </Button>
+                            <Button
+                              size="xs"
+                              variant="destructive"
+                              aria-label="Delete ingest source"
+                              title="Delete ingest source"
+                              onClick={() => {
+                                setConfirmError(null)
+                                setDeleteIngestTarget(ingest)
+                              }}
+                            >
+                              <Trash2 className="h-3 w-3" />
+                            </Button>
+                          </div>
+                          {validation && <ValidationResult state={validation} />}
+                        </div>
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          )}
         </Section>
 
         {/* Runs */}
@@ -519,59 +513,55 @@ export default function IngestPage() {
             </Button>
           }
         >
-          <div className="px-4 pb-3">
-            {runsLoading ? (
-              <div className="space-y-2">
-                <Skeleton className="h-7 w-full" />
-                <Skeleton className="h-7 w-5/6" />
-              </div>
-            ) : runsError ? (
-              <p className="text-[13px] text-danger-soft">{runsError}</p>
-            ) : runs.length === 0 ? (
-              <p className="text-[13px] text-text-muted">No runs yet.</p>
-            ) : (
-              <div className="overflow-hidden rounded-md border border-border">
-                <table className="w-full border-collapse">
-                  <thead>
-                    <tr className="border-b border-border-soft bg-panel-2/50">
-                      <th className={`px-4 py-2 text-left ${COLUMN_LABEL}`}>Ingest</th>
-                      <th className={`px-4 py-2 text-left ${COLUMN_LABEL}`}>Status</th>
-                      <th className={`px-4 py-2 text-left ${COLUMN_LABEL}`}>Started</th>
-                      <th className={`px-4 py-2 text-left ${COLUMN_LABEL}`}>Finished</th>
-                      <th className={`px-4 py-2 text-right ${COLUMN_LABEL}`}>Ins/Upd/Skip</th>
-                      <th className={`px-4 py-2 text-left ${COLUMN_LABEL}`}>Error</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-border-soft">
-                    {runs.map((run) => (
-                      <tr key={run.id} className="hover:bg-panel-hover">
-                        <td className="px-4 py-2 align-top text-[13px] text-text">{run.name}</td>
-                        <td
-                          className={`px-4 py-2 align-top text-[11px] font-semibold uppercase tracking-[.1em] ${runStatusClass(
-                            run.status,
-                          )}`}
-                        >
-                          {run.status}
-                        </td>
-                        <td className="px-4 py-2 align-top text-[12px] text-text-muted">
-                          {orDash(run.started_at)}
-                        </td>
-                        <td className="px-4 py-2 align-top text-[12px] text-text-muted">
-                          {orDash(run.finished_at)}
-                        </td>
-                        <td className="px-4 py-2 text-right align-top font-mono text-[12px] text-text-muted">
-                          {run.inserted}/{run.updated}/{run.skipped}
-                        </td>
-                        <td className="px-4 py-2 align-top text-[12px] text-danger-soft">
-                          {run.error ? truncate(run.error, 80) : ''}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </div>
+          {runsLoading ? (
+            <div className="space-y-2 px-4 pb-3">
+              <Skeleton className="h-7 w-full" />
+              <Skeleton className="h-7 w-5/6" />
+            </div>
+          ) : runsError ? (
+            <p className="px-4 pb-3 text-[13px] text-danger-soft">{runsError}</p>
+          ) : runs.length === 0 ? (
+            <p className="px-4 pb-3 text-[13px] text-text-muted">No runs yet.</p>
+          ) : (
+            <table className="w-full text-[13px]">
+              <thead className="text-[10px] uppercase tracking-[.2em] text-text-subtle">
+                <tr className="border-b border-border-soft">
+                  <th className="px-4 py-1.5 text-left font-medium">Ingest</th>
+                  <th className="px-4 py-1.5 text-left font-medium">Status</th>
+                  <th className="px-4 py-1.5 text-left font-medium">Started</th>
+                  <th className="px-4 py-1.5 text-left font-medium">Finished</th>
+                  <th className="px-4 py-1.5 text-right font-medium">Ins/Upd/Skip</th>
+                  <th className="px-4 py-1.5 text-left font-medium">Error</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border-soft">
+                {runs.map((run) => (
+                  <tr key={run.id} className="hover:bg-panel-hover">
+                    <td className="px-4 py-1.5 align-top text-text">{run.name}</td>
+                    <td
+                      className={`px-4 py-1.5 align-top text-[11px] font-semibold uppercase tracking-[.1em] ${runStatusClass(
+                        run.status,
+                      )}`}
+                    >
+                      {run.status}
+                    </td>
+                    <td className="px-4 py-1.5 align-top text-[12px] text-text-muted">
+                      {orDash(run.started_at)}
+                    </td>
+                    <td className="px-4 py-1.5 align-top text-[12px] text-text-muted">
+                      {orDash(run.finished_at)}
+                    </td>
+                    <td className="px-4 py-1.5 text-right align-top font-mono text-[12px] text-text-muted">
+                      {run.inserted}/{run.updated}/{run.skipped}
+                    </td>
+                    <td className="px-4 py-1.5 align-top text-[12px] text-danger-soft">
+                      {run.error ? truncate(run.error, 80) : ''}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
         </Section>
 
         {/* Schedules */}
@@ -591,85 +581,79 @@ export default function IngestPage() {
             </Button>
           }
         >
-          <div className="px-4 pb-3">
-            {schedulesLoading ? (
-              <div className="space-y-2">
-                <Skeleton className="h-7 w-full" />
-                <Skeleton className="h-7 w-5/6" />
-              </div>
-            ) : schedulesError ? (
-              <p className="text-[13px] text-danger-soft">{schedulesError}</p>
-            ) : schedules.length === 0 ? (
-              <p className="text-[13px] text-text-muted">No schedules configured.</p>
-            ) : (
-              <div className="overflow-hidden rounded-md border border-border">
-                <table className="w-full border-collapse">
-                  <thead>
-                    <tr className="border-b border-border-soft bg-panel-2/50">
-                      <th className={`px-4 py-2 text-left ${COLUMN_LABEL}`}>Ingest</th>
-                      <th className={`px-4 py-2 text-left ${COLUMN_LABEL}`}>Cron</th>
-                      <th className={`px-4 py-2 text-left ${COLUMN_LABEL}`}>Enabled</th>
-                      <th className={`px-4 py-2 text-left ${COLUMN_LABEL}`}>Last run</th>
-                      <th className={`px-4 py-2 text-left ${COLUMN_LABEL}`}>Next run</th>
-                      <th className={`px-4 py-2 text-right ${COLUMN_LABEL}`}>Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-border-soft">
-                    {schedules.map((schedule) => (
-                      <tr key={schedule.id} className="hover:bg-panel-hover">
-                        <td className="px-4 py-2 align-top text-[13px] text-text">
-                          {schedule.ingest_name}
-                        </td>
-                        <td className="px-4 py-2 align-top font-mono text-[12px] text-text-muted">
-                          {schedule.cron_expr}
-                        </td>
-                        <td className="px-4 py-2 align-top">
-                          <span
-                            className={`text-[11px] font-semibold ${
-                              schedule.enabled ? 'text-status-indexed' : 'text-text-subtle'
-                            }`}
-                          >
-                            {schedule.enabled ? 'Enabled' : 'Disabled'}
-                          </span>
-                        </td>
-                        <td className="px-4 py-2 align-top text-[12px] text-text-muted">
-                          {orDash(schedule.last_run)}
-                        </td>
-                        <td className="px-4 py-2 align-top text-[12px] text-text-muted">
-                          {orDash(schedule.next_run)}
-                        </td>
-                        <td className="px-4 py-2 align-top">
-                          <div className="flex justify-end gap-1.5">
-                            <Button
-                              size="xs"
-                              variant="outline"
-                              aria-label="Edit schedule"
-                              title="Edit schedule"
-                              onClick={() => setScheduleDialog({ open: true, schedule })}
-                            >
-                              <Pencil className="h-3 w-3" />
-                            </Button>
-                            <Button
-                              size="xs"
-                              variant="destructive"
-                              aria-label="Delete schedule"
-                              title="Delete schedule"
-                              onClick={() => {
-                                setConfirmError(null)
-                                setDeleteScheduleTarget(schedule)
-                              }}
-                            >
-                              <Trash2 className="h-3 w-3" />
-                            </Button>
-                          </div>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </div>
+          {schedulesLoading ? (
+            <div className="space-y-2 px-4 pb-3">
+              <Skeleton className="h-7 w-full" />
+              <Skeleton className="h-7 w-5/6" />
+            </div>
+          ) : schedulesError ? (
+            <p className="px-4 pb-3 text-[13px] text-danger-soft">{schedulesError}</p>
+          ) : schedules.length === 0 ? (
+            <p className="px-4 pb-3 text-[13px] text-text-muted">No schedules configured.</p>
+          ) : (
+            <table className="w-full text-[13px]">
+              <thead className="text-[10px] uppercase tracking-[.2em] text-text-subtle">
+                <tr className="border-b border-border-soft">
+                  <th className="px-4 py-1.5 text-left font-medium">Ingest</th>
+                  <th className="px-4 py-1.5 text-left font-medium">Cron</th>
+                  <th className="px-4 py-1.5 text-left font-medium">Enabled</th>
+                  <th className="px-4 py-1.5 text-left font-medium">Last run</th>
+                  <th className="px-4 py-1.5 text-left font-medium">Next run</th>
+                  <th className="px-4 py-1.5 text-right font-medium">Actions</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border-soft">
+                {schedules.map((schedule) => (
+                  <tr key={schedule.id} className="hover:bg-panel-hover">
+                    <td className="px-4 py-1.5 align-top text-text">{schedule.ingest_name}</td>
+                    <td className="px-4 py-1.5 align-top font-mono text-[12px] text-text-muted">
+                      {schedule.cron_expr}
+                    </td>
+                    <td className="px-4 py-1.5 align-top">
+                      <span
+                        className={`text-[11px] font-semibold ${
+                          schedule.enabled ? 'text-status-indexed' : 'text-text-subtle'
+                        }`}
+                      >
+                        {schedule.enabled ? 'Enabled' : 'Disabled'}
+                      </span>
+                    </td>
+                    <td className="px-4 py-1.5 align-top text-[12px] text-text-muted">
+                      {orDash(schedule.last_run)}
+                    </td>
+                    <td className="px-4 py-1.5 align-top text-[12px] text-text-muted">
+                      {orDash(schedule.next_run)}
+                    </td>
+                    <td className="px-4 py-1.5 align-top">
+                      <div className="flex justify-end gap-1.5">
+                        <Button
+                          size="xs"
+                          variant="outline"
+                          aria-label="Edit schedule"
+                          title="Edit schedule"
+                          onClick={() => setScheduleDialog({ open: true, schedule })}
+                        >
+                          <Pencil className="h-3 w-3" />
+                        </Button>
+                        <Button
+                          size="xs"
+                          variant="destructive"
+                          aria-label="Delete schedule"
+                          title="Delete schedule"
+                          onClick={() => {
+                            setConfirmError(null)
+                            setDeleteScheduleTarget(schedule)
+                          }}
+                        >
+                          <Trash2 className="h-3 w-3" />
+                        </Button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
         </Section>
       </div>
 

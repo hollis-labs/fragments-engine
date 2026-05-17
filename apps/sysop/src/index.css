@@ -291,6 +291,13 @@
     outline-color: var(--theme-color-ring-soft);
   }
 
+  html,
+  body,
+  #root {
+    height: 100%;
+    overflow: hidden;
+  }
+
   body {
     background-color: var(--color-bg);
     color: var(--color-text);
