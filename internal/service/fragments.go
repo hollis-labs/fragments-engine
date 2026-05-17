@@ -140,39 +140,92 @@ func (s *FragmentService) Search(ctx context.Context, query string, limit int) (
 	return s.recall.Search(ctx, query, limit)
 }
 
+// MaxSearchLimit caps the result count a single search may request. It bounds
+// downstream slice preallocation and over-fetch (limit*4), so a large
+// user-supplied limit cannot exhaust server memory.
+const MaxSearchLimit = 200
+
 func (s *FragmentService) SearchFiltered(ctx context.Context, query, entityKind, entityValue string, limit int) ([]domain.SearchResult, error) {
+	results, _, err := s.SearchFilteredMode(ctx, query, entityKind, entityValue, "", recall.ModeAuto, limit)
+	return results, err
+}
+
+// SearchFilteredMode is the mode-aware search surface. It threads an explicit
+// retrieval mode down to the recall layer, applies the optional entity filter
+// and fragment-status filter, and reports the mode that actually ran. When
+// status is non-empty, only fragments with that status are returned.
+func (s *FragmentService) SearchFilteredMode(ctx context.Context, query, entityKind, entityValue, status string, mode recall.SearchMode, limit int) ([]domain.SearchResult, recall.SearchMode, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+	if limit > MaxSearchLimit {
+		limit = MaxSearchLimit
+	}
+	statusFilter := domain.FragmentStatus(strings.TrimSpace(status))
+	keep := func(item domain.SearchResult) bool {
+		return statusFilter == "" || item.Fragment.Status == statusFilter
+	}
+
+	// No entity filter: a plain mode-aware recall search, then status filter.
 	if entityKind == "" || entityValue == "" {
-		return s.Search(ctx, query, limit)
-	}
-	entityMatches, err := s.recall.ListFragmentsByEntity(ctx, entityKind, entityValue, max(limit, 200))
-	if err != nil {
-		return nil, err
-	}
-	if query == "" {
-		if limit > 0 && len(entityMatches) > limit {
-			return entityMatches[:limit], nil
+		fetch := limit
+		if statusFilter != "" {
+			fetch = max(limit*4, 50)
 		}
-		return entityMatches, nil
+		results, used, err := s.recall.SearchMode(ctx, query, fetch, mode)
+		if err != nil {
+			return nil, used, err
+		}
+		return applyStatusLimit(results, keep, limit), used, nil
 	}
-	searchResults, err := s.recall.Search(ctx, query, max(limit, 50))
+
+	entityMatches, err := s.recall.ListFragmentsByEntity(ctx, entityKind, entityValue, max(limit*4, 200))
 	if err != nil {
-		return nil, err
+		return nil, mode, err
 	}
-	allowed := make(map[string]domain.SearchResult, len(entityMatches))
+	// Entity filter with no query: entity matches are not produced by the
+	// recall search layer, so the effective mode used is keyword.
+	if query == "" {
+		return applyStatusLimit(entityMatches, keep, limit), recall.ModeKeyword, nil
+	}
+	searchResults, used, err := s.recall.SearchMode(ctx, query, max(limit*4, 50), mode)
+	if err != nil {
+		return nil, used, err
+	}
+	allowed := make(map[string]struct{}, len(entityMatches))
 	for _, item := range entityMatches {
-		allowed[item.Fragment.ID] = item
+		allowed[item.Fragment.ID] = struct{}{}
 	}
 	filtered := make([]domain.SearchResult, 0, limit)
 	for _, item := range searchResults {
 		if _, ok := allowed[item.Fragment.ID]; !ok {
 			continue
 		}
+		if !keep(item) {
+			continue
+		}
 		filtered = append(filtered, item)
-		if limit > 0 && len(filtered) >= limit {
+		if len(filtered) >= limit {
 			break
 		}
 	}
-	return filtered, nil
+	return filtered, used, nil
+}
+
+// applyStatusLimit filters results by the keep predicate and truncates to
+// limit. It always returns a non-nil slice.
+func applyStatusLimit(results []domain.SearchResult, keep func(domain.SearchResult) bool, limit int) []domain.SearchResult {
+	out := make([]domain.SearchResult, 0, limit)
+	for _, item := range results {
+		if !keep(item) {
+			continue
+		}
+		out = append(out, item)
+		if limit > 0 && len(out) >= limit {
+			break
+		}
+	}
+	return out
 }
 
 func (s *FragmentService) GetDetail(ctx context.Context, fragmentID string, relatedLimit int) (domain.FragmentDetail, error) {

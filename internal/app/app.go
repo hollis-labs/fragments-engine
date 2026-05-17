@@ -38,6 +38,7 @@ type App struct {
 	Queue           *service.DeliveryQueueService
 	IngestQueue     queue.Queue
 	IngestSchedules *service.IngestScheduleService
+	Jobs            *service.JobsService
 }
 
 func Open(ctx context.Context, cfg config.Config) (*App, error) {
@@ -83,6 +84,7 @@ func Open(ctx context.Context, cfg config.Config) (*App, error) {
 		ingest.NewInboxStage(inboxRepo),
 		ingest.NewRecallStage(recallIndex),
 	}, claude.Source{}, chatgpt.Source{}, urlsource.Source{})
+	scheduleRepo := repository.NewIngestScheduleRepository(st.DB)
 	return &App{
 		store:           st,
 		recall:          recallIndex,
@@ -91,7 +93,13 @@ func Open(ctx context.Context, cfg config.Config) (*App, error) {
 		Routing:         routingSvc,
 		Queue:           deliveryQueue,
 		IngestQueue:     ingestQueue,
-		IngestSchedules: service.NewIngestScheduleService(repository.NewIngestScheduleRepository(st.DB)),
+		IngestSchedules: service.NewIngestScheduleService(scheduleRepo),
+		Jobs: service.NewJobsService(
+			repository.NewIngestJobQueueRepository(st.DB),
+			scheduleRepo,
+			fragmentRepo,
+			cfg,
+		),
 	}, nil
 }
 

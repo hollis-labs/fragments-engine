@@ -88,12 +88,23 @@ type FragmentAttachment struct {
 	AnalysisSummary    string         `json:"analysis_summary,omitempty"`
 	AnalysisTags       []string       `json:"analysis_tags,omitempty"`
 	VisionBackend      string         `json:"vision_backend,omitempty"`
-	VisionSummary      string         `json:"vision_summary,omitempty"`
-	VisionTags         []string       `json:"vision_tags,omitempty"`
-	VisionEntities     []string       `json:"vision_entities,omitempty"`
-	VisionTextPresent  *bool          `json:"vision_text_present,omitempty"`
-	VisionConfidence   *float64       `json:"vision_confidence,omitempty"`
-	CreatedAt          time.Time      `json:"created_at"`
+	// VisionAnalysisBackend is the canonical name for the vision backend
+	// (alias of VisionBackend; both are emitted for FE compatibility).
+	VisionAnalysisBackend string `json:"vision_analysis_backend,omitempty"`
+	VisionSummary         string `json:"vision_summary,omitempty"`
+	// VisionAnalysis is the human-readable vision summary under the canonical
+	// field name expected by the fragment-detail consumers (alias of
+	// VisionSummary).
+	VisionAnalysis    string   `json:"vision_analysis,omitempty"`
+	VisionTags        []string `json:"vision_tags,omitempty"`
+	VisionEntities    []string `json:"vision_entities,omitempty"`
+	VisionTextPresent *bool    `json:"vision_text_present,omitempty"`
+	VisionConfidence  *float64 `json:"vision_confidence,omitempty"`
+	// Extracted-text (OCR) fields, surfaced from attachment metadata.
+	ExtractedTextPreview string    `json:"extracted_text_preview,omitempty"`
+	ExtractedTextBytes   int       `json:"extracted_text_bytes,omitempty"`
+	OCRStatus            string    `json:"ocr_status,omitempty"`
+	CreatedAt            time.Time `json:"created_at"`
 }
 
 type FragmentDetail struct {

@@ -12,95 +12,95 @@ import (
 )
 
 type Config struct {
-	Database DatabaseConfig `yaml:"database"`
-	Recall   RecallConfig   `yaml:"recall"`
-	Analysis AnalysisConfig `yaml:"analysis"`
-	Delivery DeliveryConfig `yaml:"delivery"`
-	Queue    QueueConfig    `yaml:"queue"`
-	Ingests  []IngestConfig `yaml:"ingests"`
+	Database DatabaseConfig `json:"database" yaml:"database"`
+	Recall   RecallConfig   `json:"recall" yaml:"recall"`
+	Analysis AnalysisConfig `json:"analysis" yaml:"analysis"`
+	Delivery DeliveryConfig `json:"delivery" yaml:"delivery"`
+	Queue    QueueConfig    `json:"queue" yaml:"queue"`
+	Ingests  []IngestConfig `json:"ingests" yaml:"ingests"`
 }
 
 type DatabaseConfig struct {
-	Path string `yaml:"path"`
+	Path string `json:"path" yaml:"path"`
 }
 
 type RecallConfig struct {
-	Backend string            `yaml:"backend"`
-	Vanta   RecallVantaConfig `yaml:"vanta"`
+	Backend string            `json:"backend" yaml:"backend"`
+	Vanta   RecallVantaConfig `json:"vanta" yaml:"vanta"`
 }
 
 type RecallVantaConfig struct {
-	Root              string `yaml:"root"`
-	EmbeddingProvider string `yaml:"embedding_provider"`
-	EmbeddingModel    string `yaml:"embedding_model"`
+	Root              string `json:"root" yaml:"root"`
+	EmbeddingProvider string `json:"embedding_provider" yaml:"embedding_provider"`
+	EmbeddingModel    string `json:"embedding_model" yaml:"embedding_model"`
 }
 
 type AnalysisConfig struct {
-	Attachments AttachmentAnalysisConfig `yaml:"attachments"`
+	Attachments AttachmentAnalysisConfig `json:"attachments" yaml:"attachments"`
 }
 
 type AttachmentAnalysisConfig struct {
-	Backend         string                         `yaml:"backend"`
-	FallbackBackend string                         `yaml:"fallback_backend"`
-	MinConfidence   float64                        `yaml:"min_confidence"`
-	Ollama          AttachmentAnalysisOllamaConfig `yaml:"ollama"`
-	OpenAI          AttachmentAnalysisOpenAIConfig `yaml:"openai"`
+	Backend         string                         `json:"backend" yaml:"backend"`
+	FallbackBackend string                         `json:"fallback_backend" yaml:"fallback_backend"`
+	MinConfidence   float64                        `json:"min_confidence" yaml:"min_confidence"`
+	Ollama          AttachmentAnalysisOllamaConfig `json:"ollama" yaml:"ollama"`
+	OpenAI          AttachmentAnalysisOpenAIConfig `json:"openai" yaml:"openai"`
 }
 
 type AttachmentAnalysisOllamaConfig struct {
-	Host           string `yaml:"host"`
-	Model          string `yaml:"model"`
-	TimeoutSeconds int    `yaml:"timeout_seconds"`
-	Prompt         string `yaml:"prompt"`
+	Host           string `json:"host" yaml:"host"`
+	Model          string `json:"model" yaml:"model"`
+	TimeoutSeconds int    `json:"timeout_seconds" yaml:"timeout_seconds"`
+	Prompt         string `json:"prompt" yaml:"prompt"`
 }
 
 type AttachmentAnalysisOpenAIConfig struct {
-	BaseURL        string `yaml:"base_url"`
-	APIKeyEnv      string `yaml:"api_key_env"`
-	Model          string `yaml:"model"`
-	Detail         string `yaml:"detail"`
-	TimeoutSeconds int    `yaml:"timeout_seconds"`
-	Prompt         string `yaml:"prompt"`
+	BaseURL        string `json:"base_url" yaml:"base_url"`
+	APIKeyEnv      string `json:"api_key_env" yaml:"api_key_env"`
+	Model          string `json:"model" yaml:"model"`
+	Detail         string `json:"detail" yaml:"detail"`
+	TimeoutSeconds int    `json:"timeout_seconds" yaml:"timeout_seconds"`
+	Prompt         string `json:"prompt" yaml:"prompt"`
 }
 
 type DeliveryConfig struct {
-	File DeliveryRetryDefaults `yaml:"file"`
-	MCP  DeliveryRetryDefaults `yaml:"mcp"`
-	API  DeliveryRetryDefaults `yaml:"api"`
-	CLI  DeliveryRetryDefaults `yaml:"cli"`
+	File DeliveryRetryDefaults `json:"file" yaml:"file"`
+	MCP  DeliveryRetryDefaults `json:"mcp" yaml:"mcp"`
+	API  DeliveryRetryDefaults `json:"api" yaml:"api"`
+	CLI  DeliveryRetryDefaults `json:"cli" yaml:"cli"`
 }
 
 type DeliveryRetryDefaults struct {
-	MaxAttempts int `yaml:"max_attempts"`
-	BackoffMS   int `yaml:"backoff_ms"`
+	MaxAttempts int `json:"max_attempts" yaml:"max_attempts"`
+	BackoffMS   int `json:"backoff_ms" yaml:"backoff_ms"`
 }
 
 type QueueConfig struct {
-	AutoDrain                bool `yaml:"auto_drain"`
-	PollIntervalSeconds      int  `yaml:"poll_interval_seconds"`
-	BatchSize                int  `yaml:"batch_size"`
-	ReplayCooldownSeconds    int  `yaml:"replay_cooldown_seconds"`
-	MaxReplaysPerHour        int  `yaml:"max_replays_per_hour"`
-	AlertPendingThreshold    int  `yaml:"alert_pending_threshold"`
-	AlertDeadLetterThreshold int  `yaml:"alert_dead_letter_threshold"`
+	AutoDrain                bool `json:"auto_drain" yaml:"auto_drain"`
+	PollIntervalSeconds      int  `json:"poll_interval_seconds" yaml:"poll_interval_seconds"`
+	BatchSize                int  `json:"batch_size" yaml:"batch_size"`
+	ReplayCooldownSeconds    int  `json:"replay_cooldown_seconds" yaml:"replay_cooldown_seconds"`
+	MaxReplaysPerHour        int  `json:"max_replays_per_hour" yaml:"max_replays_per_hour"`
+	AlertPendingThreshold    int  `json:"alert_pending_threshold" yaml:"alert_pending_threshold"`
+	AlertDeadLetterThreshold int  `json:"alert_dead_letter_threshold" yaml:"alert_dead_letter_threshold"`
 }
 
 type IngestConfig struct {
-	Name    string            `yaml:"name"`
-	Kind    string            `yaml:"kind"`
-	Enabled bool              `yaml:"enabled"`
-	Source  IngestSource      `yaml:"source"`
-	Routing IngestRouting     `yaml:"routing"`
-	Rules   map[string]any    `yaml:"rules"`
-	Labels  map[string]string `yaml:"labels"`
+	Name    string            `json:"name" yaml:"name"`
+	Kind    string            `json:"kind" yaml:"kind"`
+	Enabled bool              `json:"enabled" yaml:"enabled"`
+	Source  IngestSource      `json:"source" yaml:"source"`
+	Routing IngestRouting     `json:"routing" yaml:"routing"`
+	Rules   map[string]any    `json:"rules" yaml:"rules"`
+	Labels  map[string]string `json:"labels" yaml:"labels"`
 }
 
 type IngestSource struct {
-	Root string `yaml:"root"`
+	Root string `json:"root" yaml:"root"`
 }
 
 type IngestRouting struct {
-	Namespace string `yaml:"namespace"`
+	Namespace string `json:"namespace" yaml:"namespace"`
 }
 
 type ClaudeCodeRules struct {

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strconv"
 	"time"
@@ -13,6 +14,7 @@ import (
 	"github.com/hollis-labs/fragments-engine/internal/app"
 	"github.com/hollis-labs/fragments-engine/internal/config"
 	"github.com/hollis-labs/fragments-engine/internal/domain"
+	"github.com/hollis-labs/fragments-engine/internal/recall"
 	"github.com/hollis-labs/fragments-engine/internal/service"
 )
 
@@ -78,6 +80,12 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/routes/apply-entity", s.handleRouteApplyEntity)
 	mux.HandleFunc("/v1/route-log", s.handleRouteLog)
 	mux.HandleFunc("/v1/intake", s.handleIntake)
+	// Admin-grade endpoints — gated to localhost since the API has no auth
+	// layer and serve-api binds all interfaces. See backlog CW-20260517-0010.
+	mux.HandleFunc("/v1/jobs/ingest", localhostOnly(s.handleJobsIngest))
+	mux.HandleFunc("/v1/workers/status", localhostOnly(s.handleWorkersStatus))
+	mux.HandleFunc("/v1/config", localhostOnly(s.handleConfigGet))
+	mux.HandleFunc("/v1/config/update", localhostOnly(s.handleConfigUpdate))
 	return mux
 }
 
@@ -650,12 +658,32 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	query := r.URL.Query().Get("q")
-	entityKind := r.URL.Query().Get("entity_kind")
-	entityValue := r.URL.Query().Get("entity_value")
+	q := r.URL.Query()
+	query := q.Get("q")
+	entityKind := q.Get("entity_kind")
+	entityValue := q.Get("entity_value")
+	status := q.Get("status")
 	if query == "" && (entityKind == "" || entityValue == "") {
 		http.Error(w, "missing q or entity filter", http.StatusBadRequest)
 		return
+	}
+	mode, ok := recall.ParseSearchMode(q.Get("mode"))
+	if !ok {
+		http.Error(w, "invalid mode: must be auto, semantic, or keyword", http.StatusBadRequest)
+		return
+	}
+	limit := 20
+	if v := q.Get("limit"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n <= 0 {
+			http.Error(w, "invalid limit", http.StatusBadRequest)
+			return
+		}
+		if n > service.MaxSearchLimit {
+			http.Error(w, fmt.Sprintf("limit too large: max is %d", service.MaxSearchLimit), http.StatusBadRequest)
+			return
+		}
+		limit = n
 	}
 	cfg, err := config.Load(s.cfgPath)
 	if err != nil {
@@ -668,12 +696,12 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer instance.Close()
-	results, err := instance.Fragments.SearchFiltered(r.Context(), query, entityKind, entityValue, 10)
+	results, modeUsed, err := instance.Fragments.SearchFilteredMode(r.Context(), query, entityKind, entityValue, status, mode, limit)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("search: %v", err), http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"results": results})
+	writeJSON(w, http.StatusOK, map[string]any{"results": results, "mode_used": string(modeUsed)})
 }
 
 func (s *Server) handleInboxList(w http.ResponseWriter, r *http.Request) {
@@ -1746,4 +1774,29 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(value)
+}
+
+// localhostOnly wraps a handler so it only serves requests originating from the
+// loopback interface. The API has no auth layer and serve-api binds all
+// interfaces, so admin-grade endpoints are gated to localhost as a stopgap.
+func localhostOnly(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !isLoopbackRequest(r) {
+			http.Error(w, "forbidden: endpoint restricted to localhost", http.StatusForbidden)
+			return
+		}
+		next(w, r)
+	}
+}
+
+// isLoopbackRequest reports whether the request's direct peer is a loopback
+// address. It deliberately ignores X-Forwarded-For so a remote client cannot
+// spoof a loopback origin through a forwarded header.
+func isLoopbackRequest(r *http.Request) bool {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		host = r.RemoteAddr
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }

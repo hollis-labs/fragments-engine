@@ -147,6 +147,13 @@ func (s *SQLiteIndexer) Search(ctx context.Context, query string, limit int) ([]
 	return s.fragments.Search(ctx, query, limit)
 }
 
+// SearchMode runs a keyword (FTS) search. The SQLite backend has no embedding
+// index, so every mode resolves to keyword — semantic requests fall back.
+func (s *SQLiteIndexer) SearchMode(ctx context.Context, query string, limit int, _ SearchMode) ([]domain.SearchResult, SearchMode, error) {
+	results, err := s.fragments.Search(ctx, query, limit)
+	return results, ModeKeyword, err
+}
+
 func (s *SQLiteIndexer) Related(ctx context.Context, fragmentID string, limit int) ([]domain.SearchResult, error) {
 	return s.fragments.ListRelated(ctx, fragmentID, limit)
 }
