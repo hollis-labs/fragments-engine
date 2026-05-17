@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
 import { CopyableId } from './copyable-id'
@@ -51,8 +51,8 @@ export function IntakeDialog({ open, onClose, onCreated }: IntakeDialogProps) {
   const [error, setError] = useState<string | null>(null)
   const [created, setCreated] = useState<Fragment | null>(null)
 
-  useEffect(() => {
-    if (!open) return
+  /** Clears every form field and result state — used on open and "Add another". */
+  const resetForm = useCallback(() => {
     setContent('')
     setTitle('')
     setSourceType('')
@@ -60,7 +60,11 @@ export function IntakeDialog({ open, onClose, onCreated }: IntakeDialogProps) {
     setSubmitting(false)
     setError(null)
     setCreated(null)
-  }, [open])
+  }, [])
+
+  useEffect(() => {
+    if (open) resetForm()
+  }, [open, resetForm])
 
   async function handleSubmit() {
     if (!content.trim()) {
@@ -109,7 +113,7 @@ export function IntakeDialog({ open, onClose, onCreated }: IntakeDialogProps) {
               )}
             </div>
             <div className="flex justify-end gap-2">
-              <Button variant="ghost" size="sm" onClick={() => setCreated(null)}>
+              <Button variant="ghost" size="sm" onClick={resetForm}>
                 Add another
               </Button>
               <Button size="sm" onClick={onClose}>

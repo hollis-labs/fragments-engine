@@ -108,12 +108,14 @@ export default function ActivityPage() {
 
   // Fetches both panels. The loading flag is owned by the caller so the
   // initial effect run never triggers a synchronous setState.
-  const load = useCallback(async () => {
+  const load = useCallback(async (signal?: AbortSignal) => {
     try {
       const [jobsResult, workersResult] = await Promise.allSettled([
-        api.fetchIngestJobs(),
-        api.fetchWorkersStatus(),
+        api.fetchIngestJobs({ signal }),
+        api.fetchWorkersStatus({ signal }),
       ])
+      // Bail out if the component unmounted while the requests were in flight.
+      if (signal?.aborted) return
       if (jobsResult.status === 'fulfilled') {
         setJobs(jobsResult.value)
         setJobsError(null)
@@ -129,7 +131,7 @@ export default function ActivityPage() {
         setWorkersError(errorMessage(workersResult.reason))
       }
     } finally {
-      setLoading(false)
+      if (!signal?.aborted) setLoading(false)
     }
   }, [api])
 
@@ -140,12 +142,10 @@ export default function ActivityPage() {
   }, [load])
 
   useEffect(() => {
-    let cancelled = false
-    void (async () => {
-      if (!cancelled) await load()
-    })()
+    const controller = new AbortController()
+    void load(controller.signal)
     return () => {
-      cancelled = true
+      controller.abort()
     }
   }, [load])
 

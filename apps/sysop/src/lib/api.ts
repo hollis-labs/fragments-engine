@@ -704,10 +704,11 @@ async function apiFetch<TResponse>(
   return data as TResponse
 }
 
-function postJson<TResponse>(path: string, body?: JsonObject) {
+function postJson<TResponse>(path: string, body?: JsonObject, options?: ApiRequestOptions) {
   return apiFetch<TResponse>(path, {
     method: 'POST',
     body: body ? JSON.stringify(body) : undefined,
+    signal: options?.signal,
   })
 }
 
@@ -813,12 +814,15 @@ export async function searchFragmentsDetailed(
 }
 
 /** POST /v1/intake — manually create a fragment from free-form content. */
-export async function createIntake(input: IntakeInput): Promise<Fragment> {
+export async function createIntake(
+  input: IntakeInput,
+  options?: ApiRequestOptions,
+): Promise<Fragment> {
   const body: JsonObject = { content: input.content }
   if (input.title && input.title.trim()) body.title = input.title.trim()
   if (input.sourceType && input.sourceType.trim()) body.source_type = input.sourceType.trim()
   if (input.tags && input.tags.length > 0) body.tags = input.tags
-  const data = await postJson<{ result: unknown }>('/v1/intake', body)
+  const data = await postJson<{ result: unknown }>('/v1/intake', body, options)
   return normalizeFragment(data.result)
 }
 
@@ -853,8 +857,12 @@ export async function fetchWorkersStatus(options?: ApiRequestOptions): Promise<W
 }
 
 /** GET /v1/config — the full engine config plus its on-disk path. */
-export async function fetchEngineConfig(): Promise<EngineConfigResult> {
-  const data = await apiFetch<{ config?: JsonObject; path?: string }>('/v1/config')
+export async function fetchEngineConfig(
+  options?: ApiRequestOptions,
+): Promise<EngineConfigResult> {
+  const data = await apiFetch<{ config?: JsonObject; path?: string }>('/v1/config', {
+    signal: options?.signal,
+  })
   return {
     config: (data.config ?? {}) as JsonObject,
     path: typeof data.path === 'string' ? data.path : '',
@@ -862,10 +870,15 @@ export async function fetchEngineConfig(): Promise<EngineConfigResult> {
 }
 
 /** POST /v1/config/update — replace the whole engine config. */
-export async function updateEngineConfig(config: JsonObject): Promise<ConfigUpdateResult> {
-  const data = await postJson<{ ok?: boolean; restart_required?: boolean }>('/v1/config/update', {
-    config,
-  })
+export async function updateEngineConfig(
+  config: JsonObject,
+  options?: ApiRequestOptions,
+): Promise<ConfigUpdateResult> {
+  const data = await postJson<{ ok?: boolean; restart_required?: boolean }>(
+    '/v1/config/update',
+    { config },
+    options,
+  )
   return {
     ok: data.ok === true,
     restart_required: data.restart_required === true,

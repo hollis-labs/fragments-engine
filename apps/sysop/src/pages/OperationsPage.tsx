@@ -158,9 +158,12 @@ export default function OperationsPage() {
     return api.fetchInbox({}, { signal })
   })
 
-  // Refetch immediately when the server-side query (search, entity, or any
-  // search parameter) changes.
-  const reloadKey = `${searchQuery}\0${entityKeyOf(entity)}\0${searchSettings.mode}\0${searchSettings.limit}\0${searchStatus ?? ''}`
+  // Refetch immediately when the server-side query changes. The search
+  // parameters (mode/limit/status) only contribute while a search is active —
+  // otherwise toggling them with no query would needlessly refetch the inbox.
+  const reloadKey = searchMode
+    ? `search\0${searchQuery}\0${searchSettings.mode}\0${searchSettings.limit}\0${searchStatus ?? ''}`
+    : `inbox\0${entityKeyOf(entity)}`
   const didMountRef = useRef(false)
   useEffect(() => {
     if (!didMountRef.current) {

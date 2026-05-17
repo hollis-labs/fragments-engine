@@ -73,36 +73,83 @@ function formatValue(value: unknown): string {
 /* ───────────────────────────── editable field schema ───────────────────────────── */
 
 type FieldKind = 'boolean' | 'number' | 'text'
+type ConfigSection = 'Queue' | 'Recall' | 'Attachment analysis'
 
 interface ConfigField {
   path: string
   label: string
   kind: FieldKind
+  section: ConfigSection
 }
+
+/** Editable sections, rendered in order from the field schema below. */
+const EDITABLE_SECTIONS: ConfigSection[] = ['Queue', 'Recall', 'Attachment analysis']
 
 /** The SAFE editable subset — everything else is read-only. */
 const EDITABLE_FIELDS: ConfigField[] = [
-  { path: 'queue.auto_drain', label: 'Auto drain', kind: 'boolean' },
-  { path: 'queue.poll_interval_seconds', label: 'Poll interval (s)', kind: 'number' },
-  { path: 'queue.batch_size', label: 'Batch size', kind: 'number' },
-  { path: 'queue.replay_cooldown_seconds', label: 'Replay cooldown (s)', kind: 'number' },
-  { path: 'queue.max_replays_per_hour', label: 'Max replays / hour', kind: 'number' },
-  { path: 'queue.alert_pending_threshold', label: 'Alert pending threshold', kind: 'number' },
+  { path: 'queue.auto_drain', label: 'Auto drain', kind: 'boolean', section: 'Queue' },
+  {
+    path: 'queue.poll_interval_seconds',
+    label: 'Poll interval (s)',
+    kind: 'number',
+    section: 'Queue',
+  },
+  { path: 'queue.batch_size', label: 'Batch size', kind: 'number', section: 'Queue' },
+  {
+    path: 'queue.replay_cooldown_seconds',
+    label: 'Replay cooldown (s)',
+    kind: 'number',
+    section: 'Queue',
+  },
+  {
+    path: 'queue.max_replays_per_hour',
+    label: 'Max replays / hour',
+    kind: 'number',
+    section: 'Queue',
+  },
+  {
+    path: 'queue.alert_pending_threshold',
+    label: 'Alert pending threshold',
+    kind: 'number',
+    section: 'Queue',
+  },
   {
     path: 'queue.alert_dead_letter_threshold',
     label: 'Alert dead-letter threshold',
     kind: 'number',
+    section: 'Queue',
   },
-  { path: 'recall.backend', label: 'Recall backend', kind: 'text' },
-  { path: 'recall.vanta.embedding_provider', label: 'Embedding provider', kind: 'text' },
-  { path: 'recall.vanta.embedding_model', label: 'Embedding model', kind: 'text' },
-  { path: 'analysis.attachments.backend', label: 'Attachment backend', kind: 'text' },
+  { path: 'recall.backend', label: 'Recall backend', kind: 'text', section: 'Recall' },
+  {
+    path: 'recall.vanta.embedding_provider',
+    label: 'Embedding provider',
+    kind: 'text',
+    section: 'Recall',
+  },
+  {
+    path: 'recall.vanta.embedding_model',
+    label: 'Embedding model',
+    kind: 'text',
+    section: 'Recall',
+  },
+  {
+    path: 'analysis.attachments.backend',
+    label: 'Attachment backend',
+    kind: 'text',
+    section: 'Attachment analysis',
+  },
   {
     path: 'analysis.attachments.fallback_backend',
     label: 'Attachment fallback backend',
     kind: 'text',
+    section: 'Attachment analysis',
   },
-  { path: 'analysis.attachments.min_confidence', label: 'Min confidence', kind: 'number' },
+  {
+    path: 'analysis.attachments.min_confidence',
+    label: 'Min confidence',
+    kind: 'number',
+    section: 'Attachment analysis',
+  },
 ]
 
 /** Read-only config paths shown for context only. */
@@ -214,19 +261,34 @@ export default function SettingsPage() {
         continue
       }
       const raw = (drafts[field.path] ?? '').trim()
+      // A blank field keeps the originally-loaded value rather than writing
+      // null / "" — config.Validate() would reject those and an empty knob
+      // could silently break the engine.
+      if (raw === '') {
+        continue
+      }
       if (field.kind === 'number') {
-        // Blank clears the override; non-numeric is rejected at save time.
-        if (raw === '') {
-          merged = setPath(merged, field.path, null)
-        } else {
-          merged = setPath(merged, field.path, Number(raw))
-        }
+        merged = setPath(merged, field.path, Number(raw))
       } else {
         merged = setPath(merged, field.path, raw)
       }
     }
     return merged
   }, [config, drafts, bools])
+
+  /** Updates a draft text/number field and clears any stale save banner. */
+  const handleDraftChange = useCallback((path: string, next: string) => {
+    setDrafts((prev) => ({ ...prev, [path]: next }))
+    setSaved(false)
+    setSaveError(null)
+  }, [])
+
+  /** Toggles a draft boolean field and clears any stale save banner. */
+  const handleBoolToggle = useCallback((path: string, next: boolean) => {
+    setBools((prev) => ({ ...prev, [path]: next }))
+    setSaved(false)
+    setSaveError(null)
+  }, [])
 
   async function handleSave() {
     if (!config) return
@@ -312,56 +374,22 @@ export default function SettingsPage() {
           <p className="px-4 py-3 text-[13px] text-danger-soft">{error}</p>
         ) : config ? (
           <>
-            <Section label="Queue">
-              <div className="divide-y divide-border-soft">
-                {EDITABLE_FIELDS.filter((f) => f.path.startsWith('queue.')).map((field) => (
-                  <FormRow
-                    key={field.path}
-                    field={field}
-                    value={drafts[field.path] ?? ''}
-                    checked={bools[field.path] ?? false}
-                    onChange={(next) =>
-                      setDrafts((prev) => ({ ...prev, [field.path]: next }))
-                    }
-                    onToggle={(next) => setBools((prev) => ({ ...prev, [field.path]: next }))}
-                  />
-                ))}
-              </div>
-            </Section>
-
-            <Section label="Recall">
-              <div className="divide-y divide-border-soft">
-                {EDITABLE_FIELDS.filter((f) => f.path.startsWith('recall.')).map((field) => (
-                  <FormRow
-                    key={field.path}
-                    field={field}
-                    value={drafts[field.path] ?? ''}
-                    checked={bools[field.path] ?? false}
-                    onChange={(next) =>
-                      setDrafts((prev) => ({ ...prev, [field.path]: next }))
-                    }
-                    onToggle={(next) => setBools((prev) => ({ ...prev, [field.path]: next }))}
-                  />
-                ))}
-              </div>
-            </Section>
-
-            <Section label="Attachment analysis">
-              <div className="divide-y divide-border-soft">
-                {EDITABLE_FIELDS.filter((f) => f.path.startsWith('analysis.')).map((field) => (
-                  <FormRow
-                    key={field.path}
-                    field={field}
-                    value={drafts[field.path] ?? ''}
-                    checked={bools[field.path] ?? false}
-                    onChange={(next) =>
-                      setDrafts((prev) => ({ ...prev, [field.path]: next }))
-                    }
-                    onToggle={(next) => setBools((prev) => ({ ...prev, [field.path]: next }))}
-                  />
-                ))}
-              </div>
-            </Section>
+            {EDITABLE_SECTIONS.map((section) => (
+              <Section key={section} label={section}>
+                <div className="divide-y divide-border-soft">
+                  {EDITABLE_FIELDS.filter((f) => f.section === section).map((field) => (
+                    <FormRow
+                      key={field.path}
+                      field={field}
+                      value={drafts[field.path] ?? ''}
+                      checked={bools[field.path] ?? false}
+                      onChange={(next) => handleDraftChange(field.path, next)}
+                      onToggle={(next) => handleBoolToggle(field.path, next)}
+                    />
+                  ))}
+                </div>
+              </Section>
+            ))}
 
             <Section label="Read-only">
               <dl className="divide-y divide-border-soft">
