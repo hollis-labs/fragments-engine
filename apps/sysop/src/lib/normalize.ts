@@ -159,6 +159,12 @@ export function normalizeFragmentAttachment(value: unknown): FragmentAttachment 
     vision_entities: normalizeStringArray(normalized.vision_entities),
     vision_text_present: normalizeBoolean(normalized.vision_text_present),
     vision_confidence: normalizeNumber(normalized.vision_confidence),
+    extracted_text_preview:
+      typeof normalized.extracted_text_preview === 'string'
+        ? normalized.extracted_text_preview
+        : undefined,
+    extracted_text_bytes: normalizeNumber(normalized.extracted_text_bytes),
+    ocr_status: typeof normalized.ocr_status === 'string' ? normalized.ocr_status : undefined,
     created_at: normalizeDateString(normalized.created_at),
   }
 }

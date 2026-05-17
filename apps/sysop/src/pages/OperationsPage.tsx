@@ -1,17 +1,18 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { RefreshCw, Waypoints } from 'lucide-react'
+import { Plus, RefreshCw, Waypoints } from 'lucide-react'
 import { PageHeader } from '@/components/domain/page-header'
 import { SummaryCards } from '@/components/domain/summary-cards'
 import FilterBar from '@/components/domain/filter-bar/filter-bar'
 import FragmentTable from '@/components/domain/fragment-table'
 import { FragmentDetailDialog } from '@/components/domain/fragment-detail-dialog'
 import { ApplyRouteDialog } from '@/components/domain/apply-route-dialog'
+import { IntakeDialog } from '@/components/domain/intake-dialog'
 import { EmptyState } from '@/components/domain/empty-state'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Button } from '@/components/ui/button'
 import { useApi } from '@/hooks/useApi'
 import { usePoll } from '@/hooks/usePoll'
-import { ApiError, type QueueStats } from '@/lib/api'
+import { ApiError, type QueueStats, type SearchMode } from '@/lib/api'
 import { FRAGMENT_STATUSES, SUMMARY_ACCENTS } from '@/lib/constants'
 import {
   EMPTY_INBOX_FILTERS,
@@ -76,7 +77,18 @@ export default function OperationsPage() {
   const [entityGroups, setEntityGroups] = useState<InboxEntityGroup[]>([])
   const [openFragmentId, setOpenFragmentId] = useState<string | null>(null)
   const [applyRouteOpen, setApplyRouteOpen] = useState(false)
+  const [intakeOpen, setIntakeOpen] = useState(false)
   const [queue, setQueue] = useState<QueueStats | null>(null)
+
+  // Search-mode controls — only meaningful while a search query is active.
+  const [searchSettings, setSearchSettings] = useState<{ mode: SearchMode; limit: number }>({
+    mode: 'auto',
+    limit: 20,
+  })
+  // Concrete strategy the server reported for the last search.
+  const [searchModeUsed, setSearchModeUsed] = useState<'semantic' | 'keyword' | undefined>(
+    undefined,
+  )
 
   // A non-empty search query flips the page from the staged inbox to a
   // server-side /v1/search across every fragment. Entity + route facets are
@@ -118,21 +130,40 @@ export default function OperationsPage() {
     }
   }, [api])
 
+  // When exactly one status chip is active during a search, pass it to the
+  // server as the `status` param; multi-status stays a client-side refinement.
+  const searchStatus =
+    searchMode && filters.statuses.length === 1 ? filters.statuses[0] : undefined
+
   // Poll the active data source: search hits, an entity-scoped slice, or the
   // raw inbox — each a single request, so a transient failure can't half-load.
   const { data, error, isLoading, refetch } = usePoll<InboxItem[]>(async (signal) => {
     if (searchMode) {
-      const results = await api.searchFragments({ q: searchQuery }, { signal })
-      return results.map(searchResultToItem)
+      const response = await api.searchFragmentsDetailed(
+        {
+          q: searchQuery,
+          mode: searchSettings.mode,
+          limit: searchSettings.limit,
+          status: searchStatus,
+        },
+        { signal },
+      )
+      setSearchModeUsed(response.mode_used)
+      return response.results.map(searchResultToItem)
     }
+    setSearchModeUsed(undefined)
     if (entity) {
       return api.fetchInboxEntityItems({ kind: entity.kind, value: entity.value })
     }
     return api.fetchInbox({}, { signal })
   })
 
-  // Refetch immediately when the server-side query (search or entity) changes.
-  const reloadKey = `${searchQuery}\0${entityKeyOf(entity)}`
+  // Refetch immediately when the server-side query changes. The search
+  // parameters (mode/limit/status) only contribute while a search is active —
+  // otherwise toggling them with no query would needlessly refetch the inbox.
+  const reloadKey = searchMode
+    ? `search\0${searchQuery}\0${searchSettings.mode}\0${searchSettings.limit}\0${searchStatus ?? ''}`
+    : `inbox\0${entityKeyOf(entity)}`
   const didMountRef = useRef(false)
   useEffect(() => {
     if (!didMountRef.current) {
@@ -236,6 +267,10 @@ export default function OperationsPage() {
               Apply route
             </Button>
           )}
+          <Button variant="outline" size="sm" onClick={() => setIntakeOpen(true)}>
+            <Plus className="h-3.5 w-3.5" />
+            Intake
+          </Button>
           <Button variant="outline" size="sm" onClick={() => void refetch()} disabled={isLoading}>
             <RefreshCw className={`h-3.5 w-3.5 ${isLoading ? 'animate-spin' : ''}`} />
             Refresh
@@ -259,6 +294,11 @@ export default function OperationsPage() {
           activeFilterCount={activeFilterCount}
           onClear={handleClear}
           searchActive={searchMode}
+          searchMode={searchSettings.mode}
+          onSearchModeChange={(mode) => setSearchSettings((s) => ({ ...s, mode }))}
+          searchLimit={searchSettings.limit}
+          onSearchLimitChange={(limit) => setSearchSettings((s) => ({ ...s, limit }))}
+          searchModeUsed={searchModeUsed}
         />
       </div>
 
@@ -316,6 +356,12 @@ export default function OperationsPage() {
         onClose={() => setApplyRouteOpen(false)}
         entityOptions={filters.entity ? [filters.entity] : []}
         onApplied={() => void refetch()}
+      />
+
+      <IntakeDialog
+        open={intakeOpen}
+        onClose={() => setIntakeOpen(false)}
+        onCreated={() => void refetch()}
       />
     </div>
   )

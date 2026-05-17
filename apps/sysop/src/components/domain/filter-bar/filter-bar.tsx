@@ -5,6 +5,13 @@ import { FilterSearchInput } from './filter-search-input'
 import { DEFAULT_STATUS_TONE, STATUS_TONES } from '@/lib/constants'
 import type { EntitySelection, RouteFilter } from '@/lib/inbox-filters-storage'
 import type { InboxEntityGroup } from '@/lib/types'
+import type { SearchMode } from '@/lib/api'
+
+const SEARCH_MODES: readonly { value: SearchMode; label: string }[] = [
+  { value: 'auto', label: 'Auto' },
+  { value: 'semantic', label: 'Semantic' },
+  { value: 'keyword', label: 'Keyword' },
+]
 
 const ROUTE_CYCLE_OPTIONS: readonly [CycleOption<RouteFilter>, ...CycleOption<RouteFilter>[]] = [
   { value: 'both', label: 'Both', dotColor: 'bg-text-subtle', title: 'All fragments (no route filter)' },
@@ -42,7 +49,17 @@ interface FilterBarProps {
   onClear?: () => void
   /** When searching, route + entity facets are suppressed (inbox-only). */
   searchActive?: boolean
+  /** Requested /v1/search retrieval mode. */
+  searchMode?: SearchMode
+  onSearchModeChange?: (mode: SearchMode) => void
+  /** Result limit passed to /v1/search. */
+  searchLimit?: number
+  onSearchLimitChange?: (limit: number) => void
+  /** Concrete strategy the server reported running (`mode_used`). */
+  searchModeUsed?: 'semantic' | 'keyword'
 }
+
+const SEARCH_LIMITS: readonly number[] = [10, 20, 50, 100]
 
 /** Two-row filter bar — search hero + chip row, modeled on Torque's FilterBar. */
 export default function FilterBar({
@@ -60,6 +77,11 @@ export default function FilterBar({
   activeFilterCount,
   onClear,
   searchActive = false,
+  searchMode = 'auto',
+  onSearchModeChange,
+  searchLimit = 20,
+  onSearchLimitChange,
+  searchModeUsed,
 }: FilterBarProps) {
   const showClear = Boolean(onClear) && (activeFilterCount > 0 || searchQuery.length > 0)
   const showSummary = activeFilterCount > 0 || searchQuery.length > 0
@@ -136,6 +158,61 @@ export default function FilterBar({
               )
             })}
           </div>
+
+          {/* Search controls — mode toggle + limit, shown only while searching. */}
+          {searchActive && (
+            <>
+              <div className="flex items-center gap-1 border-l border-border pl-3">
+                <span className="mr-1 text-[10px] uppercase tracking-wider text-text-subtle">
+                  Mode:
+                </span>
+                <div className="inline-flex overflow-hidden rounded border border-border">
+                  {SEARCH_MODES.map((m) => (
+                    <button
+                      key={m.value}
+                      type="button"
+                      onClick={() => onSearchModeChange?.(m.value)}
+                      aria-pressed={searchMode === m.value}
+                      className={`px-2 py-0.5 text-[10px] uppercase tracking-wider transition-colors ${
+                        searchMode === m.value
+                          ? 'bg-panel-hover text-text'
+                          : 'bg-panel-2/50 text-text-subtle hover:text-text-soft'
+                      }`}
+                    >
+                      {m.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="flex items-center gap-1 border-l border-border pl-3">
+                <span className="mr-1 text-[10px] uppercase tracking-wider text-text-subtle">
+                  Limit:
+                </span>
+                <select
+                  value={searchLimit}
+                  onChange={(e) => onSearchLimitChange?.(Number(e.target.value))}
+                  aria-label="Search result limit"
+                  className="rounded border border-border bg-panel-2/50 px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-text-soft outline-none transition-colors hover:border-border-strong focus:border-border-strong"
+                >
+                  {SEARCH_LIMITS.map((n) => (
+                    <option key={n} value={n}>
+                      {n}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {searchModeUsed && (
+                <span
+                  className="border-l border-border pl-3 text-[10px] uppercase tracking-wider text-text-subtle"
+                  title={`Server ran a ${searchModeUsed} search`}
+                >
+                  ran: <span className="text-text-soft">{searchModeUsed}</span>
+                </span>
+              )}
+            </>
+          )}
 
           {/* Route + entity facets are inbox-only — hidden while searching. */}
           {!searchActive && (

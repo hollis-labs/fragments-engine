@@ -53,6 +53,9 @@ export interface FragmentAttachment {
   vision_text_present?: boolean
   vision_confidence?: number
   vision_analysis_metadata?: JsonObject
+  extracted_text_preview?: string
+  extracted_text_bytes?: number
+  ocr_status?: string
   created_at: ISODateString
 }
 

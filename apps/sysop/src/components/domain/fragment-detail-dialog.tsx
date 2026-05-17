@@ -1,5 +1,15 @@
 import { useEffect, useState } from 'react'
-import { Waypoints } from 'lucide-react'
+import {
+  ChevronDown,
+  ChevronRight,
+  FileText,
+  Film,
+  Image as ImageIcon,
+  Music,
+  Paperclip,
+  RefreshCw,
+  Waypoints,
+} from 'lucide-react'
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Button } from '@/components/ui/button'
@@ -9,6 +19,7 @@ import { ApplyRouteDialog } from './apply-route-dialog'
 import { useApi } from '@/hooks/useApi'
 import { ApiError, type FragmentDetail } from '@/lib/api'
 import { formatRelativeTime, formatShortDate } from '@/lib/utils'
+import type { FragmentAttachment } from '@/lib/types'
 
 interface FragmentDetailDialogProps {
   /** Fragment to show; the dialog is open whenever this is non-null. */
@@ -27,7 +38,245 @@ function Section({ title, children }: { title: string; children: React.ReactNode
   )
 }
 
-function DetailBody({ detail, onRoute }: { detail: FragmentDetail; onRoute: () => void }) {
+/** Human-readable file size. */
+function formatBytes(bytes: number | undefined): string {
+  if (bytes === undefined || bytes < 0) return '—'
+  if (bytes < 1024) return `${bytes} B`
+  const units = ['KB', 'MB', 'GB']
+  let value = bytes / 1024
+  let unitIdx = 0
+  while (value >= 1024 && unitIdx < units.length - 1) {
+    value /= 1024
+    unitIdx += 1
+  }
+  return `${value.toFixed(value < 10 ? 1 : 0)} ${units[unitIdx]}`
+}
+
+/** Renders an icon chosen by attachment kind / mime type. */
+function AttachmentIcon({ attachment }: { attachment: FragmentAttachment }) {
+  const probe = `${attachment.kind} ${attachment.mime_type}`.toLowerCase()
+  const className = 'h-4 w-4 shrink-0 text-text-subtle'
+  if (probe.includes('image')) return <ImageIcon className={className} />
+  if (probe.includes('video')) return <Film className={className} />
+  if (probe.includes('audio')) return <Music className={className} />
+  if (probe.includes('text') || probe.includes('document') || probe.includes('pdf')) {
+    return <FileText className={className} />
+  }
+  return <Paperclip className={className} />
+}
+
+/** Reads a string-valued metadata field, trying several common keys. */
+function metaString(a: FragmentAttachment, keys: string[]): string | undefined {
+  const meta = a.metadata
+  if (!meta) return undefined
+  for (const key of keys) {
+    const v = meta[key]
+    if (typeof v === 'string' && v.trim() !== '') return v
+  }
+  return undefined
+}
+
+/** Extracted (non-OCR) text content surfaced for an attachment, if present. */
+function extractedTextOf(a: FragmentAttachment): string | undefined {
+  if (typeof a.extracted_text_preview === 'string' && a.extracted_text_preview.trim() !== '') {
+    return a.extracted_text_preview
+  }
+  return metaString(a, ['extracted_text', 'text_content', 'text', 'transcript'])
+}
+
+/** OCR result text surfaced for an attachment, if present in metadata. */
+function ocrTextOf(a: FragmentAttachment): string | undefined {
+  return metaString(a, ['ocr_text', 'ocr', 'ocr_result'])
+}
+
+/** Collapsible block of monospace text — collapsed by default. */
+function CollapsibleText({ label, text }: { label: string; text: string }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <div className="rounded-md border border-border bg-bg">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full items-center gap-1.5 px-2 py-1.5 text-left text-[11px] font-semibold uppercase tracking-[.12em] text-text-subtle transition hover:text-text-soft"
+      >
+        {open ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+        {label}
+        <span className="ml-auto font-mono text-[10px] lowercase tracking-normal text-text-subtle/70">
+          {text.length} chars
+        </span>
+      </button>
+      {open && (
+        <pre className="max-h-56 overflow-auto whitespace-pre-wrap border-t border-border px-3 py-2 text-[12px] leading-5 text-text-muted">
+          {text}
+        </pre>
+      )}
+    </div>
+  )
+}
+
+interface AttachmentCardProps {
+  attachment: FragmentAttachment
+  /** True while a re-analyze request for this attachment is in flight. */
+  reanalyzing: boolean
+  onReanalyze: () => void
+}
+
+/** One attachment with media metadata + extracted text / OCR / vision analysis. */
+function AttachmentCard({ attachment, reanalyzing, onReanalyze }: AttachmentCardProps) {
+  const a = attachment
+  const extracted = extractedTextOf(a)
+  const ocr = ocrTextOf(a)
+  const hasVision =
+    a.vision_summary !== undefined ||
+    (a.vision_tags?.length ?? 0) > 0 ||
+    (a.vision_entities?.length ?? 0) > 0 ||
+    a.vision_backend !== undefined ||
+    a.vision_confidence !== undefined
+  const hasAnalysis =
+    hasVision ||
+    a.analysis_summary !== undefined ||
+    (a.analysis_tags?.length ?? 0) > 0 ||
+    extracted !== undefined ||
+    ocr !== undefined ||
+    a.ocr_status !== undefined ||
+    (a.extracted_text_bytes ?? 0) > 0
+
+  return (
+    <li className="rounded-md border border-border bg-panel-2/40 p-3">
+      {/* Media header */}
+      <div className="flex items-center gap-2">
+        <AttachmentIcon attachment={a} />
+        <span className="truncate text-[13px] text-text" title={a.name}>
+          {a.name || '(unnamed attachment)'}
+        </span>
+        <span className="rounded border border-border bg-bg px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-text-subtle">
+          {a.kind || 'file'}
+        </span>
+        <span className="ml-auto flex shrink-0 items-center gap-2 font-mono text-[10px] text-text-subtle">
+          <span>{formatBytes(a.size_bytes)}</span>
+          <span className="text-text-subtle/70">{a.mime_type || '—'}</span>
+        </span>
+      </div>
+
+      {/* Re-analyze action */}
+      <div className="mt-2 flex items-center gap-2">
+        <Button variant="outline" size="xs" onClick={onReanalyze} disabled={reanalyzing}>
+          <RefreshCw className={`h-3 w-3 ${reanalyzing ? 'animate-spin' : ''}`} />
+          {reanalyzing ? 'Re-analyzing…' : 'Re-analyze'}
+        </Button>
+        {!hasAnalysis && (
+          <span className="text-[11px] text-text-subtle">No analysis yet.</span>
+        )}
+      </div>
+
+      {/* Analysis body */}
+      {hasAnalysis && (
+        <div className="mt-2 flex flex-col gap-2">
+          {a.analysis_summary && (
+            <p className="text-[12px] leading-5 text-text-muted">{a.analysis_summary}</p>
+          )}
+          {a.analysis_tags && a.analysis_tags.length > 0 && (
+            <div className="flex flex-wrap gap-1">
+              {a.analysis_tags.map((tag, i) => (
+                <span
+                  key={`atag:${tag}:${i}`}
+                  className="rounded border border-border bg-bg px-1.5 py-0.5 text-[10px] text-text-soft"
+                >
+                  {tag}
+                </span>
+              ))}
+            </div>
+          )}
+
+          {extracted && <CollapsibleText label="Extracted text" text={extracted} />}
+          {(a.extracted_text_bytes ?? 0) > 0 && (
+            <p className="text-[11px] text-text-subtle">
+              {a.extracted_text_bytes!.toLocaleString()} bytes of text extracted
+            </p>
+          )}
+          {ocr && <CollapsibleText label="OCR result" text={ocr} />}
+          {a.ocr_status && (
+            <p className="text-[11px] text-text-subtle">
+              OCR: <span className="text-text-soft">{a.ocr_status}</span>
+            </p>
+          )}
+
+          {hasVision && (
+            <div className="rounded-md border border-border bg-bg p-2">
+              <div className="flex items-center gap-2">
+                <p className="text-[10px] font-semibold uppercase tracking-[.14em] text-text-subtle">
+                  Vision analysis
+                </p>
+                {a.vision_backend && (
+                  <span className="rounded border border-border bg-panel-2/50 px-1.5 py-0.5 font-mono text-[10px] text-text-subtle">
+                    {a.vision_backend}
+                  </span>
+                )}
+                {a.vision_confidence !== undefined && (
+                  <span className="ml-auto font-mono text-[10px] tabular-nums text-text-subtle">
+                    confidence {a.vision_confidence.toFixed(2)}
+                  </span>
+                )}
+              </div>
+              {a.vision_summary && (
+                <p className="mt-1.5 text-[12px] leading-5 text-text-muted">{a.vision_summary}</p>
+              )}
+              {a.vision_tags && a.vision_tags.length > 0 && (
+                <div className="mt-1.5 flex flex-wrap gap-1">
+                  {a.vision_tags.map((tag, i) => (
+                    <span
+                      key={`vtag:${tag}:${i}`}
+                      className="rounded border border-border bg-panel-2/50 px-1.5 py-0.5 text-[10px] text-text-soft"
+                    >
+                      {tag}
+                    </span>
+                  ))}
+                </div>
+              )}
+              {a.vision_entities && a.vision_entities.length > 0 && (
+                <div className="mt-1.5 flex flex-wrap gap-1">
+                  {a.vision_entities.map((ent, i) => (
+                    <span
+                      key={`vent:${ent}:${i}`}
+                      className="inline-flex items-center gap-1 rounded border border-border bg-panel-2/50 px-1.5 py-0.5 text-[10px]"
+                    >
+                      <span className="text-text-subtle">entity:</span>
+                      <span className="text-text">{ent}</span>
+                    </span>
+                  ))}
+                </div>
+              )}
+              {a.vision_text_present !== undefined && (
+                <p className="mt-1.5 text-[10px] text-text-subtle">
+                  Text in image: {a.vision_text_present ? 'detected' : 'none'}
+                </p>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+    </li>
+  )
+}
+
+interface DetailBodyProps {
+  detail: FragmentDetail
+  onRoute: () => void
+  /** ids of attachments with an in-flight re-analyze request. */
+  reanalyzingIds: Set<string>
+  /** Re-analyze one attachment; pass undefined id to re-analyze the whole fragment. */
+  onReanalyze: (attachmentId?: string) => void
+  /** Error from the most recent re-analyze attempt, if any. */
+  reanalyzeError: string | null
+}
+
+function DetailBody({
+  detail,
+  onRoute,
+  reanalyzingIds,
+  onReanalyze,
+  reanalyzeError,
+}: DetailBodyProps) {
   const { fragment, entities, attachments, route_log, related } = detail
 
   return (
@@ -102,15 +351,17 @@ function DetailBody({ detail, onRoute }: { detail: FragmentDetail; onRoute: () =
 
       {attachments.length > 0 && (
         <Section title={`Attachments (${attachments.length})`}>
-          <ul className="flex flex-col gap-1">
+          {reanalyzeError && (
+            <p className="mb-2 text-[12px] text-danger-soft">{reanalyzeError}</p>
+          )}
+          <ul className="flex flex-col gap-2">
             {attachments.map((a) => (
-              <li key={a.id} className="flex items-center gap-2 text-[12px] text-text-muted">
-                <span className="rounded border border-border bg-panel-2/50 px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-text-subtle">
-                  {a.kind}
-                </span>
-                <span className="truncate">{a.name}</span>
-                <span className="ml-auto font-mono text-[10px] text-text-subtle">{a.mime_type}</span>
-              </li>
+              <AttachmentCard
+                key={a.id}
+                attachment={a}
+                reanalyzing={reanalyzingIds.has(a.id)}
+                onReanalyze={() => onReanalyze(a.id)}
+              />
             ))}
           </ul>
         </Section>
@@ -161,14 +412,20 @@ export function FragmentDetailDialog({ fragmentId, onClose }: FragmentDetailDial
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [applyOpen, setApplyOpen] = useState(false)
-  // Bumped after a route is applied so the detail re-fetches its new status.
+  // Bumped after a route is applied (or an attachment is re-analyzed) so the
+  // detail re-fetches its new status.
   const [reloadKey, setReloadKey] = useState(0)
+  // Attachment ids with an in-flight re-analyze request.
+  const [reanalyzingIds, setReanalyzingIds] = useState<Set<string>>(new Set())
+  const [reanalyzeError, setReanalyzeError] = useState<string | null>(null)
 
   useEffect(() => {
     if (!fragmentId) return
     let cancelled = false
     setDetail(null)
     setError(null)
+    setReanalyzeError(null)
+    setReanalyzingIds(new Set())
     setLoading(true)
     void api
       .fetchFragment({ fragmentId })
@@ -190,6 +447,33 @@ export function FragmentDetailDialog({ fragmentId, onClose }: FragmentDetailDial
       cancelled = true
     }
   }, [api, fragmentId, reloadKey])
+
+  async function handleReanalyze(attachmentId?: string) {
+    if (!fragmentId) return
+    setReanalyzeError(null)
+    if (attachmentId) {
+      setReanalyzingIds((prev) => new Set(prev).add(attachmentId))
+    }
+    try {
+      await api.reanalyzeFragmentAttachments({ fragmentId, attachmentId })
+      // Refresh the dialog so the new analysis lands.
+      setReloadKey((k) => k + 1)
+    } catch (err) {
+      setReanalyzeError(
+        err instanceof ApiError || err instanceof Error
+          ? err.message
+          : 'Failed to re-analyze attachment',
+      )
+    } finally {
+      if (attachmentId) {
+        setReanalyzingIds((prev) => {
+          const next = new Set(prev)
+          next.delete(attachmentId)
+          return next
+        })
+      }
+    }
+  }
 
   return (
     <>
@@ -214,7 +498,13 @@ export function FragmentDetailDialog({ fragmentId, onClose }: FragmentDetailDial
             </div>
           )}
             {detail && !loading && (
-              <DetailBody detail={detail} onRoute={() => setApplyOpen(true)} />
+              <DetailBody
+                detail={detail}
+                onRoute={() => setApplyOpen(true)}
+                reanalyzingIds={reanalyzingIds}
+                onReanalyze={handleReanalyze}
+                reanalyzeError={reanalyzeError}
+              />
             )}
           </div>
         </DialogContent>
