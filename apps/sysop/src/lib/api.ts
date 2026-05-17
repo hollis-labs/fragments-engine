@@ -62,10 +62,89 @@ export interface ReanalyzeFragmentAttachmentsInput {
   attachmentId?: string
 }
 
+/** Search mode requested for /v1/search. */
+export type SearchMode = 'auto' | 'semantic' | 'keyword'
+
 export interface SearchParams {
   q?: string
   entityKind?: string
   entityValue?: string
+  /** Retrieval strategy hint; defaults to `auto` server-side. */
+  mode?: SearchMode
+  /** Max results to return; defaults to 20 server-side. */
+  limit?: number
+  /** Optional fragment-status filter. */
+  status?: string
+}
+
+/** A /v1/search response — results plus the strategy the server actually ran. */
+export interface SearchResponse {
+  results: SearchResult[]
+  /** Concrete strategy used (`auto` resolves to one of these). */
+  mode_used?: 'semantic' | 'keyword'
+}
+
+/** A queued or failed ingest job from /v1/jobs/ingest. */
+export interface IngestJobRecord {
+  id: string
+  ingest_name: string
+  status: string
+  attempts: number
+  max_attempts: number
+  enqueued_at: string
+  last_error?: string
+}
+
+/** Pending + failed ingest jobs from /v1/jobs/ingest. */
+export interface IngestJobs {
+  pending: IngestJobRecord[]
+  failed: IngestJobRecord[]
+}
+
+/** A single worker's liveness from /v1/workers/status. */
+export interface WorkerStatus {
+  name: string
+  kind: string
+  running: boolean
+  detail?: string
+}
+
+/** A scheduler entry from /v1/workers/status. */
+export interface SchedulerSchedule {
+  ingest_name: string
+  cron_expr: string
+  next_run?: string
+  last_run?: string
+  enabled: boolean
+}
+
+/** Worker + scheduler liveness from /v1/workers/status. */
+export interface WorkersStatus {
+  workers: WorkerStatus[]
+  scheduler: {
+    running: boolean
+    schedules: SchedulerSchedule[]
+  }
+}
+
+/** Engine config payload from /v1/config. */
+export interface EngineConfigResult {
+  config: JsonObject
+  path: string
+}
+
+/** Result of POST /v1/config/update. */
+export interface ConfigUpdateResult {
+  ok: boolean
+  restart_required: boolean
+}
+
+/** Input to POST /v1/intake. */
+export interface IntakeInput {
+  content: string
+  title?: string
+  sourceType?: string
+  tags?: string[]
 }
 
 export interface FetchEntitiesParams {
@@ -699,14 +778,98 @@ export async function searchFragments(
   params: SearchParams,
   options?: ApiRequestOptions,
 ): Promise<SearchResult[]> {
-  const data = await apiFetch<{ results: SearchResult[] }>('/v1/search', { signal: options?.signal }, {
-    q: params.q,
-    'entity-kind': params.entityKind,
-    entity_kind: params.entityKind,
-    'entity-value': params.entityValue,
-    entity_value: params.entityValue,
+  const result = await searchFragmentsDetailed(params, options)
+  return result.results
+}
+
+/**
+ * GET /v1/search — like searchFragments, but also surfaces `mode_used` so the
+ * caller can show which retrieval strategy actually ran.
+ */
+export async function searchFragmentsDetailed(
+  params: SearchParams,
+  options?: ApiRequestOptions,
+): Promise<SearchResponse> {
+  const data = await apiFetch<{ results?: SearchResult[]; mode_used?: string }>(
+    '/v1/search',
+    { signal: options?.signal },
+    {
+      q: params.q,
+      'entity-kind': params.entityKind,
+      entity_kind: params.entityKind,
+      'entity-value': params.entityValue,
+      entity_value: params.entityValue,
+      mode: params.mode,
+      limit: params.limit,
+      status: params.status,
+    },
+  )
+  const modeUsed =
+    data.mode_used === 'semantic' || data.mode_used === 'keyword' ? data.mode_used : undefined
+  return {
+    results: (data.results ?? []).map((item) => normalizeSearchResult(item)),
+    mode_used: modeUsed,
+  }
+}
+
+/** POST /v1/intake — manually create a fragment from free-form content. */
+export async function createIntake(input: IntakeInput): Promise<Fragment> {
+  const body: JsonObject = { content: input.content }
+  if (input.title && input.title.trim()) body.title = input.title.trim()
+  if (input.sourceType && input.sourceType.trim()) body.source_type = input.sourceType.trim()
+  if (input.tags && input.tags.length > 0) body.tags = input.tags
+  const data = await postJson<{ result: unknown }>('/v1/intake', body)
+  return normalizeFragment(data.result)
+}
+
+/** GET /v1/jobs/ingest — pending + failed ingest jobs. */
+export async function fetchIngestJobs(options?: ApiRequestOptions): Promise<IngestJobs> {
+  const data = await apiFetch<{ pending?: unknown[]; failed?: unknown[] }>(
+    '/v1/jobs/ingest',
+    { signal: options?.signal },
+  )
+  return {
+    pending: (data.pending ?? []).map((item) => normalizeKeys(item) as IngestJobRecord),
+    failed: (data.failed ?? []).map((item) => normalizeKeys(item) as IngestJobRecord),
+  }
+}
+
+/** GET /v1/workers/status — worker liveness + scheduler state. */
+export async function fetchWorkersStatus(options?: ApiRequestOptions): Promise<WorkersStatus> {
+  const data = await apiFetch<{ workers?: unknown[]; scheduler?: unknown }>(
+    '/v1/workers/status',
+    { signal: options?.signal },
+  )
+  const scheduler = normalizeKeys(data.scheduler ?? {}) as Record<string, unknown>
+  return {
+    workers: (data.workers ?? []).map((item) => normalizeKeys(item) as WorkerStatus),
+    scheduler: {
+      running: scheduler.running === true,
+      schedules: Array.isArray(scheduler.schedules)
+        ? (scheduler.schedules as unknown[]).map((s) => normalizeKeys(s) as SchedulerSchedule)
+        : [],
+    },
+  }
+}
+
+/** GET /v1/config — the full engine config plus its on-disk path. */
+export async function fetchEngineConfig(): Promise<EngineConfigResult> {
+  const data = await apiFetch<{ config?: JsonObject; path?: string }>('/v1/config')
+  return {
+    config: (data.config ?? {}) as JsonObject,
+    path: typeof data.path === 'string' ? data.path : '',
+  }
+}
+
+/** POST /v1/config/update — replace the whole engine config. */
+export async function updateEngineConfig(config: JsonObject): Promise<ConfigUpdateResult> {
+  const data = await postJson<{ ok?: boolean; restart_required?: boolean }>('/v1/config/update', {
+    config,
   })
-  return data.results.map((item) => normalizeSearchResult(item))
+  return {
+    ok: data.ok === true,
+    restart_required: data.restart_required === true,
+  }
 }
 
 export async function fetchRecallStatus(): Promise<RecallStatus> {
@@ -1083,6 +1246,12 @@ export const apiClient = {
   fetchRelatedFragments,
   reanalyzeFragmentAttachments,
   searchFragments,
+  searchFragmentsDetailed,
+  createIntake,
+  fetchIngestJobs,
+  fetchWorkersStatus,
+  fetchEngineConfig,
+  updateEngineConfig,
   fetchRecallStatus,
   fetchEntities,
   fetchIngests,

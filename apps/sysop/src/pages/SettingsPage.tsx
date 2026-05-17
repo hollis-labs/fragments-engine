@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import { RefreshCw } from 'lucide-react'
 import { PageHeader } from '@/components/domain/page-header'
@@ -7,19 +7,14 @@ import { Skeleton } from '@/components/ui/skeleton'
 import ThemeSwitcher from '@/components/theme-switcher'
 import { useApi } from '@/hooks/useApi'
 import { ApiError } from '@/lib/api'
-import type { RecallStatus } from '@/lib/api'
+import type { JsonObject, JsonValue } from '@/lib/types'
 
-const LABEL_CLASS =
-  'text-[10px] font-semibold uppercase tracking-[.18em] text-text-subtle'
+const LABEL_CLASS = 'text-[10px] font-semibold uppercase tracking-[.18em] text-text-subtle'
+const FIELD =
+  'h-8 w-full max-w-xs rounded-md border border-border bg-bg px-2 text-sm text-text outline-none transition focus:border-border-strong'
 
 /** Bordered section with an uppercase label header and a content body. */
-function Section({
-  label,
-  children,
-}: {
-  label: string
-  children: ReactNode
-}) {
+function Section({ label, children }: { label: string; children: ReactNode }) {
   return (
     <section className="border-b border-border-strong">
       <header className="px-4 py-2">
@@ -30,23 +25,44 @@ function Section({
   )
 }
 
-/** "indexed_count" -> "Indexed count" */
-function humanizeKey(key: string): string {
-  return key
-    .replace(/_/g, ' ')
-    .split(' ')
-    .filter(Boolean)
-    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
-    .join(' ')
+/* ───────────────────────────── nested-path helpers ───────────────────────────── */
+
+function isObject(value: unknown): value is JsonObject {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
-/** Render any status value defensively for display. */
+/** Reads a dotted path (e.g. "queue.batch_size") out of a config object. */
+function getPath(config: JsonObject, path: string): JsonValue | undefined {
+  let cursor: JsonValue | undefined = config
+  for (const segment of path.split('.')) {
+    if (!isObject(cursor)) return undefined
+    cursor = cursor[segment]
+  }
+  return cursor
+}
+
+/** Returns a deep clone with a dotted path set to `value`, creating objects as needed. */
+function setPath(config: JsonObject, path: string, value: JsonValue): JsonObject {
+  const next = structuredClone(config)
+  const segments = path.split('.')
+  let cursor: JsonObject = next
+  for (let i = 0; i < segments.length - 1; i += 1) {
+    const seg = segments[i]
+    const existing = cursor[seg]
+    if (!isObject(existing)) {
+      cursor[seg] = {}
+    }
+    cursor = cursor[seg] as JsonObject
+  }
+  cursor[segments[segments.length - 1]] = value
+  return next
+}
+
+/** Render any config value defensively for read-only display. */
 function formatValue(value: unknown): string {
   if (value === null || value === undefined) return '—'
   if (typeof value === 'boolean') return value ? 'yes' : 'no'
-  if (typeof value === 'string' || typeof value === 'number') {
-    return String(value)
-  }
+  if (typeof value === 'string' || typeof value === 'number') return String(value)
   try {
     return JSON.stringify(value)
   } catch {
@@ -54,36 +70,204 @@ function formatValue(value: unknown): string {
   }
 }
 
+/* ───────────────────────────── editable field schema ───────────────────────────── */
+
+type FieldKind = 'boolean' | 'number' | 'text'
+
+interface ConfigField {
+  path: string
+  label: string
+  kind: FieldKind
+}
+
+/** The SAFE editable subset — everything else is read-only. */
+const EDITABLE_FIELDS: ConfigField[] = [
+  { path: 'queue.auto_drain', label: 'Auto drain', kind: 'boolean' },
+  { path: 'queue.poll_interval_seconds', label: 'Poll interval (s)', kind: 'number' },
+  { path: 'queue.batch_size', label: 'Batch size', kind: 'number' },
+  { path: 'queue.replay_cooldown_seconds', label: 'Replay cooldown (s)', kind: 'number' },
+  { path: 'queue.max_replays_per_hour', label: 'Max replays / hour', kind: 'number' },
+  { path: 'queue.alert_pending_threshold', label: 'Alert pending threshold', kind: 'number' },
+  {
+    path: 'queue.alert_dead_letter_threshold',
+    label: 'Alert dead-letter threshold',
+    kind: 'number',
+  },
+  { path: 'recall.backend', label: 'Recall backend', kind: 'text' },
+  { path: 'recall.vanta.embedding_provider', label: 'Embedding provider', kind: 'text' },
+  { path: 'recall.vanta.embedding_model', label: 'Embedding model', kind: 'text' },
+  { path: 'analysis.attachments.backend', label: 'Attachment backend', kind: 'text' },
+  {
+    path: 'analysis.attachments.fallback_backend',
+    label: 'Attachment fallback backend',
+    kind: 'text',
+  },
+  { path: 'analysis.attachments.min_confidence', label: 'Min confidence', kind: 'number' },
+]
+
+/** Read-only config paths shown for context only. */
+const READ_ONLY_PATHS: string[] = ['database.path', 'ingests', 'delivery']
+
+/* ───────────────────────────── editable form row ───────────────────────────── */
+
+interface FormRowProps {
+  field: ConfigField
+  /** Current string-backed value for text/number fields, ignored for boolean. */
+  value: string
+  checked: boolean
+  onChange: (next: string) => void
+  onToggle: (next: boolean) => void
+}
+
+function FormRow({ field, value, checked, onChange, onToggle }: FormRowProps) {
+  return (
+    <div className="flex items-center justify-between gap-4 px-4 py-2">
+      <label htmlFor={`cfg-${field.path}`} className="text-[13px] text-text-soft">
+        {field.label}
+        <span className="ml-2 font-mono text-[10px] text-text-subtle/70">{field.path}</span>
+      </label>
+      {field.kind === 'boolean' ? (
+        <input
+          id={`cfg-${field.path}`}
+          type="checkbox"
+          checked={checked}
+          onChange={(e) => onToggle(e.target.checked)}
+          className="size-3.5 accent-[var(--color-text-soft)]"
+        />
+      ) : (
+        <input
+          id={`cfg-${field.path}`}
+          className={FIELD}
+          value={value}
+          inputMode={field.kind === 'number' ? 'decimal' : undefined}
+          onChange={(e) => onChange(e.target.value)}
+        />
+      )}
+    </div>
+  )
+}
+
+/* ───────────────────────────────── page ───────────────────────────────── */
+
 export default function SettingsPage() {
   const api = useApi()
 
-  const [status, setStatus] = useState<RecallStatus | null>(null)
+  const [config, setConfig] = useState<JsonObject | null>(null)
+  const [configPath, setConfigPath] = useState('')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
-  const loadStatus = useCallback(async () => {
+  // Draft string-backed values keyed by field path; booleans tracked separately.
+  const [drafts, setDrafts] = useState<Record<string, string>>({})
+  const [bools, setBools] = useState<Record<string, boolean>>({})
+
+  const [saving, setSaving] = useState(false)
+  const [saveError, setSaveError] = useState<string | null>(null)
+  const [saved, setSaved] = useState(false)
+
+  const seedDrafts = useCallback((next: JsonObject) => {
+    const nextDrafts: Record<string, string> = {}
+    const nextBools: Record<string, boolean> = {}
+    for (const field of EDITABLE_FIELDS) {
+      const raw = getPath(next, field.path)
+      if (field.kind === 'boolean') {
+        nextBools[field.path] = raw === true
+      } else if (typeof raw === 'string' || typeof raw === 'number') {
+        nextDrafts[field.path] = String(raw)
+      } else {
+        nextDrafts[field.path] = ''
+      }
+    }
+    setDrafts(nextDrafts)
+    setBools(nextBools)
+  }, [])
+
+  const loadConfig = useCallback(async () => {
     setLoading(true)
     setError(null)
+    setSaveError(null)
+    setSaved(false)
     try {
-      const next = await api.fetchRecallStatus()
-      setStatus(next)
+      const result = await api.fetchEngineConfig()
+      setConfig(result.config)
+      setConfigPath(result.path)
+      seedDrafts(result.config)
     } catch (err) {
-      const message =
-        err instanceof ApiError
-          ? err.message
-          : 'Failed to load engine status.'
-      setError(message)
-      setStatus(null)
+      setError(err instanceof ApiError ? err.message : 'Failed to load engine config.')
+      setConfig(null)
     } finally {
       setLoading(false)
     }
-  }, [api])
+  }, [api, seedDrafts])
 
   useEffect(() => {
-    void loadStatus()
-  }, [loadStatus])
+    void loadConfig()
+  }, [loadConfig])
 
-  const entries = status ? Object.entries(status) : []
+  /** Merges the edited subset back into the full config object. */
+  const buildMergedConfig = useCallback((): JsonObject | null => {
+    if (!config) return null
+    let merged = config
+    for (const field of EDITABLE_FIELDS) {
+      if (field.kind === 'boolean') {
+        merged = setPath(merged, field.path, bools[field.path] ?? false)
+        continue
+      }
+      const raw = (drafts[field.path] ?? '').trim()
+      if (field.kind === 'number') {
+        // Blank clears the override; non-numeric is rejected at save time.
+        if (raw === '') {
+          merged = setPath(merged, field.path, null)
+        } else {
+          merged = setPath(merged, field.path, Number(raw))
+        }
+      } else {
+        merged = setPath(merged, field.path, raw)
+      }
+    }
+    return merged
+  }, [config, drafts, bools])
+
+  async function handleSave() {
+    if (!config) return
+    // Validate numeric fields before sending the whole object.
+    for (const field of EDITABLE_FIELDS) {
+      if (field.kind !== 'number') continue
+      const raw = (drafts[field.path] ?? '').trim()
+      if (raw !== '' && !Number.isFinite(Number(raw))) {
+        setSaveError(`${field.label} must be a number.`)
+        return
+      }
+    }
+    const merged = buildMergedConfig()
+    if (!merged) return
+
+    setSaving(true)
+    setSaveError(null)
+    setSaved(false)
+    try {
+      await api.updateEngineConfig(merged)
+      setConfig(merged)
+      seedDrafts(merged)
+      setSaved(true)
+    } catch (err) {
+      setSaveError(
+        err instanceof ApiError || err instanceof Error
+          ? err.message
+          : 'Failed to save config.',
+      )
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const readOnlyEntries = useMemo(() => {
+    if (!config) return []
+    return READ_ONLY_PATHS.map((path) => ({
+      path,
+      value: getPath(config, path),
+    }))
+  }, [config])
 
   return (
     <div className="flex h-full min-h-0 w-full flex-col">
@@ -92,45 +276,111 @@ export default function SettingsPage() {
           <Button
             variant="outline"
             size="sm"
-            onClick={() => void loadStatus()}
-            disabled={loading}
+            onClick={() => void loadConfig()}
+            disabled={loading || saving}
           >
-            <RefreshCw className="h-3.5 w-3.5" />
+            <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
             Refresh
+          </Button>
+          <Button size="sm" onClick={() => void handleSave()} disabled={loading || saving || !config}>
+            {saving ? 'Saving…' : 'Save'}
           </Button>
         </PageHeader>
       </div>
 
       <div className="min-h-0 flex-1 overflow-auto">
-        <Section label="Engine status">
-          {loading ? (
-            <div className="flex flex-col gap-2 px-4 py-3">
-              <Skeleton className="h-5 w-full rounded-md" />
-              <Skeleton className="h-5 w-full rounded-md" />
-              <Skeleton className="h-5 w-2/3 rounded-md" />
-            </div>
-          ) : error ? (
-            <p className="px-4 py-3 text-[13px] text-danger-soft">{error}</p>
-          ) : entries.length === 0 ? (
-            <p className="px-4 py-3 text-[13px] text-text-muted">
-              No status reported.
+        {saved && (
+          <div className="border-b border-status-indexed/40 bg-status-indexed/10 px-4 py-2">
+            <p className="text-[12px] font-medium text-status-indexed">
+              Config saved — restart the engine to apply.
             </p>
-          ) : (
-            <dl className="divide-y divide-border-soft">
-              {entries.map(([key, value]) => (
-                <div
-                  key={key}
-                  className="flex justify-between gap-4 px-4 py-2 text-[13px]"
-                >
-                  <dt className="text-text-subtle">{humanizeKey(key)}</dt>
-                  <dd className="text-text-soft text-right break-all">
-                    {formatValue(value)}
-                  </dd>
-                </div>
-              ))}
-            </dl>
-          )}
-        </Section>
+          </div>
+        )}
+        {saveError && (
+          <div className="border-b border-danger-soft/40 bg-danger-soft/10 px-4 py-2">
+            <p className="text-[12px] text-danger-soft">{saveError}</p>
+          </div>
+        )}
+
+        {loading ? (
+          <div className="flex flex-col gap-2 px-4 py-3">
+            <Skeleton className="h-5 w-full rounded-md" />
+            <Skeleton className="h-5 w-full rounded-md" />
+            <Skeleton className="h-5 w-2/3 rounded-md" />
+          </div>
+        ) : error ? (
+          <p className="px-4 py-3 text-[13px] text-danger-soft">{error}</p>
+        ) : config ? (
+          <>
+            <Section label="Queue">
+              <div className="divide-y divide-border-soft">
+                {EDITABLE_FIELDS.filter((f) => f.path.startsWith('queue.')).map((field) => (
+                  <FormRow
+                    key={field.path}
+                    field={field}
+                    value={drafts[field.path] ?? ''}
+                    checked={bools[field.path] ?? false}
+                    onChange={(next) =>
+                      setDrafts((prev) => ({ ...prev, [field.path]: next }))
+                    }
+                    onToggle={(next) => setBools((prev) => ({ ...prev, [field.path]: next }))}
+                  />
+                ))}
+              </div>
+            </Section>
+
+            <Section label="Recall">
+              <div className="divide-y divide-border-soft">
+                {EDITABLE_FIELDS.filter((f) => f.path.startsWith('recall.')).map((field) => (
+                  <FormRow
+                    key={field.path}
+                    field={field}
+                    value={drafts[field.path] ?? ''}
+                    checked={bools[field.path] ?? false}
+                    onChange={(next) =>
+                      setDrafts((prev) => ({ ...prev, [field.path]: next }))
+                    }
+                    onToggle={(next) => setBools((prev) => ({ ...prev, [field.path]: next }))}
+                  />
+                ))}
+              </div>
+            </Section>
+
+            <Section label="Attachment analysis">
+              <div className="divide-y divide-border-soft">
+                {EDITABLE_FIELDS.filter((f) => f.path.startsWith('analysis.')).map((field) => (
+                  <FormRow
+                    key={field.path}
+                    field={field}
+                    value={drafts[field.path] ?? ''}
+                    checked={bools[field.path] ?? false}
+                    onChange={(next) =>
+                      setDrafts((prev) => ({ ...prev, [field.path]: next }))
+                    }
+                    onToggle={(next) => setBools((prev) => ({ ...prev, [field.path]: next }))}
+                  />
+                ))}
+              </div>
+            </Section>
+
+            <Section label="Read-only">
+              <dl className="divide-y divide-border-soft">
+                {readOnlyEntries.map(({ path, value }) => (
+                  <div
+                    key={path}
+                    className="flex justify-between gap-4 px-4 py-2 text-[13px]"
+                  >
+                    <dt className="font-mono text-text-subtle">{path}</dt>
+                    <dd className="break-all text-right text-text-soft">{formatValue(value)}</dd>
+                  </div>
+                ))}
+              </dl>
+              <p className="px-4 py-2 text-[11px] text-text-subtle">
+                These values are managed outside the UI and shown for reference only.
+              </p>
+            </Section>
+          </>
+        ) : null}
 
         <Section label="Appearance">
           <div className="flex items-center justify-between gap-4 px-4 py-3">
@@ -141,11 +391,10 @@ export default function SettingsPage() {
 
         <Section label="About">
           <p className="px-4 py-3 text-[13px] text-text-muted">
-            Engine configuration &mdash; ingest sources, recall backend, and
-            embeddings &mdash; is defined in{' '}
-            <code className="text-text-soft">fragments.example.yaml</code> and
-            is not editable from the UI. Destination retry and queue policies
-            are managed per-destination on the Routing page.
+            Editing the queue, recall, and attachment-analysis settings rewrites{' '}
+            <code className="text-text-soft">{configPath || 'the engine config file'}</code>.
+            Saved changes take effect after the engine is restarted. Destination retry and queue
+            policies are managed per-destination on the Routing page.
           </p>
         </Section>
       </div>

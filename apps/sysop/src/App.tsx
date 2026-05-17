@@ -1,9 +1,10 @@
 import { BrowserRouter, Navigate, NavLink, Route, Routes } from 'react-router-dom'
-import { Cog, Download, LayoutDashboard, Settings, Tags, Waypoints } from 'lucide-react'
+import { Activity, Cog, Download, LayoutDashboard, Settings, Tags, Waypoints } from 'lucide-react'
 import OperationsPage from '@/pages/OperationsPage'
 import IngestPage from '@/pages/IngestPage'
 import EntitiesPage from '@/pages/EntitiesPage'
 import RoutingPage from '@/pages/RoutingPage'
+import ActivityPage from '@/pages/ActivityPage'
 import SettingsPage from '@/pages/SettingsPage'
 
 function NavItem({
@@ -63,6 +64,10 @@ function AppShell() {
           <Waypoints className="h-4 w-4" />
         </NavItem>
 
+        <NavItem to="/activity" label="Activity">
+          <Activity className="h-4 w-4" />
+        </NavItem>
+
         {/* Settings pinned to the bottom */}
         <div className="mt-auto">
           <NavItem to="/settings" label="Settings">
@@ -79,6 +84,7 @@ function AppShell() {
             <Route path="/ingest" element={<IngestPage />} />
             <Route path="/entities" element={<EntitiesPage />} />
             <Route path="/routing" element={<RoutingPage />} />
+            <Route path="/activity" element={<ActivityPage />} />
             <Route path="/settings" element={<SettingsPage />} />
             <Route path="*" element={<Navigate to="/operations" replace />} />
           </Routes>
