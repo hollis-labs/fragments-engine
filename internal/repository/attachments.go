@@ -150,8 +150,10 @@ func populateAttachmentAnalysisFields(item *domain.FragmentAttachment) {
 		item.AnalysisTags = metaStringSlice(analysis, "tags")
 	}
 	item.VisionBackend = metaString(item.Metadata, "vision_analysis_backend")
+	item.VisionAnalysisBackend = item.VisionBackend
 	if vision, ok := item.Metadata["vision_analysis"].(map[string]any); ok {
 		item.VisionSummary = metaString(vision, "summary")
+		item.VisionAnalysis = item.VisionSummary
 		item.VisionTags = metaStringSlice(vision, "tags")
 		item.VisionEntities = metaStringSlice(vision, "entities")
 		if present, ok := metaBool(vision, "text_present"); ok {
@@ -160,6 +162,12 @@ func populateAttachmentAnalysisFields(item *domain.FragmentAttachment) {
 		if confidence, ok := metaFloat64(vision, "confidence"); ok {
 			item.VisionConfidence = &confidence
 		}
+	}
+	// Extracted-text (OCR) fields written by the attachment-enrichment stage.
+	item.ExtractedTextPreview = metaString(item.Metadata, "extracted_text_preview")
+	item.OCRStatus = metaString(item.Metadata, "ocr_status")
+	if bytes, ok := metaFloat64(item.Metadata, "extracted_text_bytes"); ok {
+		item.ExtractedTextBytes = int(bytes)
 	}
 }
 

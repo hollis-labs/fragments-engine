@@ -72,6 +72,65 @@ type IngestSchedulePayload struct {
 	IngestName string `json:"ingest_name"`
 }
 
+// IngestJobRecord is one row of the async ingest work queue (go-queue
+// ingest_jobs / ingest_failed_jobs tables). The pending and failed queues
+// share this shape; fields that do not apply to a given queue are zero/empty.
+//   - pending rows carry MaxAttempts, EnqueuedAt and an empty LastError.
+//   - failed (dead-letter) rows carry LastError and FailedAt but no
+//     MaxAttempts (the failed-jobs table does not retain it).
+type IngestJobRecord struct {
+	ID          int64  `json:"id"`
+	IngestName  string `json:"ingest_name"`
+	RunID       int64  `json:"run_id,omitempty"`
+	Type        string `json:"type"`
+	Status      string `json:"status"`
+	Attempts    int    `json:"attempts"`
+	MaxAttempts int    `json:"max_attempts"`
+	EnqueuedAt  string `json:"enqueued_at,omitempty"`
+	AvailableAt string `json:"available_at,omitempty"`
+	ReservedAt  string `json:"reserved_at,omitempty"`
+	FailedAt    string `json:"failed_at,omitempty"`
+	LastError   string `json:"last_error,omitempty"`
+}
+
+// IngestJobsView is the response of GET /v1/jobs/ingest: the live work queue
+// and the dead-letter queue.
+type IngestJobsView struct {
+	Pending []IngestJobRecord `json:"pending"`
+	Failed  []IngestJobRecord `json:"failed"`
+}
+
+// WorkerInfo describes one background runtime worker. Liveness is not tracked
+// per-goroutine; Running reflects whether the worker is configured to run, and
+// Detail carries the observable state (queue depth, last activity).
+type WorkerInfo struct {
+	Name    string `json:"name"`
+	Kind    string `json:"kind"`
+	Running bool   `json:"running"`
+	Detail  string `json:"detail"`
+}
+
+// SchedulerScheduleInfo is one cron schedule as surfaced by /v1/workers/status.
+type SchedulerScheduleInfo struct {
+	IngestName string `json:"ingest_name"`
+	CronExpr   string `json:"cron_expr"`
+	NextRun    string `json:"next_run,omitempty"`
+	LastRun    string `json:"last_run,omitempty"`
+	Enabled    bool   `json:"enabled"`
+}
+
+// SchedulerInfo summarizes the ingest cron scheduler.
+type SchedulerInfo struct {
+	Running   bool                    `json:"running"`
+	Schedules []SchedulerScheduleInfo `json:"schedules"`
+}
+
+// WorkersStatusView is the response of GET /v1/workers/status.
+type WorkersStatusView struct {
+	Workers   []WorkerInfo  `json:"workers"`
+	Scheduler SchedulerInfo `json:"scheduler"`
+}
+
 type IngestSummary struct {
 	Name               string            `json:"name"`
 	Kind               string            `json:"kind"`

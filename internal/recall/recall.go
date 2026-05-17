@@ -17,9 +17,41 @@ type Status struct {
 	FallbackBackend   string `json:"fallback_backend,omitempty"`
 }
 
+// SearchMode selects the retrieval strategy for a search request.
+//   - ModeAuto   lets the backend pick its default (embeddings if available).
+//   - ModeSemantic forces embedding/vector recall.
+//   - ModeKeyword forces lexical (BM25 / FTS) recall.
+type SearchMode string
+
+const (
+	ModeAuto     SearchMode = "auto"
+	ModeSemantic SearchMode = "semantic"
+	ModeKeyword  SearchMode = "keyword"
+)
+
+// ParseSearchMode normalizes a raw query-param value into a SearchMode. An
+// empty or unrecognized value falls back to ModeAuto; ok reports whether the
+// input was a recognized mode.
+func ParseSearchMode(raw string) (SearchMode, bool) {
+	switch SearchMode(raw) {
+	case ModeAuto, "":
+		return ModeAuto, raw == "" || raw == string(ModeAuto)
+	case ModeSemantic:
+		return ModeSemantic, true
+	case ModeKeyword:
+		return ModeKeyword, true
+	default:
+		return ModeAuto, false
+	}
+}
+
 type Indexer interface {
 	IndexFragment(context.Context, domain.Fragment) error
 	Search(context.Context, string, int) ([]domain.SearchResult, error)
+	// SearchMode runs a search under an explicit retrieval mode and reports
+	// the mode that actually ran (e.g. semantic falls back to keyword when
+	// embeddings are unavailable).
+	SearchMode(ctx context.Context, query string, limit int, mode SearchMode) ([]domain.SearchResult, SearchMode, error)
 	Related(context.Context, string, int) ([]domain.SearchResult, error)
 	GetFragment(context.Context, string) (domain.Fragment, error)
 	ListEntities(context.Context, string, int) ([]repository.EntityRecord, error)

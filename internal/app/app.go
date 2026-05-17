@@ -38,6 +38,7 @@ type App struct {
 	Queue           *service.DeliveryQueueService
 	IngestQueue     queue.Queue
 	IngestSchedules *service.IngestScheduleService
+	Jobs            *service.JobsService
 }
 
 func Open(ctx context.Context, cfg config.Config) (*App, error) {
@@ -92,6 +93,12 @@ func Open(ctx context.Context, cfg config.Config) (*App, error) {
 		Queue:           deliveryQueue,
 		IngestQueue:     ingestQueue,
 		IngestSchedules: service.NewIngestScheduleService(repository.NewIngestScheduleRepository(st.DB)),
+		Jobs: service.NewJobsService(
+			repository.NewIngestJobQueueRepository(st.DB),
+			repository.NewIngestScheduleRepository(st.DB),
+			fragmentRepo,
+			cfg,
+		),
 	}, nil
 }
 

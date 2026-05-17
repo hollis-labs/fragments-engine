@@ -14,10 +14,10 @@ import (
 	"encoding/json"
 	"io"
 
-	embedcontracts "github.com/hollis-labs/go-embed-contracts"
 	"github.com/hollis-labs/fragments-engine/internal/config"
 	"github.com/hollis-labs/fragments-engine/internal/domain"
 	"github.com/hollis-labs/fragments-engine/internal/repository"
+	embedcontracts "github.com/hollis-labs/go-embed-contracts"
 	conduit "github.com/hollis-labs/tesseract"
 	vmemory "github.com/hollis-labs/tesseract/memory"
 )
@@ -139,6 +139,38 @@ func (v *VantaIndexer) Search(ctx context.Context, query string, limit int) ([]d
 		return v.base.Search(ctx, query, limit)
 	}
 	return resolved, nil
+}
+
+// SearchMode runs a search under an explicit retrieval mode.
+//
+//   - keyword  always uses the SQLite FTS base index.
+//   - semantic uses Vanta vector recall when embeddings are enabled; when they
+//     are not, it falls back to keyword and reports keyword as the mode used.
+//   - auto     uses Vanta recall (hybrid when embeddings are enabled, bm25
+//     otherwise), falling back to keyword if Vanta returns nothing.
+func (v *VantaIndexer) SearchMode(ctx context.Context, query string, limit int, mode SearchMode) ([]domain.SearchResult, SearchMode, error) {
+	switch mode {
+	case ModeKeyword:
+		results, err := v.base.Search(ctx, query, limit)
+		return results, ModeKeyword, err
+	case ModeSemantic:
+		if !v.status.EmbeddingsEnabled {
+			results, err := v.base.Search(ctx, query, limit)
+			return results, ModeKeyword, err
+		}
+		results, err := v.Search(ctx, query, limit)
+		return results, ModeSemantic, err
+	default: // ModeAuto
+		results, err := v.Search(ctx, query, limit)
+		if err != nil {
+			return nil, ModeAuto, err
+		}
+		used := ModeSemantic
+		if !v.status.EmbeddingsEnabled {
+			used = ModeKeyword
+		}
+		return results, used, nil
+	}
 }
 
 func (v *VantaIndexer) Related(ctx context.Context, fragmentID string, limit int) ([]domain.SearchResult, error) {
