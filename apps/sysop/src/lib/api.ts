@@ -1200,7 +1200,7 @@ export async function fetchPendingQueue(
     'destination-id': params.destinationId,
     destination_id: params.destinationId,
   })
-  return data.items.map((item) => mapQueuePendingItem(item))
+  return (data.items ?? []).map((item) => mapQueuePendingItem(item))
 }
 
 export async function fetchFailedQueue(
@@ -1210,7 +1210,7 @@ export async function fetchFailedQueue(
     'destination-id': params.destinationId,
     destination_id: params.destinationId,
   })
-  return data.items.map((item) => mapQueueFailedItem(item))
+  return (data.items ?? []).map((item) => mapQueueFailedItem(item))
 }
 
 export async function fetchQueueEvents(
@@ -1220,7 +1220,7 @@ export async function fetchQueueEvents(
     'destination-id': params.destinationId,
     destination_id: params.destinationId,
   })
-  return data.items.map((item) => mapQueueEvent(item))
+  return (data.items ?? []).map((item) => mapQueueEvent(item))
 }
 
 export async function fetchQueueDestinations(): Promise<QueueDestinationSummary[]> {
