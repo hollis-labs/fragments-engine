@@ -1,14 +1,19 @@
 import { useCallback, useEffect, useState } from 'react'
 import { CheckCircle2, Pencil, Play, Plus, RefreshCw, Trash2, XCircle } from 'lucide-react'
-import { PageHeader } from '@/components/domain/page-header'
+import {
+  ListPageLayout,
+  PageHeader,
+  Button,
+  Skeleton,
+  Dialog,
+  DialogContent,
+  DialogTitle,
+} from '@hollis-labs/sysop-ui'
 import {
   ConfirmDialog,
   IngestEditDialog,
   IngestScheduleDialog,
 } from '@/components/domain/ingest-dialogs'
-import { Button } from '@/components/ui/button'
-import { Skeleton } from '@/components/ui/skeleton'
-import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
 import { useApi } from '@/hooks/useApi'
 import { ApiError } from '@/lib/api'
 import type { IngestRunRecord, IngestSchedule, IngestSummary } from '@/lib/api'
@@ -342,8 +347,8 @@ export default function IngestPage() {
   }
 
   return (
-    <div className="flex h-full min-h-0 w-full flex-col">
-      <div className="shrink-0">
+    <ListPageLayout
+      header={
         <PageHeader title="Ingest">
           <Button
             variant="outline"
@@ -367,9 +372,9 @@ export default function IngestPage() {
             {running ? 'Queuing…' : 'Run all'}
           </Button>
         </PageHeader>
-      </div>
-
-      <div className="min-h-0 flex-1 overflow-auto">
+      }
+    >
+      <>
         {(runNote || runError) && (
           <div className="px-4 py-2 text-[11px]">
             {runError ? (
@@ -655,7 +660,6 @@ export default function IngestPage() {
             </table>
           )}
         </Section>
-      </div>
 
       <Dialog
         open={preview !== null}
@@ -711,6 +715,7 @@ export default function IngestPage() {
           setConfirmError(null)
         }}
       />
-    </div>
+      </>
+    </ListPageLayout>
   )
 }

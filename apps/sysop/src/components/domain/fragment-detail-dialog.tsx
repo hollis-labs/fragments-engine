@@ -10,15 +10,20 @@ import {
   RefreshCw,
   Waypoints,
 } from 'lucide-react'
-import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
-import { Skeleton } from '@/components/ui/skeleton'
-import { Button } from '@/components/ui/button'
-import { StatusBadge } from './status-badge'
-import { CopyableId } from './copyable-id'
+import {
+  Dialog,
+  DialogContent,
+  DialogTitle,
+  Skeleton,
+  Button,
+  StatusBadge,
+  CopyableId,
+  formatRelativeTime,
+  formatShortDate,
+} from '@hollis-labs/sysop-ui'
 import { ApplyRouteDialog } from './apply-route-dialog'
 import { useApi } from '@/hooks/useApi'
 import { ApiError, type FragmentDetail } from '@/lib/api'
-import { formatRelativeTime, formatShortDate } from '@/lib/utils'
 import type { FragmentAttachment } from '@/lib/types'
 
 interface FragmentDetailDialogProps {

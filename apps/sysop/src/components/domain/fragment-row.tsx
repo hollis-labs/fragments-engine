@@ -1,6 +1,4 @@
-import { StatusBadge } from './status-badge'
-import { CopyableId } from './copyable-id'
-import { formatRelativeTime, formatShortDate } from '@/lib/utils'
+import { StatusBadge, CopyableId, formatRelativeTime, formatShortDate } from '@hollis-labs/sysop-ui'
 import type { InboxItem } from '@/lib/types'
 
 interface FragmentRowProps {

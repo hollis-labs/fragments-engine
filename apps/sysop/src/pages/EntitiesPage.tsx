@@ -1,10 +1,15 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { RefreshCw } from 'lucide-react'
-import { PageHeader } from '@/components/domain/page-header'
-import { Button } from '@/components/ui/button'
-import { Skeleton } from '@/components/ui/skeleton'
-import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
-import { StatusBadge } from '@/components/domain/status-badge'
+import {
+  ListPageLayout,
+  PageHeader,
+  Button,
+  Skeleton,
+  Dialog,
+  DialogContent,
+  DialogTitle,
+  StatusBadge,
+} from '@hollis-labs/sysop-ui'
 import { FragmentDetailDialog } from '@/components/domain/fragment-detail-dialog'
 import { useApi } from '@/hooks/useApi'
 import { ApiError } from '@/lib/api'
@@ -178,8 +183,8 @@ export default function EntitiesPage() {
   }, [entities, activeKind])
 
   return (
-    <div className="flex h-full min-h-0 w-full flex-col">
-      <div className="shrink-0">
+    <ListPageLayout
+      header={
         <PageHeader title="Entities">
           <Button
             variant="ghost"
@@ -191,8 +196,9 @@ export default function EntitiesPage() {
             Refresh
           </Button>
         </PageHeader>
-      </div>
-      <div className="min-h-0 flex-1 overflow-auto">
+      }
+    >
+      <>
         {loading ? (
           <TableSkeleton />
         ) : error ? (
@@ -275,18 +281,18 @@ export default function EntitiesPage() {
             </table>
           </div>
         )}
-      </div>
 
-      <EntityFragmentsDialog
-        entity={selectedEntity}
-        onClose={() => setSelectedEntity(null)}
-        onOpenFragment={setOpenFragmentId}
-      />
+        <EntityFragmentsDialog
+          entity={selectedEntity}
+          onClose={() => setSelectedEntity(null)}
+          onOpenFragment={setOpenFragmentId}
+        />
 
-      <FragmentDetailDialog
-        fragmentId={openFragmentId}
-        onClose={() => setOpenFragmentId(null)}
-      />
-    </div>
+        <FragmentDetailDialog
+          fragmentId={openFragmentId}
+          onClose={() => setOpenFragmentId(null)}
+        />
+      </>
+    </ListPageLayout>
   )
 }

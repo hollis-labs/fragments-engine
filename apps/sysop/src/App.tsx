@@ -1,5 +1,6 @@
-import { BrowserRouter, Navigate, NavLink, Route, Routes } from 'react-router-dom'
+import { BrowserRouter, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import { Activity, Cog, Download, LayoutDashboard, Settings, Tags, Waypoints } from 'lucide-react'
+import { NavRail, type NavRailItem } from '@hollis-labs/sysop-ui'
 import OperationsPage from '@/pages/OperationsPage'
 import IngestPage from '@/pages/IngestPage'
 import EntitiesPage from '@/pages/EntitiesPage'
@@ -7,74 +8,38 @@ import RoutingPage from '@/pages/RoutingPage'
 import ActivityPage from '@/pages/ActivityPage'
 import SettingsPage from '@/pages/SettingsPage'
 
-function NavItem({
-  to,
-  label,
-  children,
-}: {
-  to: string
+interface NavDest {
+  path: string
   label: string
-  children: React.ReactNode
-}) {
-  return (
-    <NavLink
-      to={to}
-      title={label}
-      className={({ isActive }) =>
-        [
-          'flex h-9 w-9 items-center justify-center rounded-md transition-colors',
-          'text-text-subtle hover:bg-panel-hover hover:text-foreground',
-          isActive ? 'bg-panel-hover text-foreground' : '',
-        ].join(' ')
-      }
-    >
-      {children}
-    </NavLink>
-  )
+  icon: React.ReactNode
+  footer?: boolean
 }
 
+const NAV_DESTS: NavDest[] = [
+  { path: '/operations', label: 'Operations', icon: <LayoutDashboard className="h-4 w-4" /> },
+  { path: '/ingest', label: 'Ingest', icon: <Download className="h-4 w-4" /> },
+  { path: '/entities', label: 'Entities', icon: <Tags className="h-4 w-4" /> },
+  { path: '/routing', label: 'Routing', icon: <Waypoints className="h-4 w-4" /> },
+  { path: '/activity', label: 'Activity', icon: <Activity className="h-4 w-4" /> },
+  { path: '/settings', label: 'Settings', icon: <Settings className="h-4 w-4" />, footer: true },
+]
+
 function AppShell() {
+  const navigate = useNavigate()
+  const location = useLocation()
+
+  const navItems: NavRailItem[] = NAV_DESTS.map((dest) => ({
+    key: dest.path,
+    label: dest.label,
+    icon: dest.icon,
+    active: location.pathname.startsWith(dest.path),
+    onSelect: () => navigate(dest.path),
+    footer: dest.footer,
+  }))
+
   return (
     <div className="flex h-full w-full overflow-hidden bg-background text-foreground">
-      {/* Nav rail */}
-      <nav className="flex w-14 flex-col items-center gap-2 border-r border-border bg-panel py-4">
-        {/* Logo */}
-        <div
-          className="mb-2 flex h-9 w-9 items-center justify-center rounded-md border border-border bg-panel-hover text-text-soft"
-          title="Sysop"
-        >
-          <Cog className="h-5 w-5" />
-        </div>
-
-        <div className="mb-1 h-px w-8 bg-border" />
-
-        <NavItem to="/operations" label="Operations">
-          <LayoutDashboard className="h-4 w-4" />
-        </NavItem>
-
-        <NavItem to="/ingest" label="Ingest">
-          <Download className="h-4 w-4" />
-        </NavItem>
-
-        <NavItem to="/entities" label="Entities">
-          <Tags className="h-4 w-4" />
-        </NavItem>
-
-        <NavItem to="/routing" label="Routing">
-          <Waypoints className="h-4 w-4" />
-        </NavItem>
-
-        <NavItem to="/activity" label="Activity">
-          <Activity className="h-4 w-4" />
-        </NavItem>
-
-        {/* Settings pinned to the bottom */}
-        <div className="mt-auto">
-          <NavItem to="/settings" label="Settings">
-            <Settings className="h-4 w-4" />
-          </NavItem>
-        </div>
-      </nav>
+      <NavRail items={navItems} logo={<Cog className="h-5 w-5" />} logoLabel="Sysop" />
 
       <div className="flex min-w-0 flex-1 flex-col bg-background">
         <main className="min-h-0 flex-1 overflow-auto bg-background">

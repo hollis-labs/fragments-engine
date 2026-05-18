@@ -1,7 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
-import { Button } from '@/components/ui/button'
-import { CopyableId } from './copyable-id'
+import { Dialog, DialogContent, DialogTitle, Button, CopyableId } from '@hollis-labs/sysop-ui'
 import { useApi } from '@/hooks/useApi'
 import { ApiError } from '@/lib/api'
 import type { Fragment } from '@/lib/types'

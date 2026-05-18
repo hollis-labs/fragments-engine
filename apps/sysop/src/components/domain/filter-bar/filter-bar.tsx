@@ -1,8 +1,13 @@
-import { SlidersHorizontal, Tag } from 'lucide-react'
-import { FilterCycleToggle, type CycleOption } from './filter-cycle-toggle'
-import { FilterEntityCombobox } from './filter-entity-combobox'
-import { FilterSearchInput } from './filter-search-input'
-import { DEFAULT_STATUS_TONE, STATUS_TONES } from '@/lib/constants'
+import { Tag } from 'lucide-react'
+import {
+  FilterBar as KitFilterBar,
+  FilterChipGroup,
+  FilterCycleToggle,
+  FilterEntityCombobox,
+  type CycleOption,
+  type FilterChip,
+  statusTone,
+} from '@hollis-labs/sysop-ui'
 import type { EntitySelection, RouteFilter } from '@/lib/inbox-filters-storage'
 import type { InboxEntityGroup } from '@/lib/types'
 import type { SearchMode } from '@/lib/api'
@@ -18,6 +23,8 @@ const ROUTE_CYCLE_OPTIONS: readonly [CycleOption<RouteFilter>, ...CycleOption<Ro
   { value: 'unrouted', label: 'Unrouted', dotColor: 'bg-status-inbox', title: 'Fragments awaiting a route' },
   { value: 'routed', label: 'Routed', dotColor: 'bg-status-routed', title: 'Fragments with a route assigned' },
 ]
+
+const SEARCH_LIMITS: readonly number[] = [10, 20, 50, 100]
 
 // Entity selections are encoded into a single combobox id; a space separates
 // kind from value (entity kinds never contain spaces).
@@ -59,9 +66,12 @@ interface FilterBarProps {
   searchModeUsed?: 'semantic' | 'keyword'
 }
 
-const SEARCH_LIMITS: readonly number[] = [10, 20, 50, 100]
-
-/** Two-row filter bar — search hero + chip row, modeled on Torque's FilterBar. */
+/**
+ * Fragments operations filter bar — a thin app composition over the kit's
+ * `FilterBar` shell. The shell owns the search hero + summary + clear; the
+ * chip row below is app-specific: status chips (always), search mode/limit
+ * (search mode only), route cycle + entity combobox (inbox mode only).
+ */
 export default function FilterBar({
   availableStatuses,
   activeStatuses,
@@ -83,9 +93,6 @@ export default function FilterBar({
   onSearchLimitChange,
   searchModeUsed,
 }: FilterBarProps) {
-  const showClear = Boolean(onClear) && (activeFilterCount > 0 || searchQuery.length > 0)
-  const showSummary = activeFilterCount > 0 || searchQuery.length > 0
-
   let summaryText = ''
   if (activeFilterCount > 0 && searchQuery.length > 0) {
     summaryText = `${activeFilterCount} filter${activeFilterCount === 1 ? '' : 's'} · ${searchMatchCount ?? 0} match${searchMatchCount === 1 ? '' : 'es'}`
@@ -94,6 +101,16 @@ export default function FilterBar({
   } else if (searchQuery.length > 0) {
     summaryText = `${searchMatchCount ?? 0} match${searchMatchCount === 1 ? '' : 'es'}`
   }
+
+  // Status chips carry their own tone classes so the active state matches the
+  // status badge palette.
+  const statusChips: FilterChip[] = availableStatuses.map((status) => {
+    const tone = statusTone(status)
+    return {
+      value: status,
+      activeClassName: `${tone.border} ${tone.bg} ${tone.text}`,
+    }
+  })
 
   const entityItems = entityGroups.map((g) => ({
     id: encodeEntityId(g.kind, g.value),
@@ -105,146 +122,108 @@ export default function FilterBar({
     : null
 
   return (
-    <div className="flex flex-col border-b border-border-strong bg-bg">
-      {/* Row 1: search hero + summary + clear */}
-      <div className="flex items-center gap-3 px-4 py-2">
-        <FilterSearchInput value={searchQuery} onChange={onSearchChange} />
-        <div className="inline-flex h-8 items-center gap-1.5 rounded border border-border bg-panel-2/50 px-2 text-[10px] uppercase tracking-wider text-text-soft">
-          <SlidersHorizontal className="h-3.5 w-3.5" />
-          {activeFilterCount}
-        </div>
-        {showSummary && (
-          <span className="whitespace-nowrap text-[10px] uppercase tracking-wider text-text-subtle">
-            {summaryText}
-          </span>
+    <KitFilterBar
+      searchQuery={searchQuery}
+      onSearchChange={onSearchChange}
+      searchPlaceholder="Search fragments by title, reason, or id…"
+      searchAriaLabel="Search fragments"
+      activeFilterCount={activeFilterCount}
+      summary={summaryText}
+      onClear={onClear}
+    >
+      {/* Status chips */}
+      <div className="flex flex-wrap items-center gap-1">
+        <span className="mr-1 text-[10px] uppercase tracking-wider text-text-subtle">Status:</span>
+        {availableStatuses.length === 0 && (
+          <span className="text-[10px] text-text-subtle/70">—</span>
         )}
-        {showClear && (
-          <button
-            type="button"
-            onClick={onClear}
-            aria-label="Clear all filters and search"
-            className="rounded border border-border-strong bg-transparent px-2 py-1 text-[10px] uppercase tracking-wider text-text-muted transition-colors hover:border-border hover:text-text"
-          >
-            Clear
-          </button>
-        )}
+        <FilterChipGroup chips={statusChips} selected={activeStatuses} onToggle={onStatusToggle} />
       </div>
 
-      {/* Row 2: compact chip row */}
-      <div className="border-t border-border-strong px-4 py-2">
-        <div className="flex flex-wrap items-center gap-3 text-xs">
-          {/* Status chips */}
-          <div className="flex flex-wrap items-center gap-1">
-            <span className="mr-1 text-[10px] uppercase tracking-wider text-text-subtle">Status:</span>
-            {availableStatuses.length === 0 && (
-              <span className="text-[10px] text-text-subtle/70">—</span>
-            )}
-            {availableStatuses.map((status) => {
-              const active = activeStatuses.includes(status)
-              const tone = STATUS_TONES[status] ?? DEFAULT_STATUS_TONE
-              return (
+      {/* Search controls — mode toggle + limit, shown only while searching. */}
+      {searchActive && (
+        <>
+          <div className="flex items-center gap-1 border-l border-border pl-3">
+            <span className="mr-1 text-[10px] uppercase tracking-wider text-text-subtle">
+              Mode:
+            </span>
+            <div className="inline-flex overflow-hidden rounded border border-border">
+              {SEARCH_MODES.map((m) => (
                 <button
-                  key={status}
+                  key={m.value}
                   type="button"
-                  onClick={() => onStatusToggle(status)}
-                  className={`rounded border px-2 py-0.5 text-[10px] uppercase tracking-wider transition-all ${
-                    active
-                      ? `${tone.border} ${tone.bg} ${tone.text} ring-1 ring-white/15`
-                      : 'border-border bg-panel-2/50 text-text-subtle opacity-60 hover:opacity-100 hover:text-text-soft'
+                  onClick={() => onSearchModeChange?.(m.value)}
+                  aria-pressed={searchMode === m.value}
+                  className={`px-2 py-0.5 text-[10px] uppercase tracking-wider transition-colors ${
+                    searchMode === m.value
+                      ? 'bg-panel-hover text-text'
+                      : 'bg-panel-2/50 text-text-subtle hover:text-text-soft'
                   }`}
                 >
-                  {status}
+                  {m.label}
                 </button>
-              )
-            })}
+              ))}
+            </div>
           </div>
 
-          {/* Search controls — mode toggle + limit, shown only while searching. */}
-          {searchActive && (
-            <>
-              <div className="flex items-center gap-1 border-l border-border pl-3">
-                <span className="mr-1 text-[10px] uppercase tracking-wider text-text-subtle">
-                  Mode:
-                </span>
-                <div className="inline-flex overflow-hidden rounded border border-border">
-                  {SEARCH_MODES.map((m) => (
-                    <button
-                      key={m.value}
-                      type="button"
-                      onClick={() => onSearchModeChange?.(m.value)}
-                      aria-pressed={searchMode === m.value}
-                      className={`px-2 py-0.5 text-[10px] uppercase tracking-wider transition-colors ${
-                        searchMode === m.value
-                          ? 'bg-panel-hover text-text'
-                          : 'bg-panel-2/50 text-text-subtle hover:text-text-soft'
-                      }`}
-                    >
-                      {m.label}
-                    </button>
-                  ))}
-                </div>
-              </div>
+          <div className="flex items-center gap-1 border-l border-border pl-3">
+            <span className="mr-1 text-[10px] uppercase tracking-wider text-text-subtle">
+              Limit:
+            </span>
+            <select
+              value={searchLimit}
+              onChange={(e) => onSearchLimitChange?.(Number(e.target.value))}
+              aria-label="Search result limit"
+              className="rounded border border-border bg-panel-2/50 px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-text-soft outline-none transition-colors hover:border-border-strong focus:border-border-strong"
+            >
+              {SEARCH_LIMITS.map((n) => (
+                <option key={n} value={n}>
+                  {n}
+                </option>
+              ))}
+            </select>
+          </div>
 
-              <div className="flex items-center gap-1 border-l border-border pl-3">
-                <span className="mr-1 text-[10px] uppercase tracking-wider text-text-subtle">
-                  Limit:
-                </span>
-                <select
-                  value={searchLimit}
-                  onChange={(e) => onSearchLimitChange?.(Number(e.target.value))}
-                  aria-label="Search result limit"
-                  className="rounded border border-border bg-panel-2/50 px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-text-soft outline-none transition-colors hover:border-border-strong focus:border-border-strong"
-                >
-                  {SEARCH_LIMITS.map((n) => (
-                    <option key={n} value={n}>
-                      {n}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              {searchModeUsed && (
-                <span
-                  className="border-l border-border pl-3 text-[10px] uppercase tracking-wider text-text-subtle"
-                  title={`Server ran a ${searchModeUsed} search`}
-                >
-                  ran: <span className="text-text-soft">{searchModeUsed}</span>
-                </span>
-              )}
-            </>
+          {searchModeUsed && (
+            <span
+              className="border-l border-border pl-3 text-[10px] uppercase tracking-wider text-text-subtle"
+              title={`Server ran a ${searchModeUsed} search`}
+            >
+              ran: <span className="text-text-soft">{searchModeUsed}</span>
+            </span>
           )}
+        </>
+      )}
 
-          {/* Route + entity facets are inbox-only — hidden while searching. */}
-          {!searchActive && (
-            <>
-              {/* Route cycle */}
-              <div className="flex items-center gap-1 border-l border-border pl-3">
-                <span className="mr-1 text-[10px] uppercase tracking-wider text-text-subtle">
-                  Route:
-                </span>
-                <FilterCycleToggle
-                  options={ROUTE_CYCLE_OPTIONS}
-                  value={routeFilter}
-                  onChange={onRouteFilterChange}
-                  ariaLabel="Route filter"
-                />
-              </div>
+      {/* Route + entity facets are inbox-only — hidden while searching. */}
+      {!searchActive && (
+        <>
+          {/* Route cycle */}
+          <div className="flex items-center gap-1 border-l border-border pl-3">
+            <span className="mr-1 text-[10px] uppercase tracking-wider text-text-subtle">
+              Route:
+            </span>
+            <FilterCycleToggle
+              options={ROUTE_CYCLE_OPTIONS}
+              value={routeFilter}
+              onChange={onRouteFilterChange}
+              ariaLabel="Route filter"
+            />
+          </div>
 
-              {/* Entity combobox */}
-              <div className="flex flex-wrap items-center gap-2 border-l border-border pl-3">
-                <FilterEntityCombobox
-                  icon={<Tag className="h-3.5 w-3.5" />}
-                  items={entityItems}
-                  value={entityValue}
-                  onChange={(id) => onEntityChange(id ? decodeEntityId(id) : null)}
-                  allLabel="All entities"
-                  ariaLabel="Filter by entity"
-                />
-              </div>
-            </>
-          )}
-        </div>
-      </div>
-    </div>
+          {/* Entity combobox */}
+          <div className="flex flex-wrap items-center gap-2 border-l border-border pl-3">
+            <FilterEntityCombobox
+              icon={<Tag className="h-3.5 w-3.5" />}
+              items={entityItems}
+              value={entityValue}
+              onChange={(id) => onEntityChange(id ? decodeEntityId(id) : null)}
+              allLabel="All entities"
+              ariaLabel="Filter by entity"
+            />
+          </div>
+        </>
+      )}
+    </KitFilterBar>
   )
 }

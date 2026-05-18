@@ -1,17 +1,20 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Plus, RefreshCw, Waypoints } from 'lucide-react'
-import { PageHeader } from '@/components/domain/page-header'
-import { SummaryCards } from '@/components/domain/summary-cards'
+import {
+  ListPageLayout,
+  PageHeader,
+  SummaryCards,
+  EmptyState,
+  Skeleton,
+  Button,
+  usePoll,
+} from '@hollis-labs/sysop-ui'
 import FilterBar from '@/components/domain/filter-bar/filter-bar'
 import FragmentTable from '@/components/domain/fragment-table'
 import { FragmentDetailDialog } from '@/components/domain/fragment-detail-dialog'
 import { ApplyRouteDialog } from '@/components/domain/apply-route-dialog'
 import { IntakeDialog } from '@/components/domain/intake-dialog'
-import { EmptyState } from '@/components/domain/empty-state'
-import { Skeleton } from '@/components/ui/skeleton'
-import { Button } from '@/components/ui/button'
 import { useApi } from '@/hooks/useApi'
-import { usePoll } from '@/hooks/usePoll'
 import { ApiError, type QueueStats, type SearchMode } from '@/lib/api'
 import { FRAGMENT_STATUSES, SUMMARY_ACCENTS } from '@/lib/constants'
 import {
@@ -257,9 +260,9 @@ export default function OperationsPage() {
   const showError = !showSkeleton && errorMessage !== null && data === null
 
   return (
-    <div className="flex h-full min-h-0 w-full flex-col">
-      {/* Pinned: header + summary + filter bar sit outside the scroll area. */}
-      <div className="shrink-0">
+    <ListPageLayout
+      scrollRef={scrollRef}
+      header={
         <PageHeader title="Operations">
           {!searchMode && filters.entity && (
             <Button variant="outline" size="sm" onClick={() => setApplyRouteOpen(true)}>
@@ -276,9 +279,9 @@ export default function OperationsPage() {
             Refresh
           </Button>
         </PageHeader>
-
-        {!showSkeleton && !showError && <SummaryCards cards={summaryCards} />}
-
+      }
+      summary={!showSkeleton && !showError ? <SummaryCards cards={summaryCards} /> : undefined}
+      filters={
         <FilterBar
           availableStatuses={availableStatuses}
           activeStatuses={filters.statuses}
@@ -300,9 +303,9 @@ export default function OperationsPage() {
           onSearchLimitChange={(limit) => setSearchSettings((s) => ({ ...s, limit }))}
           searchModeUsed={searchModeUsed}
         />
-      </div>
-
-      <div ref={scrollRef} className="min-h-0 flex-1 overflow-auto">
+      }
+    >
+      <>
         {showSkeleton ? (
           <TableSkeleton />
         ) : showError ? (
@@ -324,7 +327,8 @@ export default function OperationsPage() {
               />
             ) : (
               <EmptyState
-                variant="empty-inbox"
+                variant="empty"
+                eyebrow="Inbox"
                 title="Inbox empty."
                 description="Run `fragments-engine ingest run` to pull in your first fragments."
                 command="fragments-engine ingest run"
@@ -347,22 +351,22 @@ export default function OperationsPage() {
             onOpenFragment={setOpenFragmentId}
           />
         )}
-      </div>
 
-      <FragmentDetailDialog fragmentId={openFragmentId} onClose={() => setOpenFragmentId(null)} />
+        <FragmentDetailDialog fragmentId={openFragmentId} onClose={() => setOpenFragmentId(null)} />
 
-      <ApplyRouteDialog
-        open={applyRouteOpen}
-        onClose={() => setApplyRouteOpen(false)}
-        entityOptions={filters.entity ? [filters.entity] : []}
-        onApplied={() => void refetch()}
-      />
+        <ApplyRouteDialog
+          open={applyRouteOpen}
+          onClose={() => setApplyRouteOpen(false)}
+          entityOptions={filters.entity ? [filters.entity] : []}
+          onApplied={() => void refetch()}
+        />
 
-      <IntakeDialog
-        open={intakeOpen}
-        onClose={() => setIntakeOpen(false)}
-        onCreated={() => void refetch()}
-      />
-    </div>
+        <IntakeDialog
+          open={intakeOpen}
+          onClose={() => setIntakeOpen(false)}
+          onCreated={() => void refetch()}
+        />
+      </>
+    </ListPageLayout>
   )
 }

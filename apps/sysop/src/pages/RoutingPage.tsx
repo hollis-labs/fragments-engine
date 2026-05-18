@@ -1,9 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Play, Plus, RefreshCw } from 'lucide-react'
-import { PageHeader } from '@/components/domain/page-header'
+import { ListPageLayout, PageHeader, Button, Skeleton } from '@hollis-labs/sysop-ui'
 import { DestinationCreateDialog, RouteCreateDialog } from '@/components/domain/routing-dialogs'
-import { Button } from '@/components/ui/button'
-import { Skeleton } from '@/components/ui/skeleton'
 import { useApi } from '@/hooks/useApi'
 import type { QueueStats } from '@/lib/api'
 import type { Destination, Route } from '@/lib/types'
@@ -90,17 +88,17 @@ export default function RoutingPage() {
   const destName = (id: string) => destinations.find((d) => d.id === id)?.name ?? id
 
   return (
-    <div className="flex h-full min-h-0 w-full flex-col">
-      <div className="shrink-0">
+    <ListPageLayout
+      header={
         <PageHeader title="Routing">
           <Button variant="outline" size="sm" onClick={() => void load()} disabled={loading}>
             <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
             Refresh
           </Button>
         </PageHeader>
-      </div>
-
-      <div className="min-h-0 flex-1 overflow-auto">
+      }
+    >
+      <>
         {loading ? (
           <div className="flex flex-col gap-2 p-4">
             {Array.from({ length: 6 }).map((_, i) => (
@@ -230,19 +228,19 @@ export default function RoutingPage() {
             </Section>
           </>
         )}
-      </div>
 
-      <DestinationCreateDialog
-        open={destCreateOpen}
-        onClose={() => setDestCreateOpen(false)}
-        onCreated={() => void load()}
-      />
-      <RouteCreateDialog
-        open={routeCreateOpen}
-        onClose={() => setRouteCreateOpen(false)}
-        destinations={destinations}
-        onCreated={() => void load()}
-      />
-    </div>
+        <DestinationCreateDialog
+          open={destCreateOpen}
+          onClose={() => setDestCreateOpen(false)}
+          onCreated={() => void load()}
+        />
+        <RouteCreateDialog
+          open={routeCreateOpen}
+          onClose={() => setRouteCreateOpen(false)}
+          destinations={destinations}
+          onCreated={() => void load()}
+        />
+      </>
+    </ListPageLayout>
   )
 }

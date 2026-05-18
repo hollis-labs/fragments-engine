@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
-import { Button } from '@/components/ui/button'
+import { Dialog, DialogContent, DialogTitle, Button } from '@hollis-labs/sysop-ui'
 import { useApi } from '@/hooks/useApi'
 import { ApiError } from '@/lib/api'
 import type { IngestSchedule, IngestSummary } from '@/lib/api'

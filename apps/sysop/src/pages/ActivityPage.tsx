@@ -1,10 +1,8 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
 import { RefreshCw } from 'lucide-react'
-import { PageHeader } from '@/components/domain/page-header'
+import { ListPageLayout, PageHeader, Button, Skeleton } from '@hollis-labs/sysop-ui'
 import { ConfirmDialog } from '@/components/domain/ingest-dialogs'
-import { Button } from '@/components/ui/button'
-import { Skeleton } from '@/components/ui/skeleton'
 import { useApi } from '@/hooks/useApi'
 import { ApiError } from '@/lib/api'
 import type {
@@ -394,17 +392,17 @@ export default function ActivityPage() {
   const events = queueEvents ?? []
 
   return (
-    <div className="flex h-full min-h-0 w-full flex-col">
-      <div className="shrink-0">
+    <ListPageLayout
+      header={
         <PageHeader title="Activity">
           <Button variant="outline" size="sm" onClick={refresh} disabled={loading}>
             <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
             Refresh
           </Button>
         </PageHeader>
-      </div>
-
-      <div className="min-h-0 flex-1 overflow-auto">
+      }
+    >
+      <>
         {/* Workers */}
         <Section title="Workers" count={loading ? undefined : workers?.workers.length}>
           {loading ? (
@@ -604,7 +602,6 @@ export default function ActivityPage() {
             <EventsTable items={events} />
           )}
         </Section>
-      </div>
 
       <ConfirmDialog
         open={purgeTarget !== null}
@@ -619,6 +616,7 @@ export default function ActivityPage() {
           setPurgeError(null)
         }}
       />
-    </div>
+      </>
+    </ListPageLayout>
   )
 }

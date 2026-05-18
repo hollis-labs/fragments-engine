@@ -13,7 +13,8 @@ export default defineConfig({
     react(),
   ],
   server: {
-    port: 5173,
+    port: 5178,
+    strictPort: true,
     proxy: {
       '/v1': {
         target: apiTarget,

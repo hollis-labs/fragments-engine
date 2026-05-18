@@ -1,10 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import { RefreshCw } from 'lucide-react'
-import { PageHeader } from '@/components/domain/page-header'
-import { Button } from '@/components/ui/button'
-import { Skeleton } from '@/components/ui/skeleton'
-import ThemeSwitcher from '@/components/theme-switcher'
+import { ListPageLayout, PageHeader, Button, Skeleton, ThemeSwitcher } from '@hollis-labs/sysop-ui'
 import { useApi } from '@/hooks/useApi'
 import { ApiError } from '@/lib/api'
 import type { JsonObject, JsonValue } from '@/lib/types'
@@ -332,8 +329,8 @@ export default function SettingsPage() {
   }, [config])
 
   return (
-    <div className="flex h-full min-h-0 w-full flex-col">
-      <div className="shrink-0">
+    <ListPageLayout
+      header={
         <PageHeader title="Settings">
           <Button
             variant="outline"
@@ -348,9 +345,9 @@ export default function SettingsPage() {
             {saving ? 'Saving…' : 'Save'}
           </Button>
         </PageHeader>
-      </div>
-
-      <div className="min-h-0 flex-1 overflow-auto">
+      }
+    >
+      <>
         {saved && (
           <div className="border-b border-status-indexed/40 bg-status-indexed/10 px-4 py-2">
             <p className="text-[12px] font-medium text-status-indexed">
@@ -425,7 +422,7 @@ export default function SettingsPage() {
             policies are managed per-destination on the Routing page.
           </p>
         </Section>
-      </div>
-    </div>
+      </>
+    </ListPageLayout>
   )
 }

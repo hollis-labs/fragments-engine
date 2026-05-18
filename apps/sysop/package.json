@@ -2,7 +2,7 @@
   "name": "sysop",
   "private": true,
   "version": "0.0.0",
-  "description": "Vendored Phase 1 sysop frontend for Fragments Engine.",
+  "description": "Sysop frontend for Fragments Engine — built on @hollis-labs/sysop-ui.",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -19,6 +19,7 @@
     "@dnd-kit/sortable": "^10.0.0",
     "@dnd-kit/utilities": "^3.2.2",
     "@fontsource-variable/geist": "^5.2.8",
+    "@hollis-labs/sysop-ui": "github:hollis-labs/sysop-ui#v0.5.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "cmdk": "^1.1.1",
