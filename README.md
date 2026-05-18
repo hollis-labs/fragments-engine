@@ -38,7 +38,12 @@ go run ./cmd/fragments-engine search -q "project roadmap"
 
 ## Configuration
 
-Create a `fragments.yaml` file:
+The committed `fragments.example.yaml` is a hand-maintained, commented template.
+The server rewrites its `--config` file in place whenever ingests are mutated
+through the CRUD endpoints (`POST /v1/ingests/...`), so the live server must run
+against a gitignored runtime copy — `fragments.yaml` — never the template itself.
+Seed it once with `make seed-config` (copies `fragments.example.yaml` →
+`fragments.yaml`), then edit `fragments.yaml`:
 
 ```yaml
 database:
@@ -236,7 +241,9 @@ For embedded Vanta recall, FE currently supports:
   It now also shows FE-owned attachment and URL-reference records for the fragment.
 - `entity list|fragments` inspects persisted FE entities and the fragments linked to them.
 - `search` runs FE recall against the active backend and can be constrained by persisted entity filters.
-- `serve-api` starts the HTTP API.
+- `serve-api` starts the HTTP API. Run it against the gitignored `fragments.yaml`
+  runtime config (`make serve-api` builds, seeds, and launches it); never point it
+  at the `fragments.example.yaml` template.
 - `serve-mcp` starts the MCP server on stdio.
 
 Current destination implementations:

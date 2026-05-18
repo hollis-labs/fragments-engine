@@ -9,3 +9,8 @@ data/
 
 # compiled server binary (built via `make` / `go build -o fragments-engine`)
 /fragments-engine
+
+# runtime config — seeded from fragments.example.yaml on deploy (see
+# scripts/seed-config.sh). The ingest CRUD endpoints rewrite the live config
+# file in place, so it must never be the committed, hand-commented template.
+/fragments.yaml

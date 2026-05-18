@@ -44,7 +44,8 @@ Entry points:
 - `docs/roadmap.md` — phased roadmap (Phase 1 Attachment Planning → Phase 6).
 - `docs/next-session.md` / `docs/phase-1-next.md` — locked decisions and next work.
 - `docs/usage.md` — usage walkthrough.
-- `Makefile` — `build`, `test`, `lint`, `run`, plus `sysop-*` targets for the GUI.
+- `Makefile` — `build`, `test`, `lint`, `run`, `seed-config`, `serve-api`, plus
+  `sysop-*` targets for the GUI.
 
 Internal layout (`internal/`):
 
@@ -114,7 +115,18 @@ cerberus_resource_status   # check
 cerberus_resource_deploy   # build + (re)deploy
 ```
 
-Copy `fragments.example.yaml` → `fragments.yaml` and edit before running ingests.
+The dev API must launch with `--config fragments.yaml` (the gitignored runtime
+config), never `fragments.example.yaml`. `make serve-api` builds, seeds
+`fragments.yaml` from the template, and starts the API against it. The Cerberus
+service definition (`~/.cerberus/config.yaml`, outside this repo) must point its
+launch command / `--config` flag at `fragments.yaml`.
+
+**Config files.** `fragments.example.yaml` is a hand-maintained, *commented*
+template — treat it as read-only at runtime. The ingest CRUD endpoints rewrite
+the live config file in place (YAML marshal strips comments, re-indents, and adds
+machine defaults), so the server must run against the gitignored `fragments.yaml`
+runtime copy. Seed it once with `make seed-config` (or `scripts/seed-config.sh`),
+then edit `fragments.yaml` before running ingests.
 
 ## (e) Where to look for more
 
