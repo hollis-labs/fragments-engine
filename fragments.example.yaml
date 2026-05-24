@@ -88,3 +88,54 @@ ingests:
       request_timeout_seconds: 20
       max_body_mb: 5
       user_agent: FragmentsEngine/0.1 (+url_source)
+  - name: hollis-docs
+    kind: filesystem_docs
+    enabled: false
+    source:
+      root: ~/dev/hollis-labs/apps
+    routing:
+      namespace: fragments/repos/docs
+    rules:
+      include:
+        - "**/*.md"
+        - "**/*.mdx"
+        - "**/*.txt"
+        - "**/*.go"
+        - "**/*.ts"
+        - "**/*.tsx"
+        - "**/*.yaml"
+        - "**/*.yml"
+      exclude:
+        - "**/.git/**"
+        - "**/node_modules/**"
+        - "**/dist/**"
+        - "**/build/**"
+      max_file_size_mb: 2
+      project_from_path: true
+  - name: hollis-git-changes
+    kind: git_changes
+    enabled: false
+    source:
+      root: ~/dev/hollis-labs/apps
+    routing:
+      namespace: fragments/repos/git
+    rules:
+      repos:
+        - fragments-engine
+        - nanite
+        - tesseract
+      branch: main
+      since: 72h
+      max_commits: 100
+      include:
+        - "**/*.md"
+        - "**/*.go"
+        - "**/*.ts"
+        - "**/*.tsx"
+        - "**/*.yaml"
+        - "**/*.yml"
+      exclude:
+        - "**/node_modules/**"
+        - "**/dist/**"
+        - "**/build/**"
+      emit_doc_file_fragments: false

@@ -17,12 +17,23 @@ function ruleNum(rules: JsonObject, key: string): string {
   return typeof v === 'number' ? String(v) : ''
 }
 
+function ruleLines(rules: JsonObject, key: string): string {
+  const v = rules[key]
+  return Array.isArray(v) ? v.filter((item): item is string => typeof item === 'string').join('\n') : ''
+}
+
 const FIELD =
   'h-8 w-full rounded-md border border-border bg-bg px-2 text-sm text-text outline-none transition focus:border-border-strong'
 const LABEL = 'text-[10px] font-semibold uppercase tracking-[.18em] text-text-subtle'
 
 /** Ingest kinds the backend accepts (ingest.DefaultSources). */
-const INGEST_KINDS = ['claude_code', 'chatgpt_export', 'url_source'] as const
+const INGEST_KINDS = [
+  'claude_code',
+  'chatgpt_export',
+  'url_source',
+  'filesystem_docs',
+  'git_changes',
+] as const
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
@@ -70,6 +81,14 @@ function numOrUndefined(value: string): number | undefined {
   return Number.isFinite(n) ? n : undefined
 }
 
+function linesToArray(value: string): string[] | undefined {
+  const items = value
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+  return items.length > 0 ? items : undefined
+}
+
 /* ─────────────────────────── Ingest source create / edit ────────────────────────── */
 
 interface IngestEditDialogProps {
@@ -98,6 +117,17 @@ export function IngestEditDialog({ open, onClose, onSaved, ingest }: IngestEditD
   const [requestTimeoutSeconds, setRequestTimeoutSeconds] = useState('')
   const [maxBodyMb, setMaxBodyMb] = useState('')
   const [userAgent, setUserAgent] = useState('')
+  const [docsInclude, setDocsInclude] = useState('')
+  const [docsExclude, setDocsExclude] = useState('')
+  const [docsProjectFromPath, setDocsProjectFromPath] = useState(false)
+  const [gitRepos, setGitRepos] = useState('')
+  const [gitBranch, setGitBranch] = useState('')
+  const [gitSince, setGitSince] = useState('')
+  const [gitUntil, setGitUntil] = useState('')
+  const [gitMaxCommits, setGitMaxCommits] = useState('')
+  const [gitInclude, setGitInclude] = useState('')
+  const [gitExclude, setGitExclude] = useState('')
+  const [gitEmitDocFileFragments, setGitEmitDocFileFragments] = useState(false)
 
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -120,6 +150,17 @@ export function IngestEditDialog({ open, onClose, onSaved, ingest }: IngestEditD
     setRequestTimeoutSeconds('')
     setMaxBodyMb('')
     setUserAgent('')
+    setDocsInclude('')
+    setDocsExclude('')
+    setDocsProjectFromPath(false)
+    setGitRepos('')
+    setGitBranch('')
+    setGitSince('')
+    setGitUntil('')
+    setGitMaxCommits('')
+    setGitInclude('')
+    setGitExclude('')
+    setGitEmitDocFileFragments(false)
     setSubmitting(false)
     setError(null)
     setRecordError(null)
@@ -149,6 +190,17 @@ export function IngestEditDialog({ open, onClose, onSaved, ingest }: IngestEditD
         setRequestTimeoutSeconds(ruleNum(rules, 'request_timeout_seconds'))
         setMaxBodyMb(ruleNum(rules, 'max_body_mb'))
         setUserAgent(ruleStr(rules, 'user_agent'))
+        setDocsInclude(ruleLines(rules, 'include'))
+        setDocsExclude(ruleLines(rules, 'exclude'))
+        setDocsProjectFromPath(rules.project_from_path === true)
+        setGitRepos(ruleLines(rules, 'repos'))
+        setGitBranch(ruleStr(rules, 'branch'))
+        setGitSince(ruleStr(rules, 'since'))
+        setGitUntil(ruleStr(rules, 'until'))
+        setGitMaxCommits(ruleNum(rules, 'max_commits'))
+        setGitInclude(ruleLines(rules, 'include'))
+        setGitExclude(ruleLines(rules, 'exclude'))
+        setGitEmitDocFileFragments(rules.emit_doc_file_fragments === true)
       })
       .catch((err) => {
         if (!cancelled) setRecordError(errMessage(err))
@@ -178,6 +230,27 @@ export function IngestEditDialog({ open, onClose, onSaved, ingest }: IngestEditD
       const body = numOrUndefined(maxBodyMb)
       if (body !== undefined) rules.max_body_mb = body
       if (userAgent.trim()) rules.user_agent = userAgent.trim()
+    } else if (kind === 'filesystem_docs') {
+      const include = linesToArray(docsInclude)
+      const exclude = linesToArray(docsExclude)
+      const size = numOrUndefined(maxFileSizeMb)
+      if (include) rules.include = include
+      if (exclude) rules.exclude = exclude
+      if (size !== undefined) rules.max_file_size_mb = size
+      rules.project_from_path = docsProjectFromPath
+    } else if (kind === 'git_changes') {
+      const repos = linesToArray(gitRepos)
+      const include = linesToArray(gitInclude)
+      const exclude = linesToArray(gitExclude)
+      const maxCommits = numOrUndefined(gitMaxCommits)
+      if (repos) rules.repos = repos
+      if (gitBranch.trim()) rules.branch = gitBranch.trim()
+      if (gitSince.trim()) rules.since = gitSince.trim()
+      if (gitUntil.trim()) rules.until = gitUntil.trim()
+      if (maxCommits !== undefined) rules.max_commits = maxCommits
+      if (include) rules.include = include
+      if (exclude) rules.exclude = exclude
+      rules.emit_doc_file_fragments = gitEmitDocFileFragments
     }
     return rules
   }
@@ -350,6 +423,118 @@ export function IngestEditDialog({ open, onClose, onSaved, ingest }: IngestEditD
                   disabled={rulesLoading}
                 />
               </Field>
+            </>
+          )}
+          {kind === 'filesystem_docs' && (
+            <>
+              <Field label="Max file size (MB)">
+                <input
+                  className={FIELD}
+                  value={maxFileSizeMb}
+                  onChange={(e) => setMaxFileSizeMb(e.target.value)}
+                  inputMode="numeric"
+                  placeholder="optional"
+                  disabled={rulesLoading}
+                />
+              </Field>
+              <Field label="Include globs">
+                <textarea
+                  className={`${FIELD} min-h-20 py-2`}
+                  value={docsInclude}
+                  onChange={(e) => setDocsInclude(e.target.value)}
+                  placeholder={'**/*.md\n**/*.go'}
+                  disabled={rulesLoading}
+                />
+              </Field>
+              <Field label="Exclude globs">
+                <textarea
+                  className={`${FIELD} min-h-20 py-2`}
+                  value={docsExclude}
+                  onChange={(e) => setDocsExclude(e.target.value)}
+                  placeholder={'**/.git/**\n**/node_modules/**'}
+                  disabled={rulesLoading}
+                />
+              </Field>
+              <Checkbox
+                label="Project from path"
+                checked={docsProjectFromPath}
+                onChange={setDocsProjectFromPath}
+                disabled={rulesLoading}
+              />
+            </>
+          )}
+          {kind === 'git_changes' && (
+            <>
+              <Field label="Repos">
+                <textarea
+                  className={`${FIELD} min-h-20 py-2`}
+                  value={gitRepos}
+                  onChange={(e) => setGitRepos(e.target.value)}
+                  placeholder={'fragments-engine\nnanite'}
+                  disabled={rulesLoading}
+                />
+              </Field>
+              <Field label="Branch">
+                <input
+                  className={FIELD}
+                  value={gitBranch}
+                  onChange={(e) => setGitBranch(e.target.value)}
+                  placeholder="main"
+                  disabled={rulesLoading}
+                />
+              </Field>
+              <Field label="Since">
+                <input
+                  className={FIELD}
+                  value={gitSince}
+                  onChange={(e) => setGitSince(e.target.value)}
+                  placeholder="72h"
+                  disabled={rulesLoading}
+                />
+              </Field>
+              <Field label="Until">
+                <input
+                  className={FIELD}
+                  value={gitUntil}
+                  onChange={(e) => setGitUntil(e.target.value)}
+                  placeholder="optional"
+                  disabled={rulesLoading}
+                />
+              </Field>
+              <Field label="Max commits">
+                <input
+                  className={FIELD}
+                  value={gitMaxCommits}
+                  onChange={(e) => setGitMaxCommits(e.target.value)}
+                  inputMode="numeric"
+                  placeholder="optional"
+                  disabled={rulesLoading}
+                />
+              </Field>
+              <Field label="Include globs">
+                <textarea
+                  className={`${FIELD} min-h-20 py-2`}
+                  value={gitInclude}
+                  onChange={(e) => setGitInclude(e.target.value)}
+                  placeholder={'**/*.md\n**/*.go'}
+                  disabled={rulesLoading}
+                />
+              </Field>
+              <Field label="Exclude globs">
+                <textarea
+                  className={`${FIELD} min-h-20 py-2`}
+                  value={gitExclude}
+                  onChange={(e) => setGitExclude(e.target.value)}
+                  placeholder={'**/dist/**\n**/node_modules/**'}
+                  disabled={rulesLoading}
+                />
+              </Field>
+              <Checkbox
+                label="Emit changed doc fragments"
+                checked={gitEmitDocFileFragments}
+                onChange={setGitEmitDocFileFragments}
+                disabled={rulesLoading}
+              />
             </>
           )}
 

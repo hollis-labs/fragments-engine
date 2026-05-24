@@ -8,6 +8,8 @@ import (
 	"github.com/hollis-labs/fragments-engine/internal/domain"
 	"github.com/hollis-labs/fragments-engine/internal/ingest/chatgpt"
 	"github.com/hollis-labs/fragments-engine/internal/ingest/claude"
+	"github.com/hollis-labs/fragments-engine/internal/ingest/filesystemdocs"
+	"github.com/hollis-labs/fragments-engine/internal/ingest/gitchanges"
 	"github.com/hollis-labs/fragments-engine/internal/ingest/urlsource"
 )
 
@@ -16,6 +18,8 @@ func DefaultSources() []Source {
 		claude.Source{},
 		chatgpt.Source{},
 		urlsource.Source{},
+		filesystemdocs.Source{},
+		gitchanges.Source{},
 	}
 }
 

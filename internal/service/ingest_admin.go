@@ -11,6 +11,7 @@ import (
 	"github.com/hollis-labs/fragments-engine/internal/domain"
 	"github.com/hollis-labs/fragments-engine/internal/ingest"
 	"github.com/hollis-labs/fragments-engine/internal/ingest/chatgpt"
+	"github.com/hollis-labs/fragments-engine/internal/ingest/sourceutil"
 )
 
 type IngestAdminService struct {
@@ -224,16 +225,39 @@ func validateIngestSource(ic config.IngestConfig) error {
 // validateIngestRules confirms the rules map decodes cleanly into the typed
 // rules struct for the ingest's kind.
 func validateIngestRules(ic config.IngestConfig) error {
-	var err error
 	switch ic.Kind {
 	case "claude_code":
-		_, err = config.DecodeRules[config.ClaudeCodeRules](ic)
+		_, err := config.DecodeRules[config.ClaudeCodeRules](ic)
+		return err
 	case "chatgpt_export":
-		_, err = config.DecodeRules[config.ChatGPTExportRules](ic)
+		_, err := config.DecodeRules[config.ChatGPTExportRules](ic)
+		return err
 	case "url_source":
-		_, err = config.DecodeRules[config.URLSourceRules](ic)
+		_, err := config.DecodeRules[config.URLSourceRules](ic)
+		return err
+	case "filesystem_docs":
+		rules, err := config.DecodeRules[config.FilesystemDocsRules](ic)
+		if err != nil {
+			return err
+		}
+		if err := sourceutil.ValidateGlobs(rules.Include); err != nil {
+			return err
+		}
+		return sourceutil.ValidateGlobs(rules.Exclude)
+	case "git_changes":
+		rules, err := config.DecodeRules[config.GitChangesRules](ic)
+		if err != nil {
+			return err
+		}
+		if err := sourceutil.ValidateGlobs(rules.Include); err != nil {
+			return err
+		}
+		if err := sourceutil.ValidateGlobs(rules.Exclude); err != nil {
+			return err
+		}
+		return validateGitRepoRoots(config.ExpandHome(ic.Source.Root), rules.Repos)
 	}
-	return err
+	return nil
 }
 
 func (s *IngestAdminService) Validate(_ context.Context, name string) (domain.IngestValidationResult, error) {
@@ -297,6 +321,51 @@ func (s *IngestAdminService) Validate(_ context.Context, name string) (domain.In
 	case "url_source":
 		if len(urlManifestMatches(root)) == 0 {
 			result.Warnings = append(result.Warnings, "no URL manifest files found")
+		}
+	case "filesystem_docs":
+		rules, err := config.DecodeRules[config.FilesystemDocsRules](ingestCfg)
+		if err != nil {
+			result.Valid = false
+			result.Errors = append(result.Errors, err.Error())
+			break
+		}
+		if err := sourceutil.ValidateGlobs(rules.Include); err != nil {
+			result.Valid = false
+			result.Errors = append(result.Errors, err.Error())
+			break
+		}
+		if err := sourceutil.ValidateGlobs(rules.Exclude); err != nil {
+			result.Valid = false
+			result.Errors = append(result.Errors, err.Error())
+			break
+		}
+		if len(filesystemDocMatches(root, rules)) == 0 {
+			result.Warnings = append(result.Warnings, "no matching filesystem docs found")
+		}
+	case "git_changes":
+		rules, err := config.DecodeRules[config.GitChangesRules](ingestCfg)
+		if err != nil {
+			result.Valid = false
+			result.Errors = append(result.Errors, err.Error())
+			break
+		}
+		if err := sourceutil.ValidateGlobs(rules.Include); err != nil {
+			result.Valid = false
+			result.Errors = append(result.Errors, err.Error())
+			break
+		}
+		if err := sourceutil.ValidateGlobs(rules.Exclude); err != nil {
+			result.Valid = false
+			result.Errors = append(result.Errors, err.Error())
+			break
+		}
+		if err := validateGitRepoRoots(root, rules.Repos); err != nil {
+			result.Valid = false
+			result.Errors = append(result.Errors, err.Error())
+			break
+		}
+		if count := len(gitRepoMatches(root, rules.Repos)); count == 0 {
+			result.Warnings = append(result.Warnings, "no git repositories found")
 		}
 	}
 	return result, nil
@@ -447,6 +516,58 @@ func urlManifestMatches(root string) []string {
 	for _, pattern := range []string{"*.txt", "*.json", "*.jsonl"} {
 		matched, _ := filepath.Glob(filepath.Join(root, pattern))
 		out = append(out, matched...)
+	}
+	return out
+}
+
+func filesystemDocMatches(root string, rules config.FilesystemDocsRules) []string {
+	var out []string
+	_ = filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return nil
+		}
+		rel, relErr := filepath.Rel(root, path)
+		if relErr != nil {
+			return nil
+		}
+		include, includeErr := sourceutil.ShouldIncludePath(rel, rules.Include, rules.Exclude)
+		if includeErr == nil && include {
+			out = append(out, path)
+		}
+		return nil
+	})
+	return out
+}
+
+func validateGitRepoRoots(root string, repos []string) error {
+	for _, repoRoot := range gitRepoMatches(root, repos) {
+		info, err := os.Stat(filepath.Join(repoRoot, ".git"))
+		if err == nil && info.IsDir() {
+			continue
+		}
+		return fmt.Errorf("git repo not found: %s", repoRoot)
+	}
+	if len(repos) > 0 && len(gitRepoMatches(root, repos)) == 0 {
+		return fmt.Errorf("no git repos configured under %s", root)
+	}
+	return nil
+}
+
+func gitRepoMatches(root string, repos []string) []string {
+	if len(repos) == 0 {
+		return []string{root}
+	}
+	out := make([]string, 0, len(repos))
+	for _, repo := range repos {
+		repo = strings.TrimSpace(repo)
+		if repo == "" {
+			continue
+		}
+		if filepath.IsAbs(repo) {
+			out = append(out, repo)
+			continue
+		}
+		out = append(out, filepath.Join(root, repo))
 	}
 	return out
 }
