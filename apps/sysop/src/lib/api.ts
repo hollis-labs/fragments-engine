@@ -62,6 +62,12 @@ export interface ReanalyzeFragmentAttachmentsInput {
   attachmentId?: string
 }
 
+export interface FragmentAttachmentURLInput {
+  fragmentId: string
+  attachmentId: string
+  variant?: 'preview' | 'original'
+}
+
 /** Search mode requested for /v1/search. */
 export type SearchMode = 'auto' | 'semantic' | 'keyword'
 
@@ -762,6 +768,14 @@ export async function fetchRelatedFragments(params: FetchFragmentParams): Promis
   return data.results.map((item) => normalizeSearchResult(item))
 }
 
+export function fragmentAttachmentURL(input: FragmentAttachmentURLInput): string {
+  return buildUrl('/v1/fragments/attachment', {
+    fragment_id: input.fragmentId,
+    attachment_id: input.attachmentId,
+    variant: input.variant,
+  })
+}
+
 export async function reanalyzeFragmentAttachments(
   input: ReanalyzeFragmentAttachmentsInput,
 ): Promise<AttachmentReanalysisResult> {
@@ -1257,6 +1271,7 @@ export const apiClient = {
   fetchInboxEntityItems,
   fetchFragment,
   fetchRelatedFragments,
+  fragmentAttachmentURL,
   reanalyzeFragmentAttachments,
   searchFragments,
   searchFragmentsDetailed,

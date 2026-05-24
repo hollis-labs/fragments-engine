@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	queue "github.com/hollis-labs/go-queue"
@@ -15,6 +16,8 @@ import (
 	"github.com/hollis-labs/fragments-engine/internal/ingest"
 	"github.com/hollis-labs/fragments-engine/internal/ingest/chatgpt"
 	"github.com/hollis-labs/fragments-engine/internal/ingest/claude"
+	"github.com/hollis-labs/fragments-engine/internal/ingest/filesystemdocs"
+	"github.com/hollis-labs/fragments-engine/internal/ingest/gitchanges"
 	"github.com/hollis-labs/fragments-engine/internal/ingest/urlsource"
 	"github.com/hollis-labs/fragments-engine/internal/recall"
 	"github.com/hollis-labs/fragments-engine/internal/repository"
@@ -38,6 +41,7 @@ type App struct {
 	Queue           *service.DeliveryQueueService
 	IngestQueue     queue.Queue
 	IngestSchedules *service.IngestScheduleService
+	InboxReviewer   *service.InboxReviewerService
 	Jobs            *service.JobsService
 }
 
@@ -78,22 +82,34 @@ func Open(ctx context.Context, cfg config.Config) (*App, error) {
 	routingSvc.SetDeliveryQueue(deliveryQueue)
 	routingSvc.SetAttachmentRepository(attachmentRepo)
 	visionAnalyzer := analyze.NewVisionAnalyzer(cfg.Analysis.Attachments)
+	manualEnricher := service.NewManualIntakeEnricher(visionAnalyzer, cfg.Reviewer.DownloadRoot)
+	manualEnricher.SetGitHubToken(os.Getenv(strings.TrimSpace(cfg.Reviewer.GitHubTokenEnv)))
+	stackExplorerClient := service.NewStackExplorerClient(cfg.Reviewer.StackExplorerAPIBase)
 	pipeline := ingest.NewPipeline(fragmentRepo, visionAnalyzer, []ingest.Stage{
 		ingest.NewAttachmentStage(attachmentRepo),
 		ingest.NewRouteStage(fragmentRepo, attachmentRepo, routingRepo, inboxRepo, deliveryQueue),
 		ingest.NewInboxStage(inboxRepo),
 		ingest.NewRecallStage(recallIndex),
-	}, claude.Source{}, chatgpt.Source{}, urlsource.Source{})
+	}, claude.Source{}, chatgpt.Source{}, urlsource.Source{}, filesystemdocs.Source{}, gitchanges.Source{})
 	scheduleRepo := repository.NewIngestScheduleRepository(st.DB)
 	return &App{
 		store:           st,
 		recall:          recallIndex,
-		Fragments:       service.NewFragmentService(fragmentRepo, entityRepo, attachmentRepo, routingRepo, recallIndex, pipeline, visionAnalyzer),
+		Fragments:       service.NewFragmentService(fragmentRepo, entityRepo, attachmentRepo, routingRepo, recallIndex, pipeline, visionAnalyzer, manualEnricher),
 		Inbox:           service.NewInboxService(inboxRepo),
 		Routing:         routingSvc,
 		Queue:           deliveryQueue,
 		IngestQueue:     ingestQueue,
 		IngestSchedules: service.NewIngestScheduleService(scheduleRepo),
+		InboxReviewer: service.NewInboxReviewerService(
+			fragmentRepo,
+			entityRepo,
+			attachmentRepo,
+			inboxRepo,
+			manualEnricher,
+			stackExplorerClient,
+			cfg.Reviewer.StackExplorerScan,
+		),
 		Jobs: service.NewJobsService(
 			repository.NewIngestJobQueueRepository(st.DB),
 			scheduleRepo,

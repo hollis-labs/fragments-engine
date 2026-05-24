@@ -117,6 +117,13 @@ func (s *JobsService) WorkersStatus(ctx context.Context) (domain.WorkersStatusVi
 			Detail: fmt.Sprintf("go-scheduler engine; %d schedule(s), %d enabled",
 				len(scheduleInfos), enabledCount),
 		},
+		{
+			Name:    "inbox_reviewer",
+			Kind:    "background_reviewer",
+			Running: s.cfg.Reviewer.Enabled,
+			Detail: fmt.Sprintf("oldest-first inbox reviewer; poll_interval=%ds batch_size=%d download_root=%s stack_explorer_api_base=%s stack_explorer_scan=%s",
+				s.cfg.Reviewer.PollIntervalSeconds, s.cfg.Reviewer.BatchSize, s.cfg.Reviewer.DownloadRoot, blankIfUnset(s.cfg.Reviewer.StackExplorerAPIBase), blankIfUnset(s.cfg.Reviewer.StackExplorerScan)),
+		},
 	}
 
 	return domain.WorkersStatusView{
@@ -126,4 +133,12 @@ func (s *JobsService) WorkersStatus(ctx context.Context) (domain.WorkersStatusVi
 			Schedules: scheduleInfos,
 		},
 	}, nil
+}
+
+func blankIfUnset(value string) string {
+	value = fmt.Sprintf("%s", value)
+	if value == "" {
+		return "(unset)"
+	}
+	return value
 }

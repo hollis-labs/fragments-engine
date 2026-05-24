@@ -72,6 +72,15 @@ queue:
   alert_pending_threshold: 10
   alert_dead_letter_threshold: 3
 
+reviewer:
+  enabled: false
+  poll_interval_seconds: 300
+  batch_size: 10
+  download_root: ./data/inbox-reviewer
+  github_token_env: GITHUB_TOKEN
+  stack_explorer_api_base: http://localhost:8081
+  stack_explorer_scan: se-repo-scan
+
 recall:
   backend: vanta
   vanta:
@@ -227,6 +236,17 @@ Delivery retry defaults are transport-aware:
 
 These can be changed globally with the top-level `delivery` config block and overridden per destination with a `retry` block in `config-json`.
 
+The optional top-level `reviewer` block enables the first FE-owned oldest-first
+inbox reviewer. The current reviewer shape:
+
+- scans staged inbox items from oldest to newest
+- enriches manual single-URL saves with deterministic metadata/entities/reference attachments
+- adds GitHub repo review hints and can upsert repos into Stack Explorer when `reviewer.stack_explorer_api_base` is set
+- can sync GitHub topics and FE input tags into Stack Explorer repo tags after repo upsert
+- can optionally queue a Stack Explorer scan for synced GitHub repos when `reviewer.stack_explorer_scan` is set
+- can authenticate GitHub repo metadata fetches with the token named by `reviewer.github_token_env`
+- can fetch Pinterest pin page metadata and download the main image into `download_root`
+
 For `chatgpt_export`, FE currently ingests text conversations from `conversations-*.json`. FE records attachment and URL references when the export metadata provides them. Local text-like attachments now get a deterministic pre-upsert enrichment pass: markdown frontmatter is parsed, extracted attachment text is appended into fragment content for recall, and extraction metadata is persisted on the attachment record. FE also has embedded `.docx` text extraction plus a first multimodal image path: image dimensions/format are captured deterministically, image OCR is optional through `tesseract`, FE stores an image analysis summary/tags/signals record, and image previews can be published in file bundles. An optional vendor-backed image analyzer now runs behind a provider adapter layer and can use either Ollama or OpenAI to persist FE-owned `vision_analysis` metadata on attachments. Fragment detail now exposes decoded attachment metadata directly. If a fragment later routes to a `file` destination, FE copies local attachments into the fragment bundle and persists the published `storage_path`; remote URLs remain references only. If `copy_text_exports` is enabled, FE mirrors the text export files into `archive_root/<export-folder>/` before parsing. FE now enforces that `archive_root` lives under `~/Documents/corpus/ai-chat-logs/chatgpt/logs`, and `delete_copied_source` is only allowed when that copy step is enabled. `delete_copied_source` still removes only copied text input files, not image or binary attachments.
 
 Optional attachment vision config:
@@ -294,6 +314,7 @@ For embedded Vanta recall, FE currently supports:
   Supported ingest kinds: `claude_code`, `chatgpt_export`, `url_source`, `filesystem_docs`, `git_changes`.
   `ingest preview` is side-effect-free for `chatgpt_export`: it does not copy or delete source files.
 - `inbox list` shows staged fragments awaiting manual review.
+- `inbox review` runs the oldest-first reviewer once against staged inbox items.
 - `inbox entities|entity-items` groups staged fragments by persisted entity so triage can happen at the cluster level.
 - `route destination-add|destination-list|destination-status|destination-rename|destination-validate|destination-delete|add|rename|list|log|preview|delete` manages external destinations and route lifecycle.
   `route destination-retry-set` and `route destination-queue-policy-set` provide first-class policy updates without editing raw destination JSON.

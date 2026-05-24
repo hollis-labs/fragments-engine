@@ -9,6 +9,57 @@ Identity and architecture are now clearer than the original handoff:
 - external destinations are transport-based and peer-oriented
 - the current repo already has a working deterministic core
 
+## Session Update 2026-05-24
+
+This session shifted FE from "manual inbox staging only" to the first real
+"review my saved items for me" loop.
+
+Shipped in code:
+
+- manual URL intake now deterministically enriches single-URL saves at ingest time
+- GitHub repo URLs are normalized into `source_type=repo` with repo/platform entities and a `suggested_destination=stack_explorer` hint
+- Pinterest pin URLs are normalized into `source_type=pin` with pin/platform entities and a `suggested_action=fetch_pin_image` hint
+- FE now has a first `InboxReviewerService` that walks staged inbox items oldest-first
+- the reviewer can run once from CLI via `fragments-engine inbox review`
+- the API runtime now starts a background reviewer loop when `reviewer.enabled=true`
+- reviewer config now supports `enabled`, `poll_interval_seconds`, `batch_size`, and `download_root`
+- reviewer GitHub metadata fetches can now send an optional bearer token from `reviewer.github_token_env`
+- reviewer config now also supports `stack_explorer_api_base` for GitHub repo publishing
+- reviewer config now also supports `stack_explorer_scan` for automatic Stack Explorer scan queueing
+- Pinterest review now fetches page metadata, downloads the main pin image locally, extracts image metadata, and writes preview JPEG paths
+- Sysop fragment detail now renders image attachment previews inline through an FE-owned `/v1/fragments/attachment` media endpoint instead of relying on raw filesystem paths
+- GitHub repo review can now upsert repo records into a live Stack Explorer API
+- GitHub repo review can now sync GitHub/input tags into Stack Explorer repo tags
+- GitHub repo review can now also enqueue Stack Explorer scans
+
+Validated live against `data/fragments-engine.db`:
+
+- full test suite passed with `go test ./...`
+- the live inbox reviewer was run oldest-to-newest against real saved items
+- GitHub saves were successfully specialized into repo fragments with reviewer metadata and Stack Explorer hints
+- after enabling `reviewer.stack_explorer_api_base=http://localhost:8081`, 13 reviewed GitHub repo fragments were re-reviewed and synced into the live Stack Explorer catalog with FE-side sync metadata (`stack_explorer_repo_id`, `stack_explorer_sync_status`, `stack_explorer_synced_at`)
+- after enabling `reviewer.stack_explorer_scan=se-repo-scan`, those same 13 GitHub repo fragments were re-reviewed again and now each have a unique pending Stack Explorer scan id (`106` through `118`)
+- all 6 live Pinterest saves were re-reviewed successfully after a parser fix and now have:
+  - richer titles and descriptions
+  - `pin_image_url` metadata
+  - a local downloaded image under `data/inbox-reviewer/pinterest/<pin-id>/`
+  - a generated preview JPEG under `data/inbox-reviewer/pinterest/<pin-id>/previews/`
+- the GUI now has the backend path it needs to render those local preview images safely
+
+Important bug fixed during live validation:
+
+- Pinterest pages place `content=` before `name/property=` in their meta tags
+- the first parser assumed a stricter attribute order and missed `og:image`
+- FE now parses meta tags independent of attribute order
+- already-reviewed Pinterest pins are eligible for re-review when `pin_image_url` is still missing, so failed early passes can self-heal
+- Stack Explorer scan IDs were initially stamped incorrectly because FE assumed the Stack Explorer scan list endpoint was honoring a `repo_id` filter
+- FE no longer probes scan list state before creating a scan and now stamps `stack_explorer_scan_repo_id` so stale mismatched scan metadata self-heals on the next reviewer pass
+
+Immediate next product gap after this:
+
+- GitHub repo saves now sync into Stack Explorer, sync repo tags, and queue scans, but FE still does not trigger downstream audits automatically
+- Pinterest/image assets are now downloadable, indexed, and previewable in fragment detail, but inbox/table-level visual browsing and search affordances are still missing
+
 ## Decisions Locked
 
 - **Name**: Fragments Engine. Module: `github.com/hollis-labs/fragments-engine`.
@@ -85,6 +136,89 @@ Identity and architecture are now clearer than the original handoff:
 - `url_source` now tries `yt-dlp` for known non-YouTube video-page URLs before falling back to reference-only staging
 - `url_source` still stages other images and videos as reference fragments
 - `serve-api` and `serve-mcp` now auto-drain queued retries when `queue.auto_drain=true`
+- FE now supports deterministic `filesystem_docs` ingest for markdown/text/source files with repo/path/frontmatter provenance
+- FE now supports deterministic `git_changes` ingest for commit history and optional changed-doc fragments
+
+## Live Inbox Review Snapshot
+
+The live FE inbox currently has 54 staged fragments in `data/fragments-engine.db`.
+The current mix is:
+
+- 30 `url`
+- 18 `text`
+- 6 `article`
+
+Observed operator patterns from oldest to newest:
+
+- early items are bug notes, workflow/tooling ideas, and routing/product prompts
+- a large middle slice is GitHub repos, docs, blog posts, Reddit threads, and standards/spec links saved for functionality research or implementation inspiration
+- the newest visible cluster is Pinterest pins saved as pure URLs with no fetched media or structured metadata yet
+
+Current domain clusters visible in the inbox:
+
+- `github.com`: 16
+- `pinterest.com`: 6
+- `reddit.com`: 5
+
+Important product truth from this review:
+
+- manual intake already supports explicit tags, but the current saved inbox items are mostly landing as flat manual fragments with little structured metadata
+- Pinterest saves currently have empty metadata and only the raw pin URL as content
+- GitHub saves are useful research inputs but there is no built-in repo-specific automation yet
+
+## Recommended Near-Term Priority
+
+Drive FE development from real inbox usage rather than abstract future phases.
+
+The next high-value slice is:
+
+1. Improve manual-intake enrichment for saved URLs and notes
+2. Add chronological inbox-review behavior so older richer examples can guide newer sparse saves
+3. Add domain-aware actions for GitHub repos and Pinterest pins
+4. Add a scheduled reviewer that proposes or executes those actions safely
+
+## Suggested Inbox Behaviors To Build Next
+
+### GitHub repos
+
+- detect repo URLs at intake/review time
+- extract owner/repo and fetch minimal deterministic metadata
+- write normalized repo/project entities
+- route or publish a repo packet to Stack Explorer
+- preserve provenance inside FE as the canonical record
+
+### Pinterest pins
+
+- detect Pinterest pin URLs
+- fetch the canonical pin page and main image
+- store the image as an FE-owned attachment in a local corpus/cache path
+- generate previews and searchable image metadata in FE/Sysop
+- allow later tagging/grouping around inspiration themes, UI patterns, aesthetics, and related projects
+
+### Chronological review
+
+- process older inbox items first
+- let reviewed/richer items influence later sparse items from the same pattern cluster
+- keep the first pass deterministic where possible, with agentic suggestions layered on top
+
+## Durable-Agent Fit
+
+The referenced durable-agent prompt is not in this repo; the nearby copy is:
+
+- `../agridd/docs/durable-agents/portfolio-agent-implementer-boot-prompt.md`
+
+That prompt explicitly treats FE as optional provenance infrastructure for a
+portfolio knowledge/content-agent MVP. For the current inbox-review use case,
+the likely best shape is:
+
+- FE remains the canonical inbox/provenance/search layer
+- a scheduled reviewer agent runs over staged FE inbox items
+- the agent proposes or executes domain-specific actions like "send repo to Stack Explorer" or "fetch pin image and preview"
+
+This could run inside Hadron/Nanite durable-agent infrastructure if that is now
+operationally convenient, but FE does not need a heavyweight external
+orchestrator just to start. A small FE-owned scheduled reviewer or CLI-driven
+worker is enough for the first slice.
 
 ## Current Multimodal Checkpoint
 

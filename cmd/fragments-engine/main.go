@@ -699,7 +699,7 @@ func runRecall(args []string) error {
 
 func runInbox(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: fragments-engine inbox <list|entities|entity-items> ...")
+		return fmt.Errorf("usage: fragments-engine inbox <list|entities|entity-items|review> ...")
 	}
 	switch args[0] {
 	case "list":
@@ -708,8 +708,10 @@ func runInbox(args []string) error {
 		return runInboxEntities(args[1:])
 	case "entity-items":
 		return runInboxEntityItems(args[1:])
+	case "review":
+		return runInboxReview(args[1:])
 	default:
-		return fmt.Errorf("usage: fragments-engine inbox <list|entities|entity-items> ...")
+		return fmt.Errorf("usage: fragments-engine inbox <list|entities|entity-items|review> ...")
 	}
 }
 
@@ -793,6 +795,37 @@ func runInboxEntityItems(args []string) error {
 	}
 	for _, item := range items {
 		fmt.Printf("%s %s %s\n", item.StagedAt.Format("2006-01-02T15:04:05Z07:00"), item.FragmentID, item.Reason)
+	}
+	return nil
+}
+
+func runInboxReview(args []string) error {
+	fs := flag.NewFlagSet("inbox review", flag.ContinueOnError)
+	configPath := fs.String("config", "fragments.example.yaml", "path to config file")
+	limit := fs.Int("limit", 10, "maximum staged inbox items to review this run")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	cfg, err := config.Load(*configPath)
+	if err != nil {
+		return err
+	}
+	instance, err := app.Open(context.Background(), cfg)
+	if err != nil {
+		return err
+	}
+	defer instance.Close()
+	result, err := instance.InboxReviewer.ReviewOnce(context.Background(), *limit)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("reviewed=%d updated=%d skipped=%d\n", result.ReviewedCount, result.UpdatedCount, result.SkippedCount)
+	for _, item := range result.Items {
+		fmt.Printf("%s updated=%t action=%s", item.FragmentID, item.Updated, item.Action)
+		if item.Detail != "" {
+			fmt.Printf(" detail=%s", item.Detail)
+		}
+		fmt.Println()
 	}
 	return nil
 }

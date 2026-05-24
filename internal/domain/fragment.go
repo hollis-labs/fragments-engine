@@ -157,6 +157,21 @@ type InboxEntityGroup struct {
 	FragmentCount int    `json:"fragment_count"`
 }
 
+type InboxReviewItemResult struct {
+	FragmentID string `json:"fragment_id"`
+	Title      string `json:"title"`
+	Action     string `json:"action"`
+	Updated    bool   `json:"updated"`
+	Detail     string `json:"detail,omitempty"`
+}
+
+type InboxReviewResult struct {
+	ReviewedCount int                     `json:"reviewed_count"`
+	UpdatedCount  int                     `json:"updated_count"`
+	SkippedCount  int                     `json:"skipped_count"`
+	Items         []InboxReviewItemResult `json:"items,omitempty"`
+}
+
 type Destination struct {
 	ID         string
 	Name       string

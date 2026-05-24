@@ -17,6 +17,7 @@ type Config struct {
 	Analysis AnalysisConfig `json:"analysis" yaml:"analysis"`
 	Delivery DeliveryConfig `json:"delivery" yaml:"delivery"`
 	Queue    QueueConfig    `json:"queue" yaml:"queue"`
+	Reviewer ReviewerConfig `json:"reviewer" yaml:"reviewer"`
 	Ingests  []IngestConfig `json:"ingests" yaml:"ingests"`
 }
 
@@ -83,6 +84,16 @@ type QueueConfig struct {
 	MaxReplaysPerHour        int  `json:"max_replays_per_hour" yaml:"max_replays_per_hour"`
 	AlertPendingThreshold    int  `json:"alert_pending_threshold" yaml:"alert_pending_threshold"`
 	AlertDeadLetterThreshold int  `json:"alert_dead_letter_threshold" yaml:"alert_dead_letter_threshold"`
+}
+
+type ReviewerConfig struct {
+	Enabled              bool   `json:"enabled" yaml:"enabled"`
+	PollIntervalSeconds  int    `json:"poll_interval_seconds" yaml:"poll_interval_seconds"`
+	BatchSize            int    `json:"batch_size" yaml:"batch_size"`
+	DownloadRoot         string `json:"download_root" yaml:"download_root"`
+	GitHubTokenEnv       string `json:"github_token_env" yaml:"github_token_env"`
+	StackExplorerAPIBase string `json:"stack_explorer_api_base" yaml:"stack_explorer_api_base"`
+	StackExplorerScan    string `json:"stack_explorer_scan" yaml:"stack_explorer_scan"`
 }
 
 type IngestConfig struct {
@@ -192,6 +203,18 @@ func (c *Config) Validate() error {
 	}
 	if c.Queue.AlertDeadLetterThreshold <= 0 {
 		c.Queue.AlertDeadLetterThreshold = 3
+	}
+	if c.Reviewer.PollIntervalSeconds <= 0 {
+		c.Reviewer.PollIntervalSeconds = 300
+	}
+	if c.Reviewer.BatchSize <= 0 {
+		c.Reviewer.BatchSize = 10
+	}
+	if strings.TrimSpace(c.Reviewer.DownloadRoot) == "" {
+		c.Reviewer.DownloadRoot = "./data/inbox-reviewer"
+	}
+	if strings.TrimSpace(c.Reviewer.GitHubTokenEnv) == "" {
+		c.Reviewer.GitHubTokenEnv = "GITHUB_TOKEN"
 	}
 	if c.Delivery.File.MaxAttempts <= 0 {
 		c.Delivery.File.MaxAttempts = 1
