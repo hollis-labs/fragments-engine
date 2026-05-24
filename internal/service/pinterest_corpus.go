@@ -33,10 +33,7 @@ func (w *PinterestCorpusWriter) Write(detail domain.FragmentDetail) (string, err
 	if err != nil {
 		return "", fmt.Errorf("resolve pinterest corpus root: %w", err)
 	}
-	rel := strings.TrimPrefix(filepath.Clean(filepath.FromSlash(fragment.CanonicalPath)), string(filepath.Separator))
-	if rel == "" {
-		rel = filepath.Join("fragments", "manual", "pin", fragment.SourceID)
-	}
+	rel := pinterestCorpusRelativePath(detail)
 	targetDir := filepath.Join(rootAbs, rel)
 	targetAbs, err := filepath.Abs(targetDir)
 	if err != nil {
@@ -56,6 +53,23 @@ func (w *PinterestCorpusWriter) Write(detail domain.FragmentDetail) (string, err
 		return "", fmt.Errorf("write pinterest corpus markdown: %w", err)
 	}
 	return fragmentPath, nil
+}
+
+func pinterestCorpusRelativePath(detail domain.FragmentDetail) string {
+	fragment := detail.Fragment
+	meta := decodeFragmentMetadata(fragment.MetadataJSON)
+	platform := strings.TrimSpace(metadataString(meta, "platform"))
+	if platform == "" {
+		platform = "unknown"
+	}
+	identifier := strings.TrimSpace(metadataString(meta, "pin_id"))
+	if identifier == "" {
+		identifier = strings.TrimSpace(fragment.SourceID)
+	}
+	if identifier == "" {
+		identifier = "pin"
+	}
+	return filepath.Join(platform, identifier)
 }
 
 type publishedCorpusAttachment struct {

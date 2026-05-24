@@ -215,7 +215,7 @@ func (c *Config) Validate() error {
 		c.Reviewer.DownloadRoot = "./data/inbox-reviewer"
 	}
 	if strings.TrimSpace(c.Reviewer.CorpusRoot) == "" {
-		c.Reviewer.CorpusRoot = "~/Documents/corpus/visuals/pinterest"
+		c.Reviewer.CorpusRoot = "~/Documents/ffs/media/pins"
 	}
 	if strings.TrimSpace(c.Reviewer.GitHubTokenEnv) == "" {
 		c.Reviewer.GitHubTokenEnv = "GITHUB_TOKEN"

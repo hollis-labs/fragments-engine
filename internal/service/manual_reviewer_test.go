@@ -176,7 +176,7 @@ func TestInboxReviewerReviewsPinterestPinAndDownloadsImage(t *testing.T) {
 	if items[0].PreviewAttachmentID == "" {
 		t.Fatalf("expected pinterest inbox row to surface a preview attachment id: %+v", items[0])
 	}
-	corpusPath := filepath.Join(svcs.corpusRoot, "fragments", "manual", "pin", "pinterest", "123456", "fragment.md")
+	corpusPath := filepath.Join(svcs.corpusRoot, "pinterest", "123456", "fragment.md")
 	raw, err := os.ReadFile(corpusPath)
 	if err != nil {
 		t.Fatalf("read pinterest corpus doc: %v", err)
@@ -249,7 +249,7 @@ func TestFragmentServiceUpdateManualFragment(t *testing.T) {
 	if refetched.Fragment.Title != "Desk moodboard" || refetched.Fragment.Summary != "Warm wood, shelves, and compact workspace ideas." {
 		t.Fatalf("expected updated fragment in recall-backed detail: %+v", refetched.Fragment)
 	}
-	corpusPath := filepath.Join(svcs.corpusRoot, "fragments", "manual", "pin", "pinterest", "123456", "fragment.md")
+	corpusPath := filepath.Join(svcs.corpusRoot, "pinterest", "123456", "fragment.md")
 	raw, err := os.ReadFile(corpusPath)
 	if err != nil {
 		t.Fatalf("read updated pinterest corpus doc: %v", err)
@@ -279,7 +279,7 @@ func TestFragmentServiceBackfillPinterestCorpus(t *testing.T) {
 		t.Fatalf("intake non-pin: %v", err)
 	}
 
-	corpusPath := filepath.Join(svcs.corpusRoot, "fragments", "manual", "pin", "pinterest", "123456", "fragment.md")
+	corpusPath := filepath.Join(svcs.corpusRoot, "pinterest", "123456", "fragment.md")
 	if _, err := os.Stat(corpusPath); !os.IsNotExist(err) {
 		t.Fatalf("expected no corpus doc before backfill, stat err=%v", err)
 	}
