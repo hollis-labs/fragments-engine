@@ -264,6 +264,99 @@ func TestFileDestinationExecutor_PublishesBundleAndLocalAttachments(t *testing.T
 	}
 }
 
+func TestFileDestinationExecutor_FFSPinterestPinBundle(t *testing.T) {
+	tempDir := t.TempDir()
+	sourcePath := filepath.Join(tempDir, "pin.jpg")
+	previewPath := filepath.Join(tempDir, "pin.preview.jpg")
+	rawPNG, err := base64.StdEncoding.DecodeString("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aGxQAAAAASUVORK5CYII=")
+	if err != nil {
+		t.Fatalf("decode png fixture: %v", err)
+	}
+	if err := os.WriteFile(sourcePath, rawPNG, 0o600); err != nil {
+		t.Fatalf("write source image: %v", err)
+	}
+	if err := os.WriteFile(previewPath, rawPNG, 0o600); err != nil {
+		t.Fatalf("write preview image: %v", err)
+	}
+
+	destination := domain.Destination{
+		Name:       "ffs-pins",
+		Kind:       "file",
+		ConfigJSON: fmt.Sprintf(`{"root":%q,"provider":"ffs"}`, filepath.Join(tempDir, "ffs", "media", "pins")),
+	}
+	fragment := domain.Fragment{
+		ID:            "pin-fragment",
+		Source:        "manual",
+		SourceType:    "pin",
+		SourceID:      "source-pin",
+		Title:         "Warm minimal office desk",
+		Content:       "https://www.pinterest.com/pin/123456/",
+		Status:        domain.FragmentStatusRouted,
+		CreatedAt:     time.Date(2026, 5, 24, 10, 0, 0, 0, time.UTC),
+		IngestedAt:    time.Date(2026, 5, 24, 10, 1, 0, 0, time.UTC),
+		IngestName:    "manual-intake",
+		CanonicalPath: "fragments/manual/pin/pinterest/123456",
+		Summary:       "Workspace inspiration pin.",
+		MetadataJSON:  `{"platform":"pinterest","pin_id":"123456","url":"https://www.pinterest.com/pin/123456/","pin_description":"Workspace inspiration pin.","user_tags":["workspace","wood"]}`,
+	}
+	attachments := []domain.FragmentAttachment{{
+		ID:                 "image-attachment",
+		Kind:               "image",
+		Role:               "reference",
+		Name:               "123456.jpg",
+		MIMEType:           "image/jpeg",
+		SourcePath:         sourcePath,
+		StoragePath:        sourcePath,
+		PreviewStoragePath: previewPath,
+	}}
+
+	written, err := FileDestinationExecutor{}.Execute(context.Background(), destination, fragment, attachments)
+	if err != nil {
+		t.Fatalf("execute ffs destination: %v", err)
+	}
+	expectedFragmentPath := filepath.Join(tempDir, "ffs", "media", "pins", "pinterest", "123456", "fragment.md")
+	if written.Ref != expectedFragmentPath {
+		t.Fatalf("unexpected ffs fragment path: %s", written.Ref)
+	}
+	if len(written.PublishedAttachments) != 1 {
+		t.Fatalf("expected 1 published attachment, got %d", len(written.PublishedAttachments))
+	}
+	raw, err := os.ReadFile(expectedFragmentPath)
+	if err != nil {
+		t.Fatalf("read ffs fragment: %v", err)
+	}
+	body := string(raw)
+	if !strings.Contains(body, "# Warm minimal office desk") {
+		t.Fatalf("expected title in ffs markdown: %s", body)
+	}
+	if !strings.Contains(body, "attachments/previews/") {
+		t.Fatalf("expected preview link in ffs markdown: %s", body)
+	}
+	if !strings.Contains(body, "- workspace") || !strings.Contains(body, "- wood") {
+		t.Fatalf("expected tags in ffs markdown: %s", body)
+	}
+}
+
+func TestFileDestinationExecutor_PathTemplate(t *testing.T) {
+	tempDir := t.TempDir()
+	destination := domain.Destination{
+		Name:       "templated-file",
+		Kind:       "file",
+		ConfigJSON: fmt.Sprintf(`{"root":%q,"path_template":"docs/references/{platform}/{source_id}"}`, filepath.Join(tempDir, "ffs")),
+	}
+	fragment := testFragment()
+	fragment.MetadataJSON = `{"platform":"github"}`
+
+	written, err := FileDestinationExecutor{}.Execute(context.Background(), destination, fragment, nil)
+	if err != nil {
+		t.Fatalf("execute templated file destination: %v", err)
+	}
+	expected := filepath.Join(tempDir, "ffs", "docs", "references", "github", "session-123", "fragment.md")
+	if written.Ref != expected {
+		t.Fatalf("unexpected templated fragment path: %s", written.Ref)
+	}
+}
+
 func TestHelperProcessMCPServer(t *testing.T) {
 	if os.Getenv("GO_WANT_HELPER_PROCESS") != "1" {
 		return

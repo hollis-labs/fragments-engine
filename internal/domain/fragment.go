@@ -360,9 +360,11 @@ type RouteDeleteResult struct {
 }
 
 type FileDestinationConfig struct {
-	Root        string              `json:"root"`
-	Retry       DeliveryRetryConfig `json:"retry"`
-	QueuePolicy *QueuePolicyConfig  `json:"queue_policy,omitempty"`
+	Root         string              `json:"root"`
+	Provider     string              `json:"provider,omitempty"`
+	PathTemplate string              `json:"path_template,omitempty"`
+	Retry        DeliveryRetryConfig `json:"retry"`
+	QueuePolicy  *QueuePolicyConfig  `json:"queue_policy,omitempty"`
 }
 
 type MCPDestinationConfig struct {

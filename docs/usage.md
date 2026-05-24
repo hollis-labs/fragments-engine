@@ -222,6 +222,25 @@ go run ./cmd/fragments-engine route destination-add \
   -config-json '{"root":"~/Documents/corpus/fragments"}'
 ```
 
+FFS media pins:
+
+```bash
+go run ./cmd/fragments-engine route destination-add \
+  -config ./fragments.yaml \
+  -name ffs-pins \
+  -kind file \
+  -config-json '{
+    "root":"~/Documents/ffs/media/pins",
+    "provider":"ffs"
+  }'
+```
+
+Notes:
+
+- `file` destinations now support `provider` and optional `path_template`
+- `provider: "ffs"` gives Pinterest pin routes the same bundle layout FE already uses in `~/Documents/ffs/media/pins`
+- `path_template` can place generic file outputs under a stable namespace like `docs/references/{platform}/{source_id}`
+
 Nil via MCP:
 
 ```bash

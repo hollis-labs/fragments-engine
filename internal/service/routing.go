@@ -473,6 +473,9 @@ func normalizeDestination(in domain.Destination, defaults config.DeliveryConfig)
 		if strings.TrimSpace(cfg.Root) == "" {
 			return domain.Destination{}, fmt.Errorf("file destination %q missing root", in.Name)
 		}
+		if strings.TrimSpace(cfg.Provider) == "" {
+			cfg.Provider = "file"
+		}
 		cfg.Retry = destinationRetryConfig(in, defaults)
 		return encodeDestinationConfig(in, cfg)
 	case "mcp":
@@ -804,6 +807,11 @@ func classifyDelivery(entry domain.RouteLogEntry) (domain.DestinationDeliverySta
 
 func destinationProvider(item domain.Destination) string {
 	switch item.Kind {
+	case "file":
+		cfg, err := domain.DecodeDestinationConfig[domain.FileDestinationConfig](item)
+		if err == nil && strings.TrimSpace(cfg.Provider) != "" {
+			return cfg.Provider
+		}
 	case "mcp":
 		cfg, err := domain.DecodeDestinationConfig[domain.MCPDestinationConfig](item)
 		if err == nil && strings.TrimSpace(cfg.Provider) != "" {

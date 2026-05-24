@@ -15,6 +15,7 @@ import (
 
 	"github.com/hollis-labs/fragments-engine/internal/config"
 	"github.com/hollis-labs/fragments-engine/internal/domain"
+	"github.com/hollis-labs/fragments-engine/internal/ffs"
 	mcpclient "github.com/mark3labs/mcp-go/client"
 	"github.com/mark3labs/mcp-go/mcp"
 )
@@ -37,7 +38,17 @@ func (FileDestinationExecutor) Execute(_ context.Context, destination domain.Des
 	if err != nil {
 		return DeliveryResult{}, fmt.Errorf("resolve destination root: %w", err)
 	}
-	rel := strings.TrimSpace(fragment.CanonicalPath)
+	if strings.TrimSpace(cfg.Provider) == "ffs" && fragment.Source == "manual" && fragment.SourceType == "pin" {
+		published, err := ffs.WritePinterestPinBundle(rootAbs, domain.FragmentDetail{
+			Fragment:    fragment,
+			Attachments: attachments,
+		})
+		if err != nil {
+			return DeliveryResult{}, err
+		}
+		return DeliveryResult{Ref: published.FragmentPath, PublishedAttachments: published.PublishedAttachments}, nil
+	}
+	rel := resolveFileDestinationRelativePath(cfg, fragment)
 	if rel == "" {
 		rel = filepath.ToSlash(filepath.Join("fragments", fragment.Source, fragment.SourceID))
 	}
@@ -84,6 +95,57 @@ func (FileDestinationExecutor) Execute(_ context.Context, destination domain.Des
 		}
 	}
 	return DeliveryResult{Ref: fragmentPath, PublishedAttachments: storage}, nil
+}
+
+func resolveFileDestinationRelativePath(cfg domain.FileDestinationConfig, fragment domain.Fragment) string {
+	if strings.TrimSpace(cfg.PathTemplate) == "" {
+		return strings.TrimSpace(fragment.CanonicalPath)
+	}
+	meta := map[string]any{}
+	if raw := strings.TrimSpace(fragment.MetadataJSON); raw != "" {
+		_ = json.Unmarshal([]byte(raw), &meta)
+	}
+	rel := strings.TrimSpace(cfg.PathTemplate)
+	replacements := map[string]string{
+		"{id}":             sanitizePathSegment(fragment.ID),
+		"{source}":         sanitizePathSegment(fragment.Source),
+		"{source_type}":    sanitizePathSegment(fragment.SourceType),
+		"{source_id}":      sanitizePathSegment(fragment.SourceID),
+		"{canonical_path}": sanitizeRelativePath(fragment.CanonicalPath),
+		"{platform}":       sanitizePathSegment(metaString(meta, "platform")),
+		"{pin_id}":         sanitizePathSegment(metaString(meta, "pin_id")),
+	}
+	for token, value := range replacements {
+		rel = strings.ReplaceAll(rel, token, value)
+	}
+	return sanitizeRelativePath(rel)
+}
+
+func metaString(meta map[string]any, key string) string {
+	value, ok := meta[key]
+	if !ok {
+		return ""
+	}
+	text, ok := value.(string)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(text)
+}
+
+func sanitizePathSegment(value string) string {
+	value = strings.TrimSpace(value)
+	value = strings.ReplaceAll(value, "/", "_")
+	value = strings.ReplaceAll(value, string(filepath.Separator), "_")
+	return value
+}
+
+func sanitizeRelativePath(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	return strings.TrimPrefix(filepath.Clean(filepath.FromSlash(value)), string(filepath.Separator))
 }
 
 func renderFragmentMarkdown(fragment domain.Fragment) string {

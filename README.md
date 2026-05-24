@@ -227,6 +227,16 @@ go run ./cmd/fragments-engine route destination-add \
       "subject_prefix": "[FE] "
     }
   }'
+
+# FFS media pins through the file destination provider
+go run ./cmd/fragments-engine route destination-add \
+  -config ./fragments.yaml \
+  -name ffs-pins \
+  -kind file \
+  -config-json '{
+    "root": "~/Documents/ffs/media/pins",
+    "provider": "ffs"
+  }'
 ```
 
 Delivery retry defaults are transport-aware:
