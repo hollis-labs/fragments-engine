@@ -28,9 +28,10 @@ type FragmentService struct {
 	recall      recall.Indexer
 	pipeline    *ingest.Pipeline
 	vision      analyze.VisionAnalyzer
+	enricher    *ManualIntakeEnricher
 }
 
-func NewFragmentService(repo *repository.FragmentRepository, entities *repository.EntityRepository, attachments *repository.AttachmentRepository, routes *repository.RoutingRepository, recallIndex recall.Indexer, pipeline *ingest.Pipeline, vision analyze.VisionAnalyzer) *FragmentService {
+func NewFragmentService(repo *repository.FragmentRepository, entities *repository.EntityRepository, attachments *repository.AttachmentRepository, routes *repository.RoutingRepository, recallIndex recall.Indexer, pipeline *ingest.Pipeline, vision analyze.VisionAnalyzer, enricher *ManualIntakeEnricher) *FragmentService {
 	return &FragmentService{
 		repo:        repo,
 		entities:    entities,
@@ -39,6 +40,7 @@ func NewFragmentService(repo *repository.FragmentRepository, entities *repositor
 		recall:      recallIndex,
 		pipeline:    pipeline,
 		vision:      vision,
+		enricher:    enricher,
 	}
 }
 
@@ -368,6 +370,25 @@ func (s *FragmentService) Intake(ctx context.Context, req IntakeRequest) (Intake
 	// Use a content-address as the source_id so identical submissions dedup.
 	sourceID := hashContent(req.Content)
 
+	var (
+		err             error
+		enriched        ManualEnrichment
+		derivedEntities []domain.FragmentEntity
+	)
+	if s.enricher != nil {
+		enriched, err = s.enricher.EnrichIntake(ctx, req.Content, title, sourceType, req.Tags)
+		if err != nil {
+			return IntakeResult{}, fmt.Errorf("intake: enrich: %w", err)
+		}
+		if strings.TrimSpace(enriched.Title) != "" {
+			title = enriched.Title
+		}
+		if strings.TrimSpace(enriched.SourceType) != "" {
+			sourceType = enriched.SourceType
+		}
+		derivedEntities = enriched.Entities
+	}
+
 	candidate := domain.PipelineFragment{
 		Source:        "manual",
 		SourceType:    sourceType,
@@ -376,6 +397,15 @@ func (s *FragmentService) Intake(ctx context.Context, req IntakeRequest) (Intake
 		Content:       req.Content,
 		CreatedAt:     now,
 		CanonicalPath: "fragments/manual/" + sourceType + "/" + sourceID,
+	}
+	if strings.TrimSpace(enriched.CanonicalPath) != "" {
+		candidate.CanonicalPath = enriched.CanonicalPath
+	}
+	if len(enriched.Metadata) > 0 {
+		candidate.Metadata = enriched.Metadata
+	}
+	if len(enriched.Attachments) > 0 {
+		candidate.Attachments = enriched.Attachments
 	}
 
 	fragment, err := repository.BuildFragment(candidate, "manual-intake", now)
@@ -388,22 +418,23 @@ func (s *FragmentService) Intake(ctx context.Context, req IntakeRequest) (Intake
 		return IntakeResult{}, fmt.Errorf("intake: upsert: %w", err)
 	}
 
-	// Write tag entities immediately (even on skipped, so tags can be updated).
-	if len(req.Tags) > 0 {
-		tagEntities := make([]domain.FragmentEntity, 0, len(req.Tags))
+	manualEntities := make([]domain.FragmentEntity, 0, len(req.Tags)+len(derivedEntities))
+	// Write manual entities immediately so they exist even if the fragment later skips.
+	if len(req.Tags) > 0 || len(derivedEntities) > 0 {
 		for _, t := range req.Tags {
 			t = strings.TrimSpace(t)
 			if t == "" {
 				continue
 			}
-			tagEntities = append(tagEntities, domain.FragmentEntity{
+			manualEntities = append(manualEntities, domain.FragmentEntity{
 				Kind:       "tag",
 				Value:      t,
 				Source:     "manual-intake",
 				Confidence: 1.0,
 			})
 		}
-		if err := s.entities.ReplaceFragmentEntities(ctx, fragment.ID, tagEntities); err != nil {
+		manualEntities = append(manualEntities, derivedEntities...)
+		if err := s.entities.ReplaceFragmentEntities(ctx, fragment.ID, manualEntities); err != nil {
 			return IntakeResult{}, fmt.Errorf("intake: write tags: %w", err)
 		}
 	}
@@ -433,6 +464,16 @@ func (s *FragmentService) Intake(ctx context.Context, req IntakeRequest) (Intake
 	for _, stage := range s.pipeline.Stages() {
 		if err := stage.Run(ctx, stageCtx); err != nil {
 			return IntakeResult{}, fmt.Errorf("intake: stage %s: %w", stage.Name(), err)
+		}
+	}
+	if len(manualEntities) > 0 {
+		currentEntities, err := s.entities.ListByFragment(ctx, fragment.ID)
+		if err != nil {
+			return IntakeResult{}, fmt.Errorf("intake: read extracted entities: %w", err)
+		}
+		mergedEntities := mergeEntities(currentEntities, manualEntities)
+		if err := s.entities.ReplaceFragmentEntities(ctx, fragment.ID, mergedEntities); err != nil {
+			return IntakeResult{}, fmt.Errorf("intake: merge entities: %w", err)
 		}
 	}
 

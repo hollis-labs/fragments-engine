@@ -41,6 +41,36 @@ Rules:
 - `delete_copied_source` requires `copy_text_exports=true`
 - current delete behavior applies only to copied text-export files, not attachments
 
+### 2a. Configure the inbox reviewer
+
+The optional FE-owned reviewer can process staged inbox items from oldest to newest:
+
+```yaml
+reviewer:
+  enabled: true
+  poll_interval_seconds: 300
+  batch_size: 10
+  download_root: ./data/inbox-reviewer
+  github_token_env: GITHUB_TOKEN
+  stack_explorer_api_base: http://localhost:8081
+  stack_explorer_scan: se-repo-scan
+```
+
+Current behavior:
+
+- enriches manual single-URL saves with deterministic metadata/entities
+- can upsert reviewed GitHub repos into Stack Explorer when `stack_explorer_api_base` is set
+- can sync reviewed GitHub topics and FE input tags into Stack Explorer repo tags
+- can optionally enqueue a Stack Explorer scan for those repos when `stack_explorer_scan` is set
+- can send authenticated GitHub repo metadata requests when `github_token_env` points at a token-bearing environment variable
+- can fetch Pinterest pin metadata and download the main image locally for attachment analysis
+
+Run it once manually:
+
+```bash
+go run ./cmd/fragments-engine inbox review -config ./fragments.yaml -limit 10
+```
+
 ### File destination bundle contract
 
 - `file` destinations publish a fragment bundle, not a lone markdown file
@@ -164,6 +194,13 @@ go run ./cmd/fragments-engine route log -config ./fragments.yaml -fragment-id <f
 - decoded attachment metadata, including frontmatter and extractor details
 - image metadata such as format, dimensions, OCR status, and preview path when available
 - image analysis summary/tags for FE’s current deterministic multimodal baseline
+
+For manual saved URLs reviewed by the inbox reviewer, `fragment get` is now the
+main way to verify:
+
+- normalized URL/domain/platform metadata
+- GitHub repo identity hints and suggested downstream destination
+- downloaded Pinterest image attachments, local paths, and image analysis metadata
 
 ### 5. Add destinations
 

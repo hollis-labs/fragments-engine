@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import {
   ChevronDown,
   ChevronRight,
+  ExternalLink,
   FileText,
   Film,
   Image as ImageIcon,
@@ -94,6 +95,15 @@ function ocrTextOf(a: FragmentAttachment): string | undefined {
   return metaString(a, ['ocr_text', 'ocr', 'ocr_result'])
 }
 
+function isRenderableImage(a: FragmentAttachment): boolean {
+  const probe = `${a.kind} ${a.mime_type}`.toLowerCase()
+  return probe.includes('image')
+}
+
+function hasLocalMedia(a: FragmentAttachment): boolean {
+  return Boolean(a.preview_storage_path || a.storage_path || a.source_path)
+}
+
 /** Collapsible block of monospace text — collapsed by default. */
 function CollapsibleText({ label, text }: { label: string; text: string }) {
   const [open, setOpen] = useState(false)
@@ -120,17 +130,36 @@ function CollapsibleText({ label, text }: { label: string; text: string }) {
 }
 
 interface AttachmentCardProps {
+  fragmentId: string
   attachment: FragmentAttachment
   /** True while a re-analyze request for this attachment is in flight. */
   reanalyzing: boolean
+  attachmentURL: (
+    attachmentId: string,
+    variant?: 'preview' | 'original',
+  ) => string
   onReanalyze: () => void
 }
 
 /** One attachment with media metadata + extracted text / OCR / vision analysis. */
-function AttachmentCard({ attachment, reanalyzing, onReanalyze }: AttachmentCardProps) {
+function AttachmentCard({
+  fragmentId,
+  attachment,
+  reanalyzing,
+  attachmentURL,
+  onReanalyze,
+}: AttachmentCardProps) {
   const a = attachment
   const extracted = extractedTextOf(a)
   const ocr = ocrTextOf(a)
+  const imagePreviewURL = isRenderableImage(a) && hasLocalMedia(a)
+    ? attachmentURL(a.id, 'preview')
+    : isRenderableImage(a) && a.external_url
+      ? a.external_url
+      : undefined
+  const originalURL = hasLocalMedia(a)
+    ? attachmentURL(a.id, 'original')
+    : a.external_url
   const hasVision =
     a.vision_summary !== undefined ||
     (a.vision_tags?.length ?? 0) > 0 ||
@@ -169,10 +198,32 @@ function AttachmentCard({ attachment, reanalyzing, onReanalyze }: AttachmentCard
           <RefreshCw className={`h-3 w-3 ${reanalyzing ? 'animate-spin' : ''}`} />
           {reanalyzing ? 'Re-analyzing…' : 'Re-analyze'}
         </Button>
+        {originalURL && (
+          <a
+            href={originalURL}
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex items-center gap-1 rounded-md border border-border bg-bg px-2 py-1 text-[11px] text-text-soft transition hover:text-text"
+          >
+            Open
+            <ExternalLink className="h-3 w-3" />
+          </a>
+        )}
         {!hasAnalysis && (
           <span className="text-[11px] text-text-subtle">No analysis yet.</span>
         )}
       </div>
+
+      {imagePreviewURL && (
+        <div className="mt-3 overflow-hidden rounded-md border border-border bg-bg">
+          <img
+            src={imagePreviewURL}
+            alt={a.name || `attachment ${a.id} for fragment ${fragmentId}`}
+            className="max-h-80 w-full object-cover"
+            loading="lazy"
+          />
+        </div>
+      )}
 
       {/* Analysis body */}
       {hasAnalysis && (
@@ -282,6 +333,7 @@ function DetailBody({
   onReanalyze,
   reanalyzeError,
 }: DetailBodyProps) {
+  const api = useApi()
   const { fragment, entities, attachments, route_log, related } = detail
 
   return (
@@ -363,8 +415,12 @@ function DetailBody({
             {attachments.map((a) => (
               <AttachmentCard
                 key={a.id}
+                fragmentId={fragment.id}
                 attachment={a}
                 reanalyzing={reanalyzingIds.has(a.id)}
+                attachmentURL={(attachmentId, variant) =>
+                  api.fragmentAttachmentURL({ fragmentId: fragment.id, attachmentId, variant })
+                }
                 onReanalyze={() => onReanalyze(a.id)}
               />
             ))}

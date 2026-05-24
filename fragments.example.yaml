@@ -24,6 +24,15 @@ queue:
   alert_pending_threshold: 10
   alert_dead_letter_threshold: 3
 
+reviewer:
+  enabled: false
+  poll_interval_seconds: 300
+  batch_size: 10
+  download_root: ./data/inbox-reviewer
+  github_token_env: GITHUB_TOKEN
+  stack_explorer_api_base: http://localhost:8081
+  stack_explorer_scan: se-repo-scan
+
 # Destinations are added through FE itself via CLI/API/MCP.
 # See README.md for real examples of:
 # - mcp.nil_inbox

@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"os"
 	"strconv"
 	"time"
 
@@ -49,6 +50,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/fragments", s.handleFragmentList)
 	mux.HandleFunc("/v1/fragments/get", s.handleFragmentGet)
 	mux.HandleFunc("/v1/fragments/related", s.handleFragmentRelated)
+	mux.HandleFunc("/v1/fragments/attachment", s.handleFragmentAttachment)
 	mux.HandleFunc("/v1/fragments/reanalyze-attachments", s.handleFragmentReanalyzeAttachments)
 	mux.HandleFunc("/v1/entities", s.handleEntities)
 	mux.HandleFunc("/v1/entities/fragments", s.handleEntityFragments)
@@ -236,6 +238,7 @@ func (s *Server) ListenAndServe(addr string) error {
 	go app.RunQueueDrainer(ctx, s.cfgPath)
 	go app.RunIngestWorker(ctx, s.cfgPath)
 	go app.RunIngestScheduler(ctx, s.cfgPath)
+	go app.RunInboxReviewer(ctx, s.cfgPath)
 
 	srv := &http.Server{
 		Addr:              addr,
@@ -1144,6 +1147,97 @@ func (s *Server) handleFragmentRelated(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"results": results})
+}
+
+func (s *Server) handleFragmentAttachment(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	fragmentID := r.URL.Query().Get("fragment_id")
+	if fragmentID == "" {
+		http.Error(w, "missing fragment_id", http.StatusBadRequest)
+		return
+	}
+	attachmentID := r.URL.Query().Get("attachment_id")
+	if attachmentID == "" {
+		http.Error(w, "missing attachment_id", http.StatusBadRequest)
+		return
+	}
+	variant := r.URL.Query().Get("variant")
+	cfg, err := config.Load(s.cfgPath)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	instance, err := app.Open(r.Context(), cfg)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer instance.Close()
+	detail, err := instance.Fragments.GetDetail(r.Context(), fragmentID, 0)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	attachment, ok := findFragmentAttachment(detail.Attachments, attachmentID)
+	if !ok {
+		http.Error(w, "attachment not found", http.StatusNotFound)
+		return
+	}
+	path := attachmentMediaPath(attachment, variant)
+	if path == "" {
+		if attachment.ExternalURL != "" {
+			http.Redirect(w, r, attachment.ExternalURL, http.StatusTemporaryRedirect)
+			return
+		}
+		http.Error(w, "attachment has no renderable media", http.StatusNotFound)
+		return
+	}
+	_, err = os.Stat(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			http.Error(w, "attachment file not found", http.StatusNotFound)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if attachment.MIMEType != "" {
+		w.Header().Set("Content-Type", attachment.MIMEType)
+	}
+	w.Header().Set("Cache-Control", "private, max-age=300")
+	http.ServeFile(w, r, path)
+}
+
+func findFragmentAttachment(items []domain.FragmentAttachment, attachmentID string) (domain.FragmentAttachment, bool) {
+	for _, item := range items {
+		if item.ID == attachmentID {
+			return item, true
+		}
+	}
+	return domain.FragmentAttachment{}, false
+}
+
+func attachmentMediaPath(item domain.FragmentAttachment, variant string) string {
+	switch variant {
+	case "preview":
+		if item.PreviewStoragePath != "" {
+			return item.PreviewStoragePath
+		}
+		if item.StoragePath != "" {
+			return item.StoragePath
+		}
+		return item.SourcePath
+	case "", "original":
+		if item.StoragePath != "" {
+			return item.StoragePath
+		}
+		return item.SourcePath
+	default:
+		return ""
+	}
 }
 
 func (s *Server) handleFragmentReanalyzeAttachments(w http.ResponseWriter, r *http.Request) {

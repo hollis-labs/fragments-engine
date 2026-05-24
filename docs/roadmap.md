@@ -6,15 +6,34 @@ This is the high-level Fragments Engine roadmap after the current deterministic 
 
 FE already has:
 
+- manual intake through the shared fragment service
 - Claude Code ingest
 - ChatGPT text-export ingest
+- deterministic filesystem docs ingest
+- deterministic git-changes ingest
 - canonical fragment persistence and provenance
 - FE-owned recall with SQLite and embedded Vanta options
 - entities and deterministic durable relations
 - inbox, routes, external destinations, and queue operations
 - thin CLI, API, and MCP wrappers over the same service layer
+- a vendored Sysop shell for operator workflows
 - multimodal attachment enrichment with deterministic and provider-backed image analysis
 - explicit attachment reanalysis flows through CLI, API, and MCP
+
+## Reality Check
+
+The written phase names lag the repo a bit.
+
+FE is no longer just "the deterministic core" plus future ideas. In practice it
+already acts as:
+
+- a working local-first inbox for manual saves and imported material
+- a provenance/search layer for chats, URLs, docs, git changes, and attachments
+- a transport-based router with queue/retry controls
+
+That means the next meaningful work is less about proving FE can ingest/store
+fragments and more about making inbox review and downstream automation match
+real operator usage.
 
 ## Phase 1: Attachment Planning
 
@@ -45,6 +64,7 @@ Current delivered foundation:
 - FE now stores FE-owned image analysis summaries/tags/signals as part of that baseline
 - FE now supports provider-backed image analysis through a provider adapter layer with OpenAI and Ollama implementations
 - FE now supports attachment reanalysis without requiring full fragment reingest
+- FE now has the deterministic building blocks needed for image-centric inbox workflows, but not yet the operator-facing Pinterest-style fetch/index/preview flow
 
 ## Phase 2: Attachment Ingest
 
@@ -89,6 +109,11 @@ Current delivered foundation:
 - FE still stages other images and videos as reference fragments with placeholder content
 - FE preserves canonical URL references as fragment-linked attachment records
 
+Observed current gap from operator usage:
+
+- manual single-URL saves still land mostly as flat `manual/url` fragments with little structured extraction unless they are later reprocessed through a richer source path
+- inspiration/image saves such as Pinterest pins are not yet fetched into FE-owned local media/preview records
+
 Follow-on:
 
 - page-image rendering for PDFs
@@ -109,6 +134,14 @@ Likely additions:
 - saved triage views by entity/source/status
 - route suggestions based on FE-owned history
 - queue and destination health summaries tuned for operators
+
+Near-term usage-driven additions now suggested by the live inbox:
+
+- chronological inbox review so earlier richly tagged examples can inform later sparse saves
+- domain-aware review behaviors for common save patterns such as GitHub repos, Pinterest pins, Reddit discussions, and docs/blog links
+- first-class manual-intake enrichment so tags, normalized destination hints, and URL/repo/media metadata land at intake time instead of staying implicit in free text
+- preview-friendly image workflows for inspiration saves
+- scheduled inbox-review agents that propose actions rather than only waiting for manual triage
 
 ## Phase 5: Recall Expansion
 
@@ -143,3 +176,4 @@ Likely additions:
 - portfolio apps remain peers, never hidden internal dependencies
 - new ingestion features should land behind deterministic metadata first
 - multimodal/AI enrichment should build on FE-owned records, not replace them
+- live operator usage should drive prioritization once the deterministic substrate exists

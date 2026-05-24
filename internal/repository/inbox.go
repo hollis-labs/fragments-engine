@@ -146,6 +146,35 @@ func (r *InboxRepository) Remove(ctx context.Context, fragmentID string) error {
 	return nil
 }
 
+func (r *InboxRepository) UpdateReason(ctx context.Context, fragmentID, reason string) error {
+	_, err := r.db.ExecContext(ctx, `
+UPDATE inbox
+SET reason = ?
+WHERE fragment_id = ?`, reason, fragmentID)
+	if err != nil {
+		return fmt.Errorf("update inbox reason: %w", err)
+	}
+	return nil
+}
+
+func (r *InboxRepository) ListDetailedOldestFirst(ctx context.Context, limit int) ([]domain.InboxItemDetail, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	rows, err := r.db.QueryContext(ctx, `
+SELECT i.fragment_id, i.reason, i.staged_at, i.route_id,
+       f.title, f.source, f.source_type, f.status, f.created_at
+FROM inbox i
+JOIN fragments f ON f.id = i.fragment_id
+ORDER BY f.created_at ASC, i.staged_at ASC
+LIMIT ?`, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list inbox oldest first: %w", err)
+	}
+	defer rows.Close()
+	return scanInboxDetails(rows, limit)
+}
+
 func (r *InboxRepository) ListEntityGroups(ctx context.Context, kind string, limit int) ([]domain.InboxEntityGroup, error) {
 	if limit <= 0 {
 		limit = 50

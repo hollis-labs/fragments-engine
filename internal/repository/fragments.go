@@ -326,6 +326,23 @@ WHERE id = ?`,
 	return nil
 }
 
+func (r *FragmentRepository) UpdateDerivedFields(ctx context.Context, fragmentID, title, sourceType, metadataJSON, canonicalPath string) error {
+	_, err := r.db.ExecContext(ctx, `
+UPDATE fragments
+SET title = ?, source_type = ?, metadata_json = ?, canonical_path = ?
+WHERE id = ?`,
+		title,
+		sourceType,
+		metadataJSON,
+		canonicalPath,
+		fragmentID,
+	)
+	if err != nil {
+		return fmt.Errorf("update fragment derived fields: %w", err)
+	}
+	return nil
+}
+
 func (r *FragmentRepository) GetByID(ctx context.Context, fragmentID string) (domain.Fragment, error) {
 	var f domain.Fragment
 	var createdAt, ingestedAt, indexedAt, status string
