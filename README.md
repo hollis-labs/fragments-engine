@@ -112,6 +112,57 @@ ingests:
       request_timeout_seconds: 20
       max_body_mb: 5
       user_agent: FragmentsEngine/0.1 (+url_source)
+  - name: hollis-docs
+    kind: filesystem_docs
+    enabled: false
+    source:
+      root: ~/dev/hollis-labs/apps
+    routing:
+      namespace: fragments/repos/docs
+    rules:
+      include:
+        - "**/*.md"
+        - "**/*.mdx"
+        - "**/*.txt"
+        - "**/*.go"
+        - "**/*.ts"
+        - "**/*.tsx"
+        - "**/*.yaml"
+        - "**/*.yml"
+      exclude:
+        - "**/.git/**"
+        - "**/node_modules/**"
+        - "**/dist/**"
+        - "**/build/**"
+      max_file_size_mb: 2
+      project_from_path: true
+  - name: hollis-git-changes
+    kind: git_changes
+    enabled: false
+    source:
+      root: ~/dev/hollis-labs/apps
+    routing:
+      namespace: fragments/repos/git
+    rules:
+      repos:
+        - fragments-engine
+        - nanite
+        - tesseract
+      branch: main
+      since: 72h
+      max_commits: 100
+      include:
+        - "**/*.md"
+        - "**/*.go"
+        - "**/*.ts"
+        - "**/*.tsx"
+        - "**/*.yaml"
+        - "**/*.yml"
+      exclude:
+        - "**/node_modules/**"
+        - "**/dist/**"
+        - "**/build/**"
+      emit_doc_file_fragments: false
 ```
 
 Destinations are persisted through FE itself rather than declared in the ingest YAML. Add them through CLI, API, or MCP. Real examples:
@@ -213,6 +264,21 @@ For `url_source`, FE reads URL manifests from a directory of `.txt`, `.json`, or
 - known non-YouTube video-page URLs via optional `yt-dlp` subtitle extraction when available on `PATH`
 - other images/videos still stage as reference fragments with placeholder content until richer extraction is added
 
+For `filesystem_docs`, FE walks a configured root deterministically and ingests
+matching markdown/text/source files as standalone fragments. The current shape:
+
+- preserves `repo_name`, `repo_root`, `relative_path`, `file_ext`, and `content_hash`
+- parses markdown frontmatter into fragment metadata without injecting it into visible content
+- uses include/exclude globs plus `max_file_size_mb`
+- treats the source as a stable `file:///...` URI and keeps canonical paths namespace-friendly
+
+For `git_changes`, FE collects recent commits from one repo root or a configured repo list. The current shape:
+
+- emits one commit fragment per matching commit with commit message, author, time, changed files, and diff-stat metadata
+- supports `branch`, `since`, `until`, `max_commits`, and include/exclude globs
+- can also emit changed-doc file fragments with committed file content when `emit_doc_file_fragments: true`
+- never mutates the scanned repos
+
 For embedded Vanta recall, FE currently supports:
 
 - `embedding_provider: ollama`
@@ -225,7 +291,7 @@ For embedded Vanta recall, FE currently supports:
 
 - `init` initializes the database.
 - `ingest list|validate|preview|archive-policy-set|run` manages FE ingest definitions and execution.
-  Supported ingest kinds: `claude_code`, `chatgpt_export`, `url_source`.
+  Supported ingest kinds: `claude_code`, `chatgpt_export`, `url_source`, `filesystem_docs`, `git_changes`.
   `ingest preview` is side-effect-free for `chatgpt_export`: it does not copy or delete source files.
 - `inbox list` shows staged fragments awaiting manual review.
 - `inbox entities|entity-items` groups staged fragments by persisted entity so triage can happen at the cluster level.

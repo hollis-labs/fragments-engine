@@ -116,6 +116,38 @@ Current deterministic behavior:
 - other images and videos are staged with deterministic placeholder content plus a URL reference record
 - results default to inbox unless a route explicitly matches `source=url`
 
+### 3b. Filesystem docs ingest
+
+`filesystem_docs` walks a local root and indexes matching docs/source files without modifying them:
+
+- `include` / `exclude` accept glob patterns like `**/*.md` and `**/node_modules/**`
+- when `include` is empty, FE falls back to a deterministic default set of markdown/text/source extensions
+- markdown frontmatter is parsed into metadata and removed from the visible fragment body
+- `source=file:///abs/path`, `source_type=filesystem_docs`, and metadata carries repo/path/content-hash provenance
+
+Example preview flow:
+
+```bash
+go run ./cmd/fragments-engine ingest validate -config ./fragments.yaml -name hollis-docs
+go run ./cmd/fragments-engine ingest preview -config ./fragments.yaml -name hollis-docs -limit 10
+```
+
+### 3c. Git change ingest
+
+`git_changes` collects recent commits from one repo root or a configured repo list:
+
+- `repos` is optional; if omitted, FE treats `source.root` itself as the repo
+- `since` and `until` accept RFC3339, `YYYY-MM-DD`, or duration-style values like `72h`
+- include/exclude globs filter the changed file set before FE emits a commit fragment
+- `emit_doc_file_fragments=true` also emits committed file-content fragments for changed doc/source files
+
+Example preview flow:
+
+```bash
+go run ./cmd/fragments-engine ingest validate -config ./fragments.yaml -name hollis-git-changes
+go run ./cmd/fragments-engine ingest preview -config ./fragments.yaml -name hollis-git-changes -limit 10
+```
+
 ### 4. Inspect fragment provenance
 
 ```bash
@@ -232,5 +264,7 @@ go run ./cmd/fragments-engine route destination-queue-policy-set -config ./fragm
 - Prefer `ingest preview` before `ingest run` for large ChatGPT exports
 - Prefer `fragment get` after ingesting new ChatGPT exports to verify attachment capture, `storage_path`, and URL references
 - Prefer `fragment get` after `url_source` ingest to verify extracted content type, canonical URL, and reference attachment shape
+- Prefer `fragment get` after `filesystem_docs` ingest to verify repo/path/frontmatter metadata and canonical paths
+- Prefer `fragment get` after `git_changes` ingest to verify commit/file metadata, especially include/exclude filtering
 - Prefer `route preview` before broad inbox bulk actions
 - Use `fragment get` and `route destination-status` as the default debugging pair

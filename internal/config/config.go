@@ -120,6 +120,24 @@ type URLSourceRules struct {
 	UserAgent             string `json:"user_agent" yaml:"user_agent"`
 }
 
+type FilesystemDocsRules struct {
+	Include         []string `json:"include" yaml:"include"`
+	Exclude         []string `json:"exclude" yaml:"exclude"`
+	MaxFileSizeMB   int      `json:"max_file_size_mb" yaml:"max_file_size_mb"`
+	ProjectFromPath bool     `json:"project_from_path" yaml:"project_from_path"`
+}
+
+type GitChangesRules struct {
+	Repos                []string `json:"repos" yaml:"repos"`
+	Branch               string   `json:"branch" yaml:"branch"`
+	Since                string   `json:"since" yaml:"since"`
+	Until                string   `json:"until" yaml:"until"`
+	MaxCommits           int      `json:"max_commits" yaml:"max_commits"`
+	Include              []string `json:"include" yaml:"include"`
+	Exclude              []string `json:"exclude" yaml:"exclude"`
+	EmitDocFileFragments bool     `json:"emit_doc_file_fragments" yaml:"emit_doc_file_fragments"`
+}
+
 func Load(path string) (Config, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {

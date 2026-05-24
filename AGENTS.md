@@ -66,7 +66,7 @@ first).
 - **Fragment** — the canonical normalized unit. FE persists its metadata,
   provenance, inbox state, and route history in SQLite.
 - **Ingest** — a configured source. Kinds: `claude_code`, `chatgpt_export`,
-  `url_source`. Defined in `fragments.yaml`.
+  `url_source`, `filesystem_docs`, `git_changes`. Defined in `fragments.yaml`.
 - **Inbox** — staging area for unrouted or low-confidence fragments awaiting
   manual review. Inbox review teaches the Bayesian classifiers over time.
 - **Entity** — normalized extracted entities (repo, workspace, model, tool, etc.)

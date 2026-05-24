@@ -206,3 +206,67 @@ func TestIngestAdminService_ValidateRejectsUnsafeArchivePolicy(t *testing.T) {
 		t.Fatalf("expected archive policy validation error: %+v", result)
 	}
 }
+
+func TestIngestAdminService_ValidateFilesystemDocsAndGitChanges(t *testing.T) {
+	root := t.TempDir()
+	repoRoot := filepath.Join(root, "sample-repo")
+	if err := os.MkdirAll(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
+		t.Fatalf("mkdir repo marker: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repoRoot, "README.md"), []byte("# Readme\n"), 0o600); err != nil {
+		t.Fatalf("write readme: %v", err)
+	}
+
+	cfgPath := filepath.Join(t.TempDir(), "fragments.yaml")
+	cfg := config.Config{
+		Database: config.DatabaseConfig{Path: filepath.Join(t.TempDir(), "fragments.db")},
+		Recall:   config.RecallConfig{Backend: "sqlite"},
+		Ingests: []config.IngestConfig{
+			{
+				Name:    "docs-fixture",
+				Kind:    "filesystem_docs",
+				Enabled: true,
+				Source:  config.IngestSource{Root: root},
+				Routing: config.IngestRouting{Namespace: "fragments/repos/docs"},
+				Rules: map[string]any{
+					"include": []string{"**/*.md"},
+					"exclude": []string{"**/node_modules/**"},
+				},
+			},
+			{
+				Name:    "git-fixture",
+				Kind:    "git_changes",
+				Enabled: true,
+				Source:  config.IngestSource{Root: root},
+				Routing: config.IngestRouting{Namespace: "fragments/repos/git"},
+				Rules: map[string]any{
+					"repos":       []string{"sample-repo"},
+					"branch":      "main",
+					"max_commits": 25,
+					"include":     []string{"**/*.md"},
+				},
+			},
+		},
+	}
+	if err := config.Save(cfgPath, cfg); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+
+	svc := NewIngestAdminService(cfgPath)
+
+	docsResult, err := svc.Validate(context.Background(), "docs-fixture")
+	if err != nil {
+		t.Fatalf("validate docs ingest: %v", err)
+	}
+	if !docsResult.Valid {
+		t.Fatalf("expected valid docs ingest: %+v", docsResult)
+	}
+
+	gitResult, err := svc.Validate(context.Background(), "git-fixture")
+	if err != nil {
+		t.Fatalf("validate git ingest: %v", err)
+	}
+	if !gitResult.Valid {
+		t.Fatalf("expected valid git ingest: %+v", gitResult)
+	}
+}
