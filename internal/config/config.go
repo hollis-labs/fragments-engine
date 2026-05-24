@@ -91,6 +91,7 @@ type ReviewerConfig struct {
 	PollIntervalSeconds  int    `json:"poll_interval_seconds" yaml:"poll_interval_seconds"`
 	BatchSize            int    `json:"batch_size" yaml:"batch_size"`
 	DownloadRoot         string `json:"download_root" yaml:"download_root"`
+	CorpusRoot           string `json:"corpus_root" yaml:"corpus_root"`
 	GitHubTokenEnv       string `json:"github_token_env" yaml:"github_token_env"`
 	StackExplorerAPIBase string `json:"stack_explorer_api_base" yaml:"stack_explorer_api_base"`
 	StackExplorerScan    string `json:"stack_explorer_scan" yaml:"stack_explorer_scan"`
@@ -212,6 +213,9 @@ func (c *Config) Validate() error {
 	}
 	if strings.TrimSpace(c.Reviewer.DownloadRoot) == "" {
 		c.Reviewer.DownloadRoot = "./data/inbox-reviewer"
+	}
+	if strings.TrimSpace(c.Reviewer.CorpusRoot) == "" {
+		c.Reviewer.CorpusRoot = "~/Documents/corpus/visuals/pinterest"
 	}
 	if strings.TrimSpace(c.Reviewer.GitHubTokenEnv) == "" {
 		c.Reviewer.GitHubTokenEnv = "GITHUB_TOKEN"

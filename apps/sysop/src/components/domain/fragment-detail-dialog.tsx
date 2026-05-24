@@ -318,6 +318,8 @@ function AttachmentCard({
 interface DetailBodyProps {
   detail: FragmentDetail
   onRoute: () => void
+  onSave: (input: { title: string; summary: string; notes: string; tags: string[] }) => Promise<void>
+  saving: boolean
   /** ids of attachments with an in-flight re-analyze request. */
   reanalyzingIds: Set<string>
   /** Re-analyze one attachment; pass undefined id to re-analyze the whole fragment. */
@@ -326,15 +328,59 @@ interface DetailBodyProps {
   reanalyzeError: string | null
 }
 
+function metadataText(metadata: Record<string, unknown>, key: string): string {
+  const value = metadata[key]
+  return typeof value === 'string' ? value : ''
+}
+
 function DetailBody({
   detail,
   onRoute,
+  onSave,
+  saving,
   reanalyzingIds,
   onReanalyze,
   reanalyzeError,
 }: DetailBodyProps) {
   const api = useApi()
   const { fragment, entities, attachments, route_log, related } = detail
+  const editable = fragment.source === 'manual'
+  const [editing, setEditing] = useState(false)
+  const [title, setTitle] = useState(fragment.title)
+  const [summary, setSummary] = useState(fragment.summary)
+  const [notes, setNotes] = useState(metadataText(fragment.metadata, 'user_notes'))
+  const [tagsText, setTagsText] = useState(
+    entities
+      .filter((entity) => entity.kind === 'tag')
+      .map((entity) => entity.value)
+      .join(', '),
+  )
+
+  useEffect(() => {
+    setEditing(false)
+    setTitle(fragment.title)
+    setSummary(fragment.summary)
+    setNotes(metadataText(fragment.metadata, 'user_notes'))
+    setTagsText(
+      entities
+        .filter((entity) => entity.kind === 'tag')
+        .map((entity) => entity.value)
+        .join(', '),
+    )
+  }, [fragment.id, fragment.title, fragment.summary, fragment.metadata, entities])
+
+  async function handleSave() {
+    await onSave({
+      title,
+      summary,
+      notes,
+      tags: tagsText
+        .split(',')
+        .map((tag) => tag.trim())
+        .filter(Boolean),
+    })
+    setEditing(false)
+  }
 
   return (
     <>
@@ -364,16 +410,78 @@ function DetailBody({
           )}
         </div>
         <div>
-          <Button variant="outline" size="sm" onClick={onRoute}>
-            <Waypoints className="h-3.5 w-3.5" />
-            Route
-          </Button>
+          <div className="flex flex-wrap gap-2">
+            <Button variant="outline" size="sm" onClick={onRoute}>
+              <Waypoints className="h-3.5 w-3.5" />
+              Route
+            </Button>
+            {editable && (
+              <Button variant="outline" size="sm" onClick={() => setEditing((value) => !value)}>
+                {editing ? 'Cancel edit' : 'Edit'}
+              </Button>
+            )}
+            {editable && editing && (
+              <Button size="sm" onClick={() => void handleSave()} disabled={saving}>
+                {saving ? 'Saving…' : 'Save'}
+              </Button>
+            )}
+          </div>
         </div>
       </div>
+
+      {editable && editing && (
+        <Section title="Edit">
+          <div className="flex flex-col gap-3">
+            <label className="flex flex-col gap-1 text-[11px] uppercase tracking-[.12em] text-text-subtle">
+              Title
+              <input
+                value={title}
+                onChange={(event) => setTitle(event.target.value)}
+                className="rounded-md border border-border bg-bg px-3 py-2 text-[13px] tracking-normal text-text outline-none transition focus:border-text-soft"
+              />
+            </label>
+            <label className="flex flex-col gap-1 text-[11px] uppercase tracking-[.12em] text-text-subtle">
+              Description
+              <textarea
+                value={summary}
+                onChange={(event) => setSummary(event.target.value)}
+                rows={4}
+                className="rounded-md border border-border bg-bg px-3 py-2 text-[13px] leading-5 tracking-normal text-text outline-none transition focus:border-text-soft"
+              />
+            </label>
+            <label className="flex flex-col gap-1 text-[11px] uppercase tracking-[.12em] text-text-subtle">
+              Notes
+              <textarea
+                value={notes}
+                onChange={(event) => setNotes(event.target.value)}
+                rows={4}
+                className="rounded-md border border-border bg-bg px-3 py-2 text-[13px] leading-5 tracking-normal text-text outline-none transition focus:border-text-soft"
+              />
+            </label>
+            <label className="flex flex-col gap-1 text-[11px] uppercase tracking-[.12em] text-text-subtle">
+              Tags
+              <input
+                value={tagsText}
+                onChange={(event) => setTagsText(event.target.value)}
+                placeholder="pinterest, interior, workspace"
+                className="rounded-md border border-border bg-bg px-3 py-2 text-[13px] tracking-normal text-text outline-none transition focus:border-text-soft"
+              />
+            </label>
+          </div>
+        </Section>
+      )}
 
       {fragment.summary && (
         <Section title="Summary">
           <p className="text-sm leading-6 text-text-muted">{fragment.summary}</p>
+        </Section>
+      )}
+
+      {metadataText(fragment.metadata, 'user_notes') && (
+        <Section title="Notes">
+          <p className="text-sm leading-6 text-text-muted">
+            {metadataText(fragment.metadata, 'user_notes')}
+          </p>
         </Section>
       )}
 
@@ -479,6 +587,7 @@ export function FragmentDetailDialog({ fragmentId, onClose }: FragmentDetailDial
   // Attachment ids with an in-flight re-analyze request.
   const [reanalyzingIds, setReanalyzingIds] = useState<Set<string>>(new Set())
   const [reanalyzeError, setReanalyzeError] = useState<string | null>(null)
+  const [saving, setSaving] = useState(false)
 
   useEffect(() => {
     if (!fragmentId) return
@@ -536,6 +645,36 @@ export function FragmentDetailDialog({ fragmentId, onClose }: FragmentDetailDial
     }
   }
 
+  async function handleSave(input: {
+    title: string
+    summary: string
+    notes: string
+    tags: string[]
+  }) {
+    if (!fragmentId) return
+    setSaving(true)
+    setError(null)
+    try {
+      const updated = await api.updateFragment({
+        fragmentId,
+        title: input.title,
+        summary: input.summary,
+        notes: input.notes,
+        tags: input.tags,
+      })
+      setDetail(updated)
+    } catch (err) {
+      setError(
+        err instanceof ApiError || err instanceof Error
+          ? err.message
+          : 'Failed to update fragment',
+      )
+      throw err
+    } finally {
+      setSaving(false)
+    }
+  }
+
   return (
     <>
       <Dialog open={fragmentId !== null} onOpenChange={(open) => !open && onClose()}>
@@ -562,6 +701,8 @@ export function FragmentDetailDialog({ fragmentId, onClose }: FragmentDetailDial
               <DetailBody
                 detail={detail}
                 onRoute={() => setApplyOpen(true)}
+                onSave={handleSave}
+                saving={saving}
                 reanalyzingIds={reanalyzingIds}
                 onReanalyze={handleReanalyze}
                 reanalyzeError={reanalyzeError}

@@ -16,6 +16,7 @@ type InboxReviewerService struct {
 	attachments *repository.AttachmentRepository
 	inbox       *repository.InboxRepository
 	enricher    *ManualIntakeEnricher
+	corpus      *PinterestCorpusWriter
 	stackClient *StackExplorerClient
 	stackScan   string
 	now         func() time.Time
@@ -27,6 +28,7 @@ func NewInboxReviewerService(
 	attachments *repository.AttachmentRepository,
 	inbox *repository.InboxRepository,
 	enricher *ManualIntakeEnricher,
+	corpus *PinterestCorpusWriter,
 	stackClient *StackExplorerClient,
 	stackScan string,
 ) *InboxReviewerService {
@@ -36,6 +38,7 @@ func NewInboxReviewerService(
 		attachments: attachments,
 		inbox:       inbox,
 		enricher:    enricher,
+		corpus:      corpus,
 		stackClient: stackClient,
 		stackScan:   strings.TrimSpace(stackScan),
 		now:         func() time.Time { return time.Now().UTC() },
@@ -126,10 +129,40 @@ func (s *InboxReviewerService) reviewFragment(ctx context.Context, fragmentID st
 	if err := s.inbox.UpdateReason(ctx, fragmentID, reason); err != nil {
 		return true, false, detail, err
 	}
+	if err := s.syncPinterestCorpus(ctx, fragmentID); err != nil {
+		return true, false, detail, err
+	}
 	return true, true, reviewDetail{
 		action: "reviewed_" + enriched.SourceType,
 		detail: strings.TrimSpace(enriched.Summary),
 	}, nil
+}
+
+func (s *InboxReviewerService) syncPinterestCorpus(ctx context.Context, fragmentID string) error {
+	if s == nil || s.corpus == nil {
+		return nil
+	}
+	fragment, err := s.fragments.GetByID(ctx, fragmentID)
+	if err != nil {
+		return err
+	}
+	if fragment.Source != "manual" || fragment.SourceType != "pin" {
+		return nil
+	}
+	entities, err := s.entities.ListByFragment(ctx, fragmentID)
+	if err != nil {
+		return err
+	}
+	attachments, err := s.attachments.ListByFragment(ctx, fragmentID)
+	if err != nil {
+		return err
+	}
+	_, err = s.corpus.Write(domain.FragmentDetail{
+		Fragment:    fragment,
+		Entities:    entities,
+		Attachments: attachments,
+	})
+	return err
 }
 
 func (s *InboxReviewerService) applyEnrichment(

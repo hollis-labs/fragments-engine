@@ -20,10 +20,11 @@ import (
 )
 
 type manualTestServices struct {
-	fragments *FragmentService
-	reviewer  *InboxReviewerService
-	inbox     *InboxService
-	close     func()
+	fragments  *FragmentService
+	reviewer   *InboxReviewerService
+	inbox      *InboxService
+	corpusRoot string
+	close      func()
 }
 
 func setupManualTestServices(t *testing.T) manualTestServices {
@@ -40,6 +41,8 @@ func setupManualTestServices(t *testing.T) manualTestServices {
 	routingRepo := repository.NewRoutingRepository(st.DB)
 	recallIndex := recall.NewSQLiteIndexer(fragmentRepo, entityRepo)
 	enricher := NewManualIntakeEnricher(nil, filepath.Join(t.TempDir(), "reviewer"))
+	corpusRoot := filepath.Join(t.TempDir(), "corpus")
+	corpusWriter := NewPinterestCorpusWriter(corpusRoot)
 	pipeline := ingest.NewPipeline(fragmentRepo, nil, []ingest.Stage{
 		ingest.NewAttachmentStage(attachmentRepo),
 		ingest.NewRouteStage(fragmentRepo, attachmentRepo, routingRepo, inboxRepo, nil),
@@ -47,9 +50,10 @@ func setupManualTestServices(t *testing.T) manualTestServices {
 		ingest.NewRecallStage(recallIndex),
 	})
 	return manualTestServices{
-		fragments: NewFragmentService(fragmentRepo, entityRepo, attachmentRepo, routingRepo, recallIndex, pipeline, nil, enricher),
-		reviewer:  NewInboxReviewerService(fragmentRepo, entityRepo, attachmentRepo, inboxRepo, enricher, nil, ""),
-		inbox:     NewInboxService(inboxRepo),
+		fragments:  NewFragmentService(fragmentRepo, entityRepo, attachmentRepo, routingRepo, recallIndex, pipeline, nil, enricher, corpusWriter),
+		reviewer:   NewInboxReviewerService(fragmentRepo, entityRepo, attachmentRepo, inboxRepo, enricher, corpusWriter, nil, ""),
+		inbox:      NewInboxService(inboxRepo),
+		corpusRoot: corpusRoot,
 		close: func() {
 			_ = recallIndex.Close()
 			_ = st.Close()
@@ -168,6 +172,144 @@ func TestInboxReviewerReviewsPinterestPinAndDownloadsImage(t *testing.T) {
 	}
 	if len(items) != 1 || !strings.Contains(items[0].Reason, "reviewed pinterest pin") {
 		t.Fatalf("unexpected inbox reason after review: %+v", items)
+	}
+	if items[0].PreviewAttachmentID == "" {
+		t.Fatalf("expected pinterest inbox row to surface a preview attachment id: %+v", items[0])
+	}
+	corpusPath := filepath.Join(svcs.corpusRoot, "fragments", "manual", "pin", "pinterest", "123456", "fragment.md")
+	raw, err := os.ReadFile(corpusPath)
+	if err != nil {
+		t.Fatalf("read pinterest corpus doc: %v", err)
+	}
+	body := string(raw)
+	if !strings.Contains(body, "# Warm minimal office desk") {
+		t.Fatalf("expected corpus doc title, got: %s", body)
+	}
+	if !strings.Contains(body, "## Description") || !strings.Contains(body, "workspace inspiration pin") {
+		t.Fatalf("expected pin description in corpus doc: %s", body)
+	}
+	if !strings.Contains(body, "attachments/previews/") {
+		t.Fatalf("expected preview image reference in corpus doc: %s", body)
+	}
+	results, err := svcs.fragments.Search(context.Background(), "Warm minimal office desk", 10)
+	if err != nil {
+		t.Fatalf("search pinterest fragment: %v", err)
+	}
+	if len(results) == 0 || results[0].PreviewAttachmentID == "" {
+		t.Fatalf("expected search results to include preview attachment id: %+v", results)
+	}
+}
+
+func TestFragmentServiceUpdateManualFragment(t *testing.T) {
+	svcs := setupManualTestServices(t)
+	defer svcs.close()
+
+	intake, err := svcs.fragments.Intake(context.Background(), IntakeRequest{
+		Content: "https://www.pinterest.com/pin/123456/",
+		Tags:    []string{"seed"},
+	})
+	if err != nil {
+		t.Fatalf("intake: %v", err)
+	}
+
+	detail, err := svcs.fragments.UpdateManualFragment(context.Background(), UpdateFragmentRequest{
+		FragmentID: intake.FragmentID,
+		Title:      "Desk moodboard",
+		Summary:    "Warm wood, shelves, and compact workspace ideas.",
+		Notes:      "Focus on references that can become corpus docs later.",
+		Tags:       []string{"pinterest", "workspace", "pinterest"},
+	})
+	if err != nil {
+		t.Fatalf("update manual fragment: %v", err)
+	}
+	if detail.Fragment.Title != "Desk moodboard" {
+		t.Fatalf("unexpected title: %s", detail.Fragment.Title)
+	}
+	if detail.Fragment.Summary != "Warm wood, shelves, and compact workspace ideas." {
+		t.Fatalf("unexpected summary: %s", detail.Fragment.Summary)
+	}
+	if !strings.Contains(detail.Fragment.MetadataJSON, `"user_notes":"Focus on references that can become corpus docs later."`) {
+		t.Fatalf("expected notes in metadata: %s", detail.Fragment.MetadataJSON)
+	}
+	if !strings.Contains(detail.Fragment.MetadataJSON, `"user_tags":["pinterest","workspace"]`) {
+		t.Fatalf("expected tags in metadata: %s", detail.Fragment.MetadataJSON)
+	}
+	assertEntityPresent(t, detail.Entities, "tag", "pinterest")
+	assertEntityPresent(t, detail.Entities, "tag", "workspace")
+	for _, entity := range detail.Entities {
+		if entity.Kind == "tag" && entity.Value == "seed" {
+			t.Fatalf("expected old tag to be replaced, got %+v", detail.Entities)
+		}
+	}
+
+	refetched, err := svcs.fragments.GetDetail(context.Background(), intake.FragmentID, 5)
+	if err != nil {
+		t.Fatalf("refetch detail: %v", err)
+	}
+	if refetched.Fragment.Title != "Desk moodboard" || refetched.Fragment.Summary != "Warm wood, shelves, and compact workspace ideas." {
+		t.Fatalf("expected updated fragment in recall-backed detail: %+v", refetched.Fragment)
+	}
+	corpusPath := filepath.Join(svcs.corpusRoot, "fragments", "manual", "pin", "pinterest", "123456", "fragment.md")
+	raw, err := os.ReadFile(corpusPath)
+	if err != nil {
+		t.Fatalf("read updated pinterest corpus doc: %v", err)
+	}
+	body := string(raw)
+	if !strings.Contains(body, "## Notes") || !strings.Contains(body, "Focus on references that can become corpus docs later.") {
+		t.Fatalf("expected notes in corpus doc: %s", body)
+	}
+	if !strings.Contains(body, "- pinterest") || !strings.Contains(body, "- workspace") {
+		t.Fatalf("expected tags in corpus doc: %s", body)
+	}
+}
+
+func TestFragmentServiceBackfillPinterestCorpus(t *testing.T) {
+	svcs := setupManualTestServices(t)
+	defer svcs.close()
+
+	pin, err := svcs.fragments.Intake(context.Background(), IntakeRequest{
+		Content: "https://www.pinterest.com/pin/123456/",
+	})
+	if err != nil {
+		t.Fatalf("intake pin: %v", err)
+	}
+	if _, err := svcs.fragments.Intake(context.Background(), IntakeRequest{
+		Content: "plain text note",
+	}); err != nil {
+		t.Fatalf("intake non-pin: %v", err)
+	}
+
+	corpusPath := filepath.Join(svcs.corpusRoot, "fragments", "manual", "pin", "pinterest", "123456", "fragment.md")
+	if _, err := os.Stat(corpusPath); !os.IsNotExist(err) {
+		t.Fatalf("expected no corpus doc before backfill, stat err=%v", err)
+	}
+
+	result, err := svcs.fragments.BackfillPinterestCorpus(context.Background(), 0)
+	if err != nil {
+		t.Fatalf("backfill pinterest corpus: %v", err)
+	}
+	if result.ScannedCount != 1 || result.CandidateCount != 1 || result.WrittenCount != 1 {
+		t.Fatalf("unexpected backfill result: %+v", result)
+	}
+	if len(result.WrittenPaths) != 1 || result.WrittenPaths[0] != corpusPath {
+		t.Fatalf("unexpected written paths: %+v", result.WrittenPaths)
+	}
+
+	raw, err := os.ReadFile(corpusPath)
+	if err != nil {
+		t.Fatalf("read backfilled corpus doc: %v", err)
+	}
+	body := string(raw)
+	if !strings.Contains(body, "# 123456") && !strings.Contains(body, "# Pinterest pin") {
+		t.Fatalf("expected corpus markdown title, got: %s", body)
+	}
+
+	detail, err := svcs.fragments.GetDetail(context.Background(), pin.FragmentID, 5)
+	if err != nil {
+		t.Fatalf("get detail: %v", err)
+	}
+	if detail.Fragment.SourceType != "pin" {
+		t.Fatalf("expected pin source type after backfill candidate selection, got %s", detail.Fragment.SourceType)
 	}
 }
 

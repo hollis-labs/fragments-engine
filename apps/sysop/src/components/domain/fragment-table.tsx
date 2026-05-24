@@ -13,6 +13,7 @@ interface FragmentTableProps {
   scrollRootRef?: RefObject<HTMLElement | null>
   /** Opens the fragment detail modal for a row. */
   onOpenFragment?: (fragmentId: string) => void
+  previewURL?: (item: InboxItem) => string | undefined
 }
 
 function sortItems(items: InboxItem[], key: SortKey, dir: SortDir): InboxItem[] {
@@ -36,6 +37,7 @@ export default function FragmentTable({
   items,
   scrollRootRef,
   onOpenFragment,
+  previewURL,
 }: FragmentTableProps) {
   const [sortKey, setSortKey] = useState<SortKey>('staged_at')
   const [sortDir, setSortDir] = useState<SortDir>('desc')
@@ -152,6 +154,7 @@ export default function FragmentTable({
               selected={selected.has(item.fragment_id)}
               onSelect={handleSelect}
               onOpen={onOpenFragment}
+              previewURL={previewURL?.(item)}
             />
           ))}
           {hasMore && (

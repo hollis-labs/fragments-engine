@@ -8,7 +8,7 @@ import {
   type FilterChip,
   statusTone,
 } from '@hollis-labs/sysop-ui'
-import type { EntitySelection, RouteFilter } from '@/lib/inbox-filters-storage'
+import type { EntitySelection, RouteFilter, VisualFilter } from '@/lib/inbox-filters-storage'
 import type { InboxEntityGroup } from '@/lib/types'
 import type { SearchMode } from '@/lib/api'
 
@@ -25,6 +25,11 @@ const ROUTE_CYCLE_OPTIONS: readonly [CycleOption<RouteFilter>, ...CycleOption<Ro
 ]
 
 const SEARCH_LIMITS: readonly number[] = [10, 20, 50, 100]
+const VISUAL_CYCLE_OPTIONS: readonly [CycleOption<VisualFilter>, ...CycleOption<VisualFilter>[]] = [
+  { value: 'all', label: 'All', dotColor: 'bg-text-subtle', title: 'All fragments' },
+  { value: 'visual', label: 'Visual', dotColor: 'bg-status-indexed', title: 'Only fragments with preview media' },
+  { value: 'pins', label: 'Pins', dotColor: 'bg-status-routed', title: 'Pinterest pin fragments only' },
+]
 
 // Entity selections are encoded into a single combobox id; a space separates
 // kind from value (entity kinds never contain spaces).
@@ -46,6 +51,8 @@ interface FilterBarProps {
   onStatusToggle: (status: string) => void
   routeFilter: RouteFilter
   onRouteFilterChange: (value: RouteFilter) => void
+  visualFilter: VisualFilter
+  onVisualFilterChange: (value: VisualFilter) => void
   entityGroups: InboxEntityGroup[]
   entitySelection: EntitySelection | null
   onEntityChange: (selection: EntitySelection | null) => void
@@ -78,6 +85,8 @@ export default function FilterBar({
   onStatusToggle,
   routeFilter,
   onRouteFilterChange,
+  visualFilter,
+  onVisualFilterChange,
   entityGroups,
   entitySelection,
   onEntityChange,
@@ -194,6 +203,18 @@ export default function FilterBar({
           )}
         </>
       )}
+
+      <div className="flex items-center gap-1 border-l border-border pl-3">
+        <span className="mr-1 text-[10px] uppercase tracking-wider text-text-subtle">
+          Visual:
+        </span>
+        <FilterCycleToggle
+          options={VISUAL_CYCLE_OPTIONS}
+          value={visualFilter}
+          onChange={onVisualFilterChange}
+          ariaLabel="Visual filter"
+        />
+      </div>
 
       {/* Route + entity facets are inbox-only — hidden while searching. */}
       {!searchActive && (

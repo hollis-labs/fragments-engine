@@ -33,10 +33,11 @@ type Fragment struct {
 }
 
 type SearchResult struct {
-	Fragment Fragment
-	Score    float64
-	Snippet  string
-	Trace    RecallTrace
+	Fragment            Fragment    `json:"fragment"`
+	Score               float64     `json:"score"`
+	Snippet             string      `json:"snippet"`
+	Trace               RecallTrace `json:"trace"`
+	PreviewAttachmentID string      `json:"preview_attachment_id,omitempty"`
 }
 
 type RecallTrace struct {
@@ -124,6 +125,13 @@ type AttachmentReanalysisResult struct {
 	ProviderBackend string   `json:"provider_backend,omitempty"`
 }
 
+type PinterestCorpusBackfillResult struct {
+	ScannedCount   int      `json:"scanned_count"`
+	CandidateCount int      `json:"candidate_count"`
+	WrittenCount   int      `json:"written_count"`
+	WrittenPaths   []string `json:"written_paths,omitempty"`
+}
+
 type PublishedAttachmentInfo struct {
 	StoragePath        string `json:"storage_path"`
 	PreviewStoragePath string `json:"preview_storage_path,omitempty"`
@@ -140,15 +148,16 @@ type InboxItem struct {
 // a meaningful table (title, source, status) without an extra round-trip per
 // row. JSON tags are snake_case so the sysop frontend consumes it directly.
 type InboxItemDetail struct {
-	FragmentID string    `json:"fragment_id"`
-	Reason     string    `json:"reason"`
-	StagedAt   time.Time `json:"staged_at"`
-	RouteID    string    `json:"route_id"`
-	Title      string    `json:"title"`
-	Source     string    `json:"source"`
-	SourceType string    `json:"source_type"`
-	Status     string    `json:"status"`
-	CreatedAt  time.Time `json:"created_at"`
+	FragmentID          string    `json:"fragment_id"`
+	Reason              string    `json:"reason"`
+	StagedAt            time.Time `json:"staged_at"`
+	RouteID             string    `json:"route_id"`
+	Title               string    `json:"title"`
+	Source              string    `json:"source"`
+	SourceType          string    `json:"source_type"`
+	Status              string    `json:"status"`
+	CreatedAt           time.Time `json:"created_at"`
+	PreviewAttachmentID string    `json:"preview_attachment_id,omitempty"`
 }
 
 type InboxEntityGroup struct {

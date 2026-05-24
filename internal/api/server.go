@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/hollis-labs/fragments-engine/internal/app"
@@ -49,6 +50,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/search", s.handleSearch)
 	mux.HandleFunc("/v1/fragments", s.handleFragmentList)
 	mux.HandleFunc("/v1/fragments/get", s.handleFragmentGet)
+	mux.HandleFunc("/v1/fragments/update", s.handleFragmentUpdate)
 	mux.HandleFunc("/v1/fragments/related", s.handleFragmentRelated)
 	mux.HandleFunc("/v1/fragments/attachment", s.handleFragmentAttachment)
 	mux.HandleFunc("/v1/fragments/reanalyze-attachments", s.handleFragmentReanalyzeAttachments)
@@ -230,6 +232,14 @@ func (req ingestScheduleRequest) toInput() service.IngestScheduleInput {
 type fragmentReanalyzeRequest struct {
 	FragmentID   string `json:"fragment_id"`
 	AttachmentID string `json:"attachment_id"`
+}
+
+type fragmentUpdateRequest struct {
+	FragmentID string   `json:"fragment_id"`
+	Title      string   `json:"title"`
+	Summary    string   `json:"summary"`
+	Notes      string   `json:"notes"`
+	Tags       []string `json:"tags"`
 }
 
 func (s *Server) ListenAndServe(addr string) error {
@@ -1113,6 +1123,45 @@ func (s *Server) handleFragmentGet(w http.ResponseWriter, r *http.Request) {
 	}
 	defer instance.Close()
 	detail, err := instance.Fragments.GetDetail(r.Context(), fragmentID, 10)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"detail": detail})
+}
+
+func (s *Server) handleFragmentUpdate(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var input fragmentUpdateRequest
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil && err != io.EOF {
+		http.Error(w, "invalid json body", http.StatusBadRequest)
+		return
+	}
+	if strings.TrimSpace(input.FragmentID) == "" {
+		http.Error(w, "fragment_id is required", http.StatusBadRequest)
+		return
+	}
+	cfg, err := config.Load(s.cfgPath)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	instance, err := app.Open(r.Context(), cfg)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer instance.Close()
+	detail, err := instance.Fragments.UpdateManualFragment(r.Context(), service.UpdateFragmentRequest{
+		FragmentID: input.FragmentID,
+		Title:      input.Title,
+		Summary:    input.Summary,
+		Notes:      input.Notes,
+		Tags:       input.Tags,
+	})
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

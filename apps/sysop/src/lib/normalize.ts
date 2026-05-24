@@ -146,6 +146,10 @@ export function normalizeSearchResult(value: unknown): SearchResult {
     recall_trace: normalizeKeys(
       normalized.recall_trace ?? normalized.trace ?? {},
     ) as SearchResult['recall_trace'],
+    preview_attachment_id:
+      typeof normalized.preview_attachment_id === 'string'
+        ? normalized.preview_attachment_id
+        : undefined,
   }
 }
 
@@ -162,6 +166,7 @@ export function normalizeInboxItem(value: unknown): InboxItem {
     source_type: str('source_type'),
     status: str('status'),
     created_at: normalizeDateString(normalized.created_at),
+    preview_attachment_id: str('preview_attachment_id') || undefined,
   }
 }
 

@@ -75,10 +75,10 @@ func scanInboxDetails(rows *sql.Rows, limit int) ([]domain.InboxItemDetail, erro
 	for rows.Next() {
 		var item domain.InboxItemDetail
 		var stagedAt, createdAt string
-		var routeID sql.NullString
+		var routeID, previewAttachmentID sql.NullString
 		if err := rows.Scan(
 			&item.FragmentID, &item.Reason, &stagedAt, &routeID,
-			&item.Title, &item.Source, &item.SourceType, &item.Status, &createdAt,
+			&item.Title, &item.Source, &item.SourceType, &item.Status, &createdAt, &previewAttachmentID,
 		); err != nil {
 			return nil, fmt.Errorf("scan inbox detail: %w", err)
 		}
@@ -86,6 +86,9 @@ func scanInboxDetails(rows *sql.Rows, limit int) ([]domain.InboxItemDetail, erro
 		item.CreatedAt, _ = time.Parse(time.RFC3339, createdAt)
 		if routeID.Valid {
 			item.RouteID = routeID.String
+		}
+		if previewAttachmentID.Valid {
+			item.PreviewAttachmentID = previewAttachmentID.String
 		}
 		items = append(items, item)
 	}
@@ -103,7 +106,16 @@ func (r *InboxRepository) ListDetailed(ctx context.Context, limit int) ([]domain
 	}
 	rows, err := r.db.QueryContext(ctx, `
 SELECT i.fragment_id, i.reason, i.staged_at, i.route_id,
-       f.title, f.source, f.source_type, f.status, f.created_at
+       f.title, f.source, f.source_type, f.status, f.created_at,
+       (
+         SELECT fa.attachment_id
+         FROM fragment_attachments fa
+         JOIN attachments a ON a.id = fa.attachment_id
+         WHERE fa.fragment_id = i.fragment_id
+           AND a.kind = 'image'
+         ORDER BY fa.created_at ASC
+         LIMIT 1
+       ) AS preview_attachment_id
 FROM inbox i
 JOIN fragments f ON f.id = i.fragment_id
 ORDER BY i.staged_at DESC
@@ -123,7 +135,16 @@ func (r *InboxRepository) ListByEntityDetailed(ctx context.Context, kind, value 
 	}
 	rows, err := r.db.QueryContext(ctx, `
 SELECT DISTINCT i.fragment_id, i.reason, i.staged_at, i.route_id,
-       f.title, f.source, f.source_type, f.status, f.created_at
+       f.title, f.source, f.source_type, f.status, f.created_at,
+       (
+         SELECT fa.attachment_id
+         FROM fragment_attachments fa
+         JOIN attachments a ON a.id = fa.attachment_id
+         WHERE fa.fragment_id = i.fragment_id
+           AND a.kind = 'image'
+         ORDER BY fa.created_at ASC
+         LIMIT 1
+       ) AS preview_attachment_id
 FROM inbox i
 JOIN fragments f ON f.id = i.fragment_id
 JOIN fragment_entities fe ON fe.fragment_id = i.fragment_id
@@ -163,7 +184,16 @@ func (r *InboxRepository) ListDetailedOldestFirst(ctx context.Context, limit int
 	}
 	rows, err := r.db.QueryContext(ctx, `
 SELECT i.fragment_id, i.reason, i.staged_at, i.route_id,
-       f.title, f.source, f.source_type, f.status, f.created_at
+       f.title, f.source, f.source_type, f.status, f.created_at,
+       (
+         SELECT fa.attachment_id
+         FROM fragment_attachments fa
+         JOIN attachments a ON a.id = fa.attachment_id
+         WHERE fa.fragment_id = i.fragment_id
+           AND a.kind = 'image'
+         ORDER BY fa.created_at ASC
+         LIMIT 1
+       ) AS preview_attachment_id
 FROM inbox i
 JOIN fragments f ON f.id = i.fragment_id
 ORDER BY f.created_at ASC, i.staged_at ASC

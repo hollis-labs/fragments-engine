@@ -29,9 +29,10 @@ type FragmentService struct {
 	pipeline    *ingest.Pipeline
 	vision      analyze.VisionAnalyzer
 	enricher    *ManualIntakeEnricher
+	corpus      *PinterestCorpusWriter
 }
 
-func NewFragmentService(repo *repository.FragmentRepository, entities *repository.EntityRepository, attachments *repository.AttachmentRepository, routes *repository.RoutingRepository, recallIndex recall.Indexer, pipeline *ingest.Pipeline, vision analyze.VisionAnalyzer, enricher *ManualIntakeEnricher) *FragmentService {
+func NewFragmentService(repo *repository.FragmentRepository, entities *repository.EntityRepository, attachments *repository.AttachmentRepository, routes *repository.RoutingRepository, recallIndex recall.Indexer, pipeline *ingest.Pipeline, vision analyze.VisionAnalyzer, enricher *ManualIntakeEnricher, corpus *PinterestCorpusWriter) *FragmentService {
 	return &FragmentService{
 		repo:        repo,
 		entities:    entities,
@@ -41,6 +42,7 @@ func NewFragmentService(repo *repository.FragmentRepository, entities *repositor
 		pipeline:    pipeline,
 		vision:      vision,
 		enricher:    enricher,
+		corpus:      corpus,
 	}
 }
 
@@ -349,6 +351,172 @@ type IntakeResult struct {
 	Status     string `json:"status"`  // "inbox" | "routed"
 }
 
+type UpdateFragmentRequest struct {
+	FragmentID string
+	Title      string
+	Summary    string
+	Notes      string
+	Tags       []string
+}
+
+func (s *FragmentService) UpdateManualFragment(ctx context.Context, req UpdateFragmentRequest) (domain.FragmentDetail, error) {
+	fragmentID := strings.TrimSpace(req.FragmentID)
+	if fragmentID == "" {
+		return domain.FragmentDetail{}, fmt.Errorf("update fragment: fragment_id is required")
+	}
+
+	fragment, err := s.repo.GetByID(ctx, fragmentID)
+	if err != nil {
+		return domain.FragmentDetail{}, fmt.Errorf("update fragment: %w", err)
+	}
+	if fragment.Source != "manual" {
+		return domain.FragmentDetail{}, fmt.Errorf("update fragment: only manual fragments are editable")
+	}
+
+	meta, err := decodeEditableMetadata(fragment.MetadataJSON)
+	if err != nil {
+		return domain.FragmentDetail{}, fmt.Errorf("update fragment metadata: %w", err)
+	}
+	title := strings.TrimSpace(req.Title)
+	if title == "" {
+		title = fragment.Title
+	}
+	summary := strings.TrimSpace(req.Summary)
+	notes := strings.TrimSpace(req.Notes)
+	tags := dedupeTagValues(req.Tags)
+
+	if notes == "" {
+		delete(meta, "user_notes")
+	} else {
+		meta["user_notes"] = notes
+	}
+	if summary == "" {
+		delete(meta, "user_description")
+	} else {
+		meta["user_description"] = summary
+	}
+	if len(tags) == 0 {
+		delete(meta, "user_tags")
+	} else {
+		meta["user_tags"] = tags
+	}
+
+	rawMeta, err := json.Marshal(meta)
+	if err != nil {
+		return domain.FragmentDetail{}, fmt.Errorf("update fragment metadata json: %w", err)
+	}
+	existingEntities, err := s.entities.ListByFragment(ctx, fragmentID)
+	if err != nil {
+		return domain.FragmentDetail{}, err
+	}
+	nextEntities := make([]domain.FragmentEntity, 0, len(existingEntities)+len(tags))
+	for _, entity := range existingEntities {
+		if entity.Kind == "tag" {
+			continue
+		}
+		nextEntities = append(nextEntities, entity)
+	}
+	for _, tag := range tags {
+		nextEntities = append(nextEntities, domain.FragmentEntity{
+			Kind:       "tag",
+			Value:      tag,
+			Source:     "manual",
+			Confidence: 1,
+		})
+	}
+
+	if err := s.repo.UpdateEditableFields(ctx, fragmentID, title, summary, string(rawMeta)); err != nil {
+		return domain.FragmentDetail{}, err
+	}
+
+	updated, err := s.repo.GetByID(ctx, fragmentID)
+	if err != nil {
+		return domain.FragmentDetail{}, err
+	}
+	if err := s.recall.IndexFragment(ctx, updated); err != nil {
+		return domain.FragmentDetail{}, fmt.Errorf("update fragment reindex: %w", err)
+	}
+	// Recall indexing recomputes summary/entity state from content. Restore the
+	// explicit manual summary/metadata and authoritative tag set afterward.
+	if err := s.repo.UpdateEditableFields(ctx, fragmentID, title, summary, string(rawMeta)); err != nil {
+		return domain.FragmentDetail{}, err
+	}
+	if err := s.entities.ReplaceFragmentEntities(ctx, fragmentID, nextEntities); err != nil {
+		return domain.FragmentDetail{}, err
+	}
+	detail, err := s.GetDetail(ctx, fragmentID, 10)
+	if err != nil {
+		return domain.FragmentDetail{}, err
+	}
+	if _, err := s.writePinterestCorpus(detail); err != nil {
+		return domain.FragmentDetail{}, err
+	}
+	return detail, nil
+}
+
+func (s *FragmentService) BackfillPinterestCorpus(ctx context.Context, limit int) (domain.PinterestCorpusBackfillResult, error) {
+	if s == nil || s.corpus == nil {
+		return domain.PinterestCorpusBackfillResult{}, nil
+	}
+	if limit < 0 {
+		limit = 0
+	}
+
+	result := domain.PinterestCorpusBackfillResult{
+		WrittenPaths: make([]string, 0),
+	}
+	offset := 0
+	for {
+		pageSize := 200
+		if limit > 0 {
+			remaining := limit - result.CandidateCount
+			if remaining <= 0 {
+				break
+			}
+			if remaining < pageSize {
+				pageSize = remaining
+			}
+		}
+
+		items, total, err := s.repo.List(ctx, repository.ListOptions{
+			Source:     "manual",
+			SourceType: "pin",
+			Limit:      pageSize,
+			Offset:     offset,
+		})
+		if err != nil {
+			return result, fmt.Errorf("backfill pinterest corpus: list fragments: %w", err)
+		}
+		if len(items) == 0 {
+			break
+		}
+
+		result.ScannedCount += len(items)
+		for _, fragment := range items {
+			result.CandidateCount++
+			detail, err := s.GetDetail(ctx, fragment.ID, 10)
+			if err != nil {
+				return result, fmt.Errorf("backfill pinterest corpus: detail %s: %w", fragment.ID, err)
+			}
+			path, err := s.writePinterestCorpus(detail)
+			if err != nil {
+				return result, fmt.Errorf("backfill pinterest corpus: write %s: %w", fragment.ID, err)
+			}
+			if strings.TrimSpace(path) == "" {
+				continue
+			}
+			result.WrittenCount++
+			result.WrittenPaths = append(result.WrittenPaths, path)
+		}
+
+		offset += len(items)
+		if offset >= total {
+			break
+		}
+	}
+	return result, nil
+}
+
 // Intake accepts a manually submitted fragment, writes it to the DB, runs all
 // pipeline stages (route, inbox, recall), and optionally attaches tag entities.
 func (s *FragmentService) Intake(ctx context.Context, req IntakeRequest) (IntakeResult, error) {
@@ -482,6 +650,46 @@ func (s *FragmentService) Intake(ctx context.Context, req IntakeRequest) (Intake
 		Outcome:    string(outcome),
 		Status:     string(stageCtx.Fragment.Status),
 	}, nil
+}
+
+func decodeEditableMetadata(raw string) (map[string]any, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return map[string]any{}, nil
+	}
+	var meta map[string]any
+	if err := json.Unmarshal([]byte(raw), &meta); err != nil {
+		return nil, err
+	}
+	if meta == nil {
+		meta = map[string]any{}
+	}
+	return meta, nil
+}
+
+func dedupeTagValues(tags []string) []string {
+	out := make([]string, 0, len(tags))
+	seen := make(map[string]struct{}, len(tags))
+	for _, tag := range tags {
+		tag = strings.TrimSpace(tag)
+		if tag == "" {
+			continue
+		}
+		key := strings.ToLower(tag)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, tag)
+	}
+	return out
+}
+
+func (s *FragmentService) writePinterestCorpus(detail domain.FragmentDetail) (string, error) {
+	if s == nil || s.corpus == nil {
+		return "", nil
+	}
+	return s.corpus.Write(detail)
 }
 
 func deriveTitle(content string) string {

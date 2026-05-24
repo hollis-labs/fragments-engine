@@ -254,7 +254,7 @@ func runSearch(args []string) error {
 
 func runFragment(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: fragments-engine fragment <get|related|reanalyze-attachments> ...")
+		return fmt.Errorf("usage: fragments-engine fragment <get|related|reanalyze-attachments|backfill-pinterest-corpus> ...")
 	}
 	switch args[0] {
 	case "get":
@@ -263,8 +263,10 @@ func runFragment(args []string) error {
 		return runFragmentRelated(args[1:])
 	case "reanalyze-attachments":
 		return runFragmentReanalyzeAttachments(args[1:])
+	case "backfill-pinterest-corpus":
+		return runFragmentBackfillPinterestCorpus(args[1:])
 	default:
-		return fmt.Errorf("usage: fragments-engine fragment <get|related|reanalyze-attachments> ...")
+		return fmt.Errorf("usage: fragments-engine fragment <get|related|reanalyze-attachments|backfill-pinterest-corpus> ...")
 	}
 }
 
@@ -473,6 +475,34 @@ func runFragmentReanalyzeAttachments(args []string) error {
 	fmt.Printf("fragment_id=%s provider=%s updated=%d skipped=%d\n", result.FragmentID, result.ProviderBackend, result.UpdatedCount, result.SkippedCount)
 	for _, id := range result.AttachmentIDs {
 		fmt.Printf("attachment_id=%s\n", id)
+	}
+	return nil
+}
+
+func runFragmentBackfillPinterestCorpus(args []string) error {
+	fs := flag.NewFlagSet("fragment backfill-pinterest-corpus", flag.ContinueOnError)
+	configPath := fs.String("config", "fragments.example.yaml", "path to config file")
+	limit := fs.Int("limit", 0, "maximum pinterest pin fragments to backfill; 0 = all")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	cfg, err := config.Load(*configPath)
+	if err != nil {
+		return err
+	}
+	instance, err := app.Open(context.Background(), cfg)
+	if err != nil {
+		return err
+	}
+	defer instance.Close()
+
+	result, err := instance.Fragments.BackfillPinterestCorpus(context.Background(), *limit)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("scanned=%d candidates=%d written=%d\n", result.ScannedCount, result.CandidateCount, result.WrittenCount)
+	for _, path := range result.WrittenPaths {
+		fmt.Printf("path=%s\n", path)
 	}
 	return nil
 }

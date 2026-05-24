@@ -135,6 +135,15 @@ func (r *EntityRepository) ListFragments(ctx context.Context, kind, value string
 SELECT
   f.id, f.source, f.source_type, f.source_id, f.title, f.content, f.content_hash,
   f.created_at, f.ingested_at, f.status, f.summary_text, f.indexed_at, f.metadata_json, f.ingest_name, f.canonical_path,
+  (
+    SELECT fa.attachment_id
+    FROM fragment_attachments fa
+    JOIN attachments a ON a.id = fa.attachment_id
+    WHERE fa.fragment_id = f.id
+      AND a.kind = 'image'
+    ORDER BY fa.created_at ASC
+    LIMIT 1
+  ) AS preview_attachment_id,
   fe.confidence
 FROM entities e
 JOIN fragment_entities fe ON fe.entity_id = e.id
@@ -154,11 +163,13 @@ LIMIT ?`, kind, value, limit)
 			createdAt, ingested string
 			indexedAt           string
 			status              string
+			previewAttachmentID sql.NullString
 			confidence          float64
 		)
 		if err := rows.Scan(
 			&f.ID, &f.Source, &f.SourceType, &f.SourceID, &f.Title, &f.Content, &f.ContentHash,
 			&createdAt, &ingested, &status, &f.Summary, &indexedAt, &f.MetadataJSON, &f.IngestName, &f.CanonicalPath,
+			&previewAttachmentID,
 			&confidence,
 		); err != nil {
 			return nil, fmt.Errorf("scan fragment by entity: %w", err)
@@ -169,7 +180,7 @@ LIMIT ?`, kind, value, limit)
 			f.IndexedAt, _ = time.Parse(time.RFC3339, indexedAt)
 		}
 		f.Status = domain.FragmentStatus(status)
-		out = append(out, domain.SearchResult{
+		item := domain.SearchResult{
 			Fragment: f,
 			Score:    confidence,
 			Snippet:  f.Summary,
@@ -179,7 +190,11 @@ LIMIT ?`, kind, value, limit)
 				RelationKind: "entity_match",
 				Reason:       "persisted_entity_match",
 			},
-		})
+		}
+		if previewAttachmentID.Valid {
+			item.PreviewAttachmentID = previewAttachmentID.String
+		}
+		out = append(out, item)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate fragments by entity: %w", err)

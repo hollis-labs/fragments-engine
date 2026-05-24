@@ -58,8 +58,16 @@ export interface FetchFragmentParams {
 }
 
 export interface ReanalyzeFragmentAttachmentsInput {
-  fragmentId: string
-  attachmentId?: string
+	fragmentId: string
+	attachmentId?: string
+}
+
+export interface UpdateFragmentInput {
+	fragmentId: string
+	title?: string
+	summary?: string
+	notes?: string
+	tags?: string[]
 }
 
 export interface FragmentAttachmentURLInput {
@@ -768,6 +776,17 @@ export async function fetchRelatedFragments(params: FetchFragmentParams): Promis
   return data.results.map((item) => normalizeSearchResult(item))
 }
 
+export async function updateFragment(input: UpdateFragmentInput): Promise<FragmentDetail> {
+	const data = await postJson<{ detail: FragmentDetail }>('/v1/fragments/update', {
+		fragment_id: input.fragmentId,
+		title: input.title ?? '',
+		summary: input.summary ?? '',
+		notes: input.notes ?? '',
+		tags: input.tags ?? [],
+	})
+	return mapFragmentDetail(data.detail)
+}
+
 export function fragmentAttachmentURL(input: FragmentAttachmentURLInput): string {
   return buildUrl('/v1/fragments/attachment', {
     fragment_id: input.fragmentId,
@@ -1270,6 +1289,7 @@ export const apiClient = {
   fetchInboxEntities,
   fetchInboxEntityItems,
   fetchFragment,
+  updateFragment,
   fetchRelatedFragments,
   fragmentAttachmentURL,
   reanalyzeFragmentAttachments,

@@ -7,6 +7,7 @@ interface FragmentRowProps {
   onSelect?: (id: string, selected: boolean) => void
   /** Opens the fragment detail modal. */
   onOpen?: (fragmentId: string) => void
+  previewURL?: string
 }
 
 // Descendants marked data-row-interactive own their own clicks and must not
@@ -19,7 +20,7 @@ function shortId(id: string): string {
 }
 
 /** A single inbox fragment row — mirrors Torque's TaskRow. */
-export function FragmentRow({ item, selected, onSelect, onOpen }: FragmentRowProps) {
+export function FragmentRow({ item, selected, onSelect, onOpen, previewURL }: FragmentRowProps) {
   const dateStr = formatShortDate(item.staged_at)
   const agoStr = formatRelativeTime(item.staged_at)
 
@@ -63,27 +64,39 @@ export function FragmentRow({ item, selected, onSelect, onOpen }: FragmentRowPro
       )}
       {/* Title + source / id / reason subtitle */}
       <td className="w-full max-w-0 px-3 py-1.5 text-left align-top">
-        <div className="min-w-0">
-          <span
-            className="block truncate tracking-[.02em] text-text"
-            title={item.title || item.fragment_id}
-          >
-            {item.title || '(untitled fragment)'}
-          </span>
-          <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
-            {item.source_type && (
-              <span className="text-[10px] text-text-subtle/80">{item.source_type}</span>
-            )}
-            <span className="font-mono text-[10px] text-text-subtle/80">id:</span>
-            <CopyableId id={item.fragment_id} label={shortId(item.fragment_id)} />
-            {item.reason && (
-              <>
-                <span className="font-mono text-[10px] text-text-subtle/80">reason:</span>
-                <span className="font-mono text-[10px] text-text-subtle" title={item.reason}>
-                  {item.reason}
-                </span>
-              </>
-            )}
+        <div className="flex min-w-0 items-start gap-3">
+          {previewURL && (
+            <div className="h-16 w-16 shrink-0 overflow-hidden rounded-md border border-border bg-panel-2/60">
+              <img
+                src={previewURL}
+                alt={item.title || item.fragment_id}
+                className="h-full w-full object-cover"
+                loading="lazy"
+              />
+            </div>
+          )}
+          <div className="min-w-0 flex-1">
+            <span
+              className="block truncate tracking-[.02em] text-text"
+              title={item.title || item.fragment_id}
+            >
+              {item.title || '(untitled fragment)'}
+            </span>
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+              {item.source_type && (
+                <span className="text-[10px] text-text-subtle/80">{item.source_type}</span>
+              )}
+              <span className="font-mono text-[10px] text-text-subtle/80">id:</span>
+              <CopyableId id={item.fragment_id} label={shortId(item.fragment_id)} />
+              {item.reason && (
+                <>
+                  <span className="font-mono text-[10px] text-text-subtle/80">reason:</span>
+                  <span className="font-mono text-[10px] text-text-subtle" title={item.reason}>
+                    {item.reason}
+                  </span>
+                </>
+              )}
+            </div>
           </div>
         </div>
       </td>

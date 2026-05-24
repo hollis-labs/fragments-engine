@@ -11,6 +11,7 @@ import {
 } from '@hollis-labs/sysop-ui'
 import FilterBar from '@/components/domain/filter-bar/filter-bar'
 import FragmentTable from '@/components/domain/fragment-table'
+import FragmentGallery from '@/components/domain/fragment-gallery'
 import { FragmentDetailDialog } from '@/components/domain/fragment-detail-dialog'
 import { ApplyRouteDialog } from '@/components/domain/apply-route-dialog'
 import { IntakeDialog } from '@/components/domain/intake-dialog'
@@ -24,8 +25,11 @@ import {
   type EntitySelection,
   type InboxFilters,
   type RouteFilter,
+  type VisualFilter,
 } from '@/lib/inbox-filters-storage'
 import type { InboxEntityGroup, InboxItem, SearchResult } from '@/lib/types'
+
+type ViewMode = 'table' | 'gallery'
 
 function TableSkeleton() {
   return (
@@ -67,6 +71,7 @@ function searchResultToItem(result: SearchResult): InboxItem {
     source_type: f.source_type,
     status: f.status,
     created_at: f.created_at,
+    preview_attachment_id: result.preview_attachment_id,
   }
 }
 
@@ -82,6 +87,7 @@ export default function OperationsPage() {
   const [applyRouteOpen, setApplyRouteOpen] = useState(false)
   const [intakeOpen, setIntakeOpen] = useState(false)
   const [queue, setQueue] = useState<QueueStats | null>(null)
+  const [viewMode, setViewMode] = useState<ViewMode>('table')
 
   // Search-mode controls — only meaningful while a search query is active.
   const [searchSettings, setSearchSettings] = useState<{ mode: SearchMode; limit: number }>({
@@ -188,13 +194,29 @@ export default function OperationsPage() {
   const filtered = useMemo(() => {
     return items.filter((it) => {
       if (filters.statuses.length > 0 && !filters.statuses.includes(it.status)) return false
+      if (filters.visual === 'visual' && !it.preview_attachment_id) return false
+      if (filters.visual === 'pins' && it.source_type !== 'pin') return false
       if (!searchMode) {
         if (filters.route === 'routed' && !it.route_id) return false
         if (filters.route === 'unrouted' && it.route_id) return false
       }
       return true
     })
-  }, [items, filters.statuses, filters.route, searchMode])
+  }, [items, filters.statuses, filters.visual, filters.route, searchMode])
+
+  const previewURL = (item: InboxItem) =>
+    item.preview_attachment_id
+      ? api.fragmentAttachmentURL({
+          fragmentId: item.fragment_id,
+          attachmentId: item.preview_attachment_id,
+          variant: 'preview',
+        })
+      : undefined
+
+  const galleryItems = useMemo(
+    () => filtered.filter((item) => Boolean(item.preview_attachment_id)),
+    [filtered],
+  )
 
   const summaryCards = useMemo(() => {
     const sources = new Set(items.map((i) => i.source).filter(Boolean)).size
@@ -225,6 +247,7 @@ export default function OperationsPage() {
 
   const activeFilterCount =
     (filters.statuses.length > 0 ? 1 : 0) +
+    (filters.visual !== 'all' ? 1 : 0) +
     (!searchMode && filters.route !== 'both' ? 1 : 0) +
     (!searchMode && filters.entity !== null ? 1 : 0)
 
@@ -274,6 +297,30 @@ export default function OperationsPage() {
             <Plus className="h-3.5 w-3.5" />
             Intake
           </Button>
+          <div className="inline-flex overflow-hidden rounded-md border border-border">
+            <button
+              type="button"
+              onClick={() => setViewMode('table')}
+              className={`px-3 py-1.5 text-[11px] uppercase tracking-[.16em] ${
+                viewMode === 'table'
+                  ? 'bg-panel-hover text-text'
+                  : 'bg-panel-2/50 text-text-subtle hover:text-text-soft'
+              }`}
+            >
+              Table
+            </button>
+            <button
+              type="button"
+              onClick={() => setViewMode('gallery')}
+              className={`border-l border-border px-3 py-1.5 text-[11px] uppercase tracking-[.16em] ${
+                viewMode === 'gallery'
+                  ? 'bg-panel-hover text-text'
+                  : 'bg-panel-2/50 text-text-subtle hover:text-text-soft'
+              }`}
+            >
+              Gallery
+            </button>
+          </div>
           <Button variant="outline" size="sm" onClick={() => void refetch()} disabled={isLoading}>
             <RefreshCw className={`h-3.5 w-3.5 ${isLoading ? 'animate-spin' : ''}`} />
             Refresh
@@ -288,6 +335,8 @@ export default function OperationsPage() {
           onStatusToggle={handleStatusToggle}
           routeFilter={filters.route}
           onRouteFilterChange={(route: RouteFilter) => patchFilters({ route })}
+          visualFilter={filters.visual}
+          onVisualFilterChange={(visual: VisualFilter) => patchFilters({ visual })}
           entityGroups={entityGroups}
           entitySelection={filters.entity}
           onEntityChange={(selection) => patchFilters({ entity: selection })}
@@ -344,11 +393,28 @@ export default function OperationsPage() {
               action={{ label: 'Clear filters', onClick: handleClear }}
             />
           </div>
+        ) : viewMode === 'gallery' ? (
+          galleryItems.length === 0 ? (
+            <div className="p-4">
+              <EmptyState
+                variant="no-results"
+                title="No previewable fragments."
+                description="Switch to table view or ingest/review more image-backed fragments."
+              />
+            </div>
+          ) : (
+            <FragmentGallery
+              items={galleryItems}
+              previewURL={previewURL}
+              onOpenFragment={setOpenFragmentId}
+            />
+          )
         ) : (
           <FragmentTable
             items={filtered}
             scrollRootRef={scrollRef}
             onOpenFragment={setOpenFragmentId}
+            previewURL={previewURL}
           />
         )}
 

@@ -7,12 +7,19 @@ const KEY = 'sysop:inbox:filters:v1'
  * - `unrouted` = only fragments still awaiting a route
  */
 export type RouteFilter = 'both' | 'routed' | 'unrouted'
+export type VisualFilter = 'all' | 'visual' | 'pins'
 
 const ROUTE_VALUES: readonly RouteFilter[] = ['both', 'routed', 'unrouted'] as const
+const VISUAL_VALUES: readonly VisualFilter[] = ['all', 'visual', 'pins'] as const
 
 export function parseRouteFilter(raw: unknown): RouteFilter {
   if (typeof raw !== 'string') return 'both'
   return (ROUTE_VALUES as readonly string[]).includes(raw) ? (raw as RouteFilter) : 'both'
+}
+
+export function parseVisualFilter(raw: unknown): VisualFilter {
+  if (typeof raw !== 'string') return 'all'
+  return (VISUAL_VALUES as readonly string[]).includes(raw) ? (raw as VisualFilter) : 'all'
 }
 
 /** Selected entity facet, encoded as `kind` + `value`. */
@@ -30,6 +37,8 @@ export interface InboxFilters {
   route: RouteFilter
   /** Entity facet, or null when unfiltered. */
   entity: EntitySelection | null
+  /** Visual narrowing for image-backed work, including Pinterest pins. */
+  visual: VisualFilter
 }
 
 export const EMPTY_INBOX_FILTERS: InboxFilters = {
@@ -37,6 +46,7 @@ export const EMPTY_INBOX_FILTERS: InboxFilters = {
   statuses: [],
   route: 'both',
   entity: null,
+  visual: 'all',
 }
 
 export function saveInboxFilters(filters: InboxFilters): void {
@@ -69,6 +79,7 @@ export function readInboxFilters(): InboxFilters | null {
       statuses,
       route: parseRouteFilter(f.route),
       entity,
+      visual: parseVisualFilter(f.visual),
     }
   } catch {
     return null

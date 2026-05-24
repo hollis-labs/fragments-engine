@@ -125,6 +125,26 @@ ON CONFLICT(source, source_id, content_hash) DO UPDATE SET
 	return UpsertInserted, nil
 }
 
+func (r *FragmentRepository) UpdateEditableFields(ctx context.Context, fragmentID, title, summary, metadataJSON string) error {
+	_, err := r.db.ExecContext(ctx, `
+UPDATE fragments
+SET title = ?,
+    summary_text = ?,
+    metadata_json = ?,
+    indexed_at = ?
+WHERE id = ?`,
+		title,
+		summary,
+		metadataJSON,
+		time.Now().UTC().Format(time.RFC3339),
+		fragmentID,
+	)
+	if err != nil {
+		return fmt.Errorf("update editable fragment fields: %w", err)
+	}
+	return nil
+}
+
 func (r *FragmentRepository) Search(ctx context.Context, query string, limit int) ([]domain.SearchResult, error) {
 	if limit <= 0 {
 		limit = 10
@@ -133,6 +153,15 @@ func (r *FragmentRepository) Search(ctx context.Context, query string, limit int
 SELECT
   f.id, f.source, f.source_type, f.source_id, f.title, f.content, f.content_hash,
   f.created_at, f.ingested_at, f.status, f.summary_text, f.indexed_at, f.metadata_json, f.ingest_name, f.canonical_path,
+  (
+    SELECT fa.attachment_id
+    FROM fragment_attachments fa
+    JOIN attachments a ON a.id = fa.attachment_id
+    WHERE fa.fragment_id = f.id
+      AND a.kind = 'image'
+    ORDER BY fa.created_at ASC
+    LIMIT 1
+  ) AS preview_attachment_id,
   bm25(fragments_fts) AS rank,
   snippet(fragments_fts, 2, '[', ']', ' … ', 18) AS snippet
 FROM fragments_fts
@@ -152,6 +181,7 @@ LIMIT ?`, query, limit)
 			createdAt, ingested string
 			indexedAt           string
 			status              string
+			previewAttachmentID sql.NullString
 			rank                float64
 			snippet             string
 		)
@@ -171,6 +201,7 @@ LIMIT ?`, query, limit)
 			&f.MetadataJSON,
 			&f.IngestName,
 			&f.CanonicalPath,
+			&previewAttachmentID,
 			&rank,
 			&snippet,
 		); err != nil {
@@ -182,7 +213,7 @@ LIMIT ?`, query, limit)
 			f.IndexedAt, _ = time.Parse(time.RFC3339, indexedAt)
 		}
 		f.Status = domain.FragmentStatus(status)
-		results = append(results, domain.SearchResult{
+		item := domain.SearchResult{
 			Fragment: f,
 			Score:    -rank,
 			Snippet:  snippet,
@@ -191,7 +222,11 @@ LIMIT ?`, query, limit)
 				Strategy: "fts",
 				Reason:   "sqlite_fts_match",
 			},
-		})
+		}
+		if previewAttachmentID.Valid {
+			item.PreviewAttachmentID = previewAttachmentID.String
+		}
+		results = append(results, item)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate search results: %w", err)
@@ -382,9 +417,11 @@ WHERE id = ?`, fragmentID).Scan(
 
 // ListOptions filters and paginates FragmentRepository.List.
 type ListOptions struct {
-	Status domain.FragmentStatus // optional; empty = all statuses
-	Limit  int                   // defaults to 50, capped at 200
-	Offset int
+	Status     domain.FragmentStatus // optional; empty = all statuses
+	Source     string                // optional; empty = all sources
+	SourceType string                // optional; empty = all source types
+	Limit      int                   // defaults to 50, capped at 200
+	Offset     int
 }
 
 // List returns fragments newest-first, optionally filtered by status, plus the
@@ -403,12 +440,24 @@ func (r *FragmentRepository) List(ctx context.Context, opts ListOptions) ([]doma
 	}
 
 	var (
-		where string
-		args  []any
+		clauses []string
+		args    []any
+		where   string
 	)
 	if opts.Status != "" {
-		where = " WHERE status = ?"
+		clauses = append(clauses, "status = ?")
 		args = append(args, opts.Status)
+	}
+	if strings.TrimSpace(opts.Source) != "" {
+		clauses = append(clauses, "source = ?")
+		args = append(args, strings.TrimSpace(opts.Source))
+	}
+	if strings.TrimSpace(opts.SourceType) != "" {
+		clauses = append(clauses, "source_type = ?")
+		args = append(args, strings.TrimSpace(opts.SourceType))
+	}
+	if len(clauses) > 0 {
+		where = " WHERE " + strings.Join(clauses, " AND ")
 	}
 
 	var total int
@@ -487,6 +536,15 @@ func (r *FragmentRepository) ListRelated(ctx context.Context, fragmentID string,
 SELECT
   f.id, f.source, f.source_type, f.source_id, f.title, f.content, f.content_hash,
   f.created_at, f.ingested_at, f.status, f.summary_text, f.indexed_at, f.metadata_json, f.ingest_name, f.canonical_path,
+  (
+    SELECT fa.attachment_id
+    FROM fragment_attachments fa
+    JOIN attachments a ON a.id = fa.attachment_id
+    WHERE fa.fragment_id = f.id
+      AND a.kind = 'image'
+    ORDER BY fa.created_at ASC
+    LIMIT 1
+  ) AS preview_attachment_id,
   l.kind, l.score, l.metadata_json
 FROM fragment_links l
 JOIN fragments f ON f.id = l.related_fragment_id
@@ -505,6 +563,7 @@ LIMIT ?`, fragmentID, limit)
 			createdAt, ingested string
 			indexedAt           string
 			status              string
+			previewAttachmentID sql.NullString
 			kind                string
 			score               float64
 			relationMeta        string
@@ -512,6 +571,7 @@ LIMIT ?`, fragmentID, limit)
 		if err := rows.Scan(
 			&f.ID, &f.Source, &f.SourceType, &f.SourceID, &f.Title, &f.Content, &f.ContentHash,
 			&createdAt, &ingested, &status, &f.Summary, &indexedAt, &f.MetadataJSON, &f.IngestName, &f.CanonicalPath,
+			&previewAttachmentID,
 			&kind, &score, &relationMeta,
 		); err != nil {
 			return nil, fmt.Errorf("scan related fragment: %w", err)
@@ -522,7 +582,7 @@ LIMIT ?`, fragmentID, limit)
 			f.IndexedAt, _ = time.Parse(time.RFC3339, indexedAt)
 		}
 		f.Status = domain.FragmentStatus(status)
-		results = append(results, domain.SearchResult{
+		item := domain.SearchResult{
 			Fragment: f,
 			Score:    score,
 			Snippet:  f.Summary,
@@ -533,7 +593,11 @@ LIMIT ?`, fragmentID, limit)
 				Reason:       "deterministic_relation_match",
 				MetadataJSON: relationMeta,
 			},
-		})
+		}
+		if previewAttachmentID.Valid {
+			item.PreviewAttachmentID = previewAttachmentID.String
+		}
+		results = append(results, item)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate related fragments: %w", err)

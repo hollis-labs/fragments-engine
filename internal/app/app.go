@@ -83,6 +83,7 @@ func Open(ctx context.Context, cfg config.Config) (*App, error) {
 	routingSvc.SetAttachmentRepository(attachmentRepo)
 	visionAnalyzer := analyze.NewVisionAnalyzer(cfg.Analysis.Attachments)
 	manualEnricher := service.NewManualIntakeEnricher(visionAnalyzer, cfg.Reviewer.DownloadRoot)
+	corpusWriter := service.NewPinterestCorpusWriter(cfg.Reviewer.CorpusRoot)
 	manualEnricher.SetGitHubToken(os.Getenv(strings.TrimSpace(cfg.Reviewer.GitHubTokenEnv)))
 	stackExplorerClient := service.NewStackExplorerClient(cfg.Reviewer.StackExplorerAPIBase)
 	pipeline := ingest.NewPipeline(fragmentRepo, visionAnalyzer, []ingest.Stage{
@@ -95,7 +96,7 @@ func Open(ctx context.Context, cfg config.Config) (*App, error) {
 	return &App{
 		store:           st,
 		recall:          recallIndex,
-		Fragments:       service.NewFragmentService(fragmentRepo, entityRepo, attachmentRepo, routingRepo, recallIndex, pipeline, visionAnalyzer, manualEnricher),
+		Fragments:       service.NewFragmentService(fragmentRepo, entityRepo, attachmentRepo, routingRepo, recallIndex, pipeline, visionAnalyzer, manualEnricher, corpusWriter),
 		Inbox:           service.NewInboxService(inboxRepo),
 		Routing:         routingSvc,
 		Queue:           deliveryQueue,
@@ -107,6 +108,7 @@ func Open(ctx context.Context, cfg config.Config) (*App, error) {
 			attachmentRepo,
 			inboxRepo,
 			manualEnricher,
+			corpusWriter,
 			stackExplorerClient,
 			cfg.Reviewer.StackExplorerScan,
 		),

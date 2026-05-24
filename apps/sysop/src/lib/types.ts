@@ -90,6 +90,7 @@ export interface SearchResult {
   score: number
   snippet: string
   recall_trace: RecallTrace
+  preview_attachment_id?: string
 }
 
 /**
@@ -107,6 +108,7 @@ export interface InboxItem {
   source_type: string
   status: string
   created_at: ISODateString
+  preview_attachment_id?: string
 }
 
 export interface InboxEntityGroup {

@@ -34,6 +34,7 @@ make test
 go run ./cmd/fragments-engine init
 go run ./cmd/fragments-engine ingest run -config ./fragments.yaml
 go run ./cmd/fragments-engine search -q "project roadmap"
+go run ./cmd/fragments-engine fragment backfill-pinterest-corpus -config ./fragments.yaml
 ```
 
 ## Configuration
@@ -77,6 +78,7 @@ reviewer:
   poll_interval_seconds: 300
   batch_size: 10
   download_root: ./data/inbox-reviewer
+  corpus_root: ~/Documents/corpus/visuals/pinterest
   github_token_env: GITHUB_TOKEN
   stack_explorer_api_base: http://localhost:8081
   stack_explorer_scan: se-repo-scan
