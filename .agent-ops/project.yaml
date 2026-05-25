@@ -35,7 +35,7 @@ docs:
   adrs: null                         # no docs/adrs/ directory yet
   roadmap: docs/roadmap.md
 roadmap:
-  current_phase: 'Phase 1 — Attachment Planning (multimodal foundation landed; sysop GUI shell phase 1 in progress)'
+  current_phase: 'Phase 5 — FFS Library and Virtual Filesystem (in progress)'
   pointer: null
 usage_examples:
   - intent: Run the test suite

@@ -19,6 +19,11 @@ FE already has:
 - a vendored Sysop shell for operator workflows
 - multimodal attachment enrichment with deterministic and provider-backed image analysis
 - explicit attachment reanalysis flows through CLI, API, and MCP
+- domain-aware inbox review for GitHub repos and Pinterest pins
+- Stack Explorer sync/scan integration for reviewed GitHub repo fragments
+- FFS file destinations and inbox-preserving materialization
+- direct sysop `Save to FFS` for notes, quotes, reports, pins, and references
+- a sysop Library page for folder-like browsing over processed fragments
 
 ## Reality Check
 
@@ -34,6 +39,11 @@ already acts as:
 That means the next meaningful work is less about proving FE can ingest/store
 fragments and more about making inbox review and downstream automation match
 real operator usage.
+
+As of the latest FFS work, FE is also becoming the user's virtual filesystem for
+high-value saved information. The filesystem output under `~/Documents/ffs` is
+the durable human-readable layer; FE remains the canonical metadata, recall,
+provenance, and routing layer.
 
 ## Phase 1: Attachment Planning
 
@@ -64,7 +74,8 @@ Current delivered foundation:
 - FE now stores FE-owned image analysis summaries/tags/signals as part of that baseline
 - FE now supports provider-backed image analysis through a provider adapter layer with OpenAI and Ollama implementations
 - FE now supports attachment reanalysis without requiring full fragment reingest
-- FE now has the deterministic building blocks needed for image-centric inbox workflows, but not yet the operator-facing Pinterest-style fetch/index/preview flow
+- FE now has the deterministic building blocks needed for image-centric inbox workflows
+- Pinterest pins now have the first operator-facing fetch/index/preview/export flow through reviewer automation, corpus bundles, and the sysop Library
 
 ## Phase 2: Attachment Ingest
 
@@ -111,8 +122,8 @@ Current delivered foundation:
 
 Observed current gap from operator usage:
 
-- manual single-URL saves still land mostly as flat `manual/url` fragments with little structured extraction unless they are later reprocessed through a richer source path
-- inspiration/image saves such as Pinterest pins are not yet fetched into FE-owned local media/preview records
+- manual single-URL saves still need richer domain-specific extraction beyond the GitHub/Pinterest cases
+- output bundle paths are now written for FFS materialization, but browse rows do not yet expose those output refs directly
 
 Follow-on:
 
@@ -137,13 +148,42 @@ Likely additions:
 
 Near-term usage-driven additions now suggested by the live inbox:
 
-- chronological inbox review so earlier richly tagged examples can inform later sparse saves
-- domain-aware review behaviors for common save patterns such as GitHub repos, Pinterest pins, Reddit discussions, and docs/blog links
-- first-class manual-intake enrichment so tags, normalized destination hints, and URL/repo/media metadata land at intake time instead of staying implicit in free text
-- preview-friendly image workflows for inspiration saves
+- continue chronological/domain-aware inbox review now that GitHub repos and Pinterest pins have first working paths
+- expand domain-aware review to Reddit discussions, docs/blog links, PDFs, videos, and references
+- make notes, quotes, and reports first-class creation flows instead of relying on manual source-type selection
+- add bulk materialization and repair/backfill controls for FFS bundles
 - scheduled inbox-review agents that propose actions rather than only waiting for manual triage
 
-## Phase 5: Recall Expansion
+## Phase 5: FFS Library and Virtual Filesystem
+
+Goal:
+
+- make FE the finder and virtual filesystem for the material the user cares
+  about most, while keeping the on-disk FFS layout understandable without FE
+
+Current delivered foundation:
+
+- chosen root: `~/Documents/ffs`
+- namespace: `docs`, `media`, `artifacts`, `views`, and `inbox`
+- Pinterest pins materialize under `media/pins`
+- references materialize under `docs/references`
+- notes, quotes, and reports materialize under `docs/notes`, `docs/quotes`, and
+  `docs/reports`
+- sysop Library browses processed fragments with list/card modes, sorting,
+  search, filters, virtual folders, and fragment previews
+
+Next capabilities:
+
+- expose materialized output refs directly in `/v1/fragments/browse`
+- derive Library folder paths from backend/output state instead of frontend-only
+  source-type inference
+- add saved Library views for common roots such as `docs/notes`,
+  `docs/references`, and `media/pins`
+- add bulk materialization from Library folders and filtered sets
+- add FFS repair/backfill commands that can rewrite bundles without touching
+  user metadata
+
+## Phase 6: Recall Expansion
 
 Goal:
 
@@ -157,7 +197,7 @@ Likely additions:
 - better related-fragment reasoning that shows durable edges and retrieval-time signals together
 - richer embedded Vanta indexing once new fragment types arrive
 
-## Phase 6: External Integration Depth
+## Phase 7: External Integration Depth
 
 Goal:
 

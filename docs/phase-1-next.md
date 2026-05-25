@@ -1,49 +1,48 @@
-# Fragments Engine — Phase 1 Next
+# Fragments Engine — Current Next
 
-This repo now has the first deterministic core:
+The original Phase 1 recall and routing foundations have landed. FE now has a
+working local-first core, attachment-aware enrichment, reviewer automation,
+transport destinations, queue controls, FFS materialization, and a sysop Library
+browser.
 
-- SQLite store with embedded migrations
-- canonical fragment repository
-- pipeline-oriented ingest service
-- Claude Code connector
-- FE-owned inbox, routing, route-log, and external destination model
-- FTS-backed search
-- `file` destination execution
-- thin CLI, HTTP API, and MCP wrappers over the same service layer
-- end-to-end ingest/search integration coverage for the Claude v0 path
+## Immediate Product Direction
 
-## Immediate next phase
+Treat FE as the virtual filesystem and finder for high-value saved fragments.
 
-1. Add an FE-owned recall/index interface and keep SQLite FTS as the current implementation
-2. Add relationship/link tables plus summary/cache fields
-3. Index fragments into FE's own recall layer, not just route them outward
-4. Add destination config types and execution skeletons for `api`, `mcp`, and `cli`
-5. Add a second connector for ChatGPT export once the export format is confirmed
-6. Decide whether embedded Vanta should become a later internal implementation of the FE recall/index interface for hybrid recall and embeddings
+The active next phase is to make the FFS/Library workflow feel more like a
+coherent filesystem while keeping FE as the source of truth for provenance,
+metadata, search, and routing.
 
-## Internal Recall Shape
+## Current Delivered Foundation
 
-Keep the service contracts FE-owned and add an internal recall interface behind them:
+- canonical fragment persistence, inbox state, routing, route log, and recall
+- manual intake and editable manual fragments
+- URL, Claude, ChatGPT, filesystem docs, and git changes ingest
+- first-class attachments with extraction, previews, OCR, and optional vision
+- Pinterest review with image download and preview generation
+- GitHub repo review and Stack Explorer sync/scan integration
+- transport destinations: `file`, `api`, `mcp`, `cli`
+- delivery queue controls and destination health/status surfaces
+- FFS file destinations and inbox-preserving materialization
+- direct sysop `Save to FFS` for `note`, `quote`, `report`, `pin`, and
+  `reference`
+- sysop Library page with folder-like browsing over processed fragments
 
-```go
-type RecallIndexer interface {
-    IndexFragment(ctx context.Context, fragment domain.Fragment) error
-    Search(ctx context.Context, query string, limit int) ([]domain.SearchResult, error)
-    Related(ctx context.Context, fragmentID string, limit int) ([]domain.SearchResult, error)
-}
-```
+## Next Build Tasks
 
-SQLite can satisfy this first. An embedded Vanta-backed implementation can be introduced later without changing CLI/API/MCP entry points.
+1. Move Library virtual-path derivation closer to backend data by exposing
+   materialized output refs in browse rows.
+2. Make Library folders first-class enough for saved views and direct links.
+3. Add bulk materialization from Library filters and folders.
+4. Add repair/backfill commands for FFS output bundles.
+5. Add first-class creation flows for notes, quotes, and reports so users do not
+   have to manually select source types every time.
 
-## Schema additions expected soon
+## Quality Follow-ups
 
-- `classifiers`
-- relationship/link tables
-- summary/cache fields
-- indexing metadata tables as needed by the internal recall subsystem
+- add tests around `/v1/fragments/browse` folder path metadata once that moves
+  backend-side
+- split the sysop bundle if the Library surface keeps growing
+- document the FFS namespace as an explicit product contract
+- add ADRs for the FFS writer/router boundary and the sysop Library model
 
-## Quality follow-ups
-
-- add ADRs for service boundaries and the transport-wrapper rule
-- expand `make lint` to the portfolio baseline once external tools are standardized here
-- add integration tests for destination execution failure paths and future destination kinds
