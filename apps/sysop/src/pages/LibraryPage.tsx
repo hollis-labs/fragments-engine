@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState } from 'react'
 import {
   Copy,
   FileText,
+  Folder,
+  FolderOpen,
   Image as ImageIcon,
   Quote,
   RefreshCw,
@@ -29,6 +31,22 @@ type KindFilter = 'all' | 'note' | 'quote' | 'report' | 'pin' | 'reference'
 type SortMode = 'modified_desc' | 'created_desc' | 'title_asc'
 type VisualFilter = 'all' | 'visual' | 'pins'
 type MaterializedFilter = 'all' | 'pending' | 'materialized'
+
+interface BrowserFolder {
+  kind: 'folder'
+  path: string
+  name: string
+  count: number
+  previewCount: number
+  modifiedAt: string
+}
+
+interface BrowserFile {
+  kind: 'file'
+  item: FragmentBrowseItem
+}
+
+type BrowserEntry = BrowserFolder | BrowserFile
 
 function matchesSearch(item: FragmentBrowseItem, query: string): boolean {
   const probe = [
@@ -95,116 +113,261 @@ function copyText(value: string) {
   void navigator.clipboard?.writeText(value)
 }
 
-function LibraryList({
-  items,
-  previewURL,
-  onOpen,
-}: {
-  items: FragmentBrowseItem[]
-  previewURL: (item: FragmentBrowseItem) => string | undefined
-  onOpen: (fragmentId: string) => void
-}) {
+function virtualPath(item: FragmentBrowseItem): string {
+  if (!item.materialized) {
+    return ['inbox', item.source || 'manual', item.source_type || 'fragment', item.title || item.fragment_id].join('/')
+  }
+  switch (kindOf(item)) {
+    case 'note':
+      return `docs/notes/${item.title || item.fragment_id}`
+    case 'quote':
+      return `docs/quotes/${item.title || item.fragment_id}`
+    case 'report':
+      return `docs/reports/${item.title || item.fragment_id}`
+    case 'pin':
+      return `media/pins/${item.title || item.source_id || item.fragment_id}`
+    case 'reference':
+      return `docs/references/${item.title || item.source_id || item.fragment_id}`
+    default:
+      return `docs/references/${item.title || item.source_id || item.fragment_id}`
+  }
+}
+
+function pathSegments(path: string): string[] {
+  return path.split('/').map((segment) => segment.trim()).filter(Boolean)
+}
+
+function childEntries(items: FragmentBrowseItem[], currentPath: string): BrowserEntry[] {
+  const current = pathSegments(currentPath)
+  const folders = new Map<string, BrowserFolder>()
+  const files: BrowserFile[] = []
+
+  for (const item of items) {
+    const segments = pathSegments(virtualPath(item))
+    const matchesCurrent = current.every((segment, index) => segments[index] === segment)
+    if (!matchesCurrent) continue
+
+    if (segments.length > current.length + 1) {
+      const name = segments[current.length]
+      const path = [...current, name].join('/')
+      const existing = folders.get(path)
+      if (existing) {
+        existing.count += 1
+        existing.previewCount += previewable(item) ? 1 : 0
+        if (item.modified_at > existing.modifiedAt) existing.modifiedAt = item.modified_at
+      } else {
+        folders.set(path, {
+          kind: 'folder',
+          path,
+          name,
+          count: 1,
+          previewCount: previewable(item) ? 1 : 0,
+          modifiedAt: item.modified_at,
+        })
+      }
+      continue
+    }
+
+    if (segments.length === current.length + 1) {
+      files.push({ kind: 'file', item })
+    }
+  }
+
+  return [
+    ...[...folders.values()].sort((a, b) => a.name.localeCompare(b.name)),
+    ...files,
+  ]
+}
+
+function FolderSummary({ folder }: { folder: BrowserFolder }) {
   return (
-    <div className="overflow-x-auto">
-      <table className="w-full min-w-[880px]">
-        <thead className="border-b border-border-strong text-[10px] uppercase tracking-[.18em] text-text-subtle">
-          <tr>
-            <th className="px-4 py-2 text-left font-medium">Name</th>
-            <th className="px-3 py-2 text-left font-medium">Type</th>
-            <th className="px-3 py-2 text-left font-medium">Tags</th>
-            <th className="px-3 py-2 text-left font-medium">Modified</th>
-            <th className="px-3 py-2 text-left font-medium">Path</th>
-          </tr>
-        </thead>
-        <tbody className="divide-y divide-border-soft">
-          {items.map((item) => {
-            const Icon = typeIcon(item)
-            return (
-              <tr
-                key={item.fragment_id}
-                className="cursor-pointer bg-bg transition hover:bg-panel-hover/50"
-                onClick={() => onOpen(item.fragment_id)}
-              >
-                <td className="px-4 py-2">
-                  <div className="flex items-center gap-3">
-                    <div className="flex h-10 w-10 items-center justify-center overflow-hidden rounded-md border border-border bg-panel-2/50">
-                      {previewURL(item) ? (
-                        <img
-                          src={previewURL(item)}
-                          alt={item.title || item.fragment_id}
-                          className="h-full w-full object-cover"
-                          loading="lazy"
-                        />
-                      ) : (
-                        <Icon className="h-4 w-4 text-text-subtle" />
-                      )}
-                    </div>
-                    <div className="min-w-0">
-                      <p className="truncate text-[13px] text-text">{item.title || '(untitled fragment)'}</p>
-                      <p className="truncate text-[11px] text-text-subtle">{item.summary || item.fragment_id}</p>
-                    </div>
-                  </div>
-                </td>
-                <td className="px-3 py-2 text-[11px] uppercase tracking-[.14em] text-text-soft">
-                  {item.source_type || item.source}
-                </td>
-                <td className="px-3 py-2">
-                  <div className="flex max-w-72 flex-wrap gap-1">
-                    {(item.tags ?? []).slice(0, 4).map((tag) => (
-                      <span
-                        key={tag}
-                        className="rounded border border-border bg-panel-2/50 px-1.5 py-0.5 text-[10px] text-text-soft"
-                      >
-                        {tag}
-                      </span>
-                    ))}
-                  </div>
-                </td>
-                <td className="px-3 py-2 text-[11px] text-text-soft">
-                  <div>{formatShortDate(item.modified_at)}</div>
-                  <div className="text-text-subtle">{formatRelativeTime(item.modified_at)}</div>
-                </td>
-                <td className="px-3 py-2">
-                  <button
-                    type="button"
-                    onClick={(event) => {
-                      event.stopPropagation()
-                      copyText(item.canonical_path)
-                    }}
-                    className="inline-flex items-center gap-1 rounded border border-border bg-panel-2/50 px-2 py-1 font-mono text-[10px] text-text-subtle transition hover:text-text"
-                  >
-                    <Copy className="h-3 w-3" />
-                    <span className="max-w-64 truncate">{item.canonical_path || item.source_id}</span>
-                  </button>
-                </td>
-              </tr>
-            )
-          })}
-        </tbody>
-      </table>
+    <div className="flex flex-wrap items-center gap-2 text-[11px] text-text-subtle">
+      <span>{folder.count} item{folder.count === 1 ? '' : 's'}</span>
+      <span>{folder.previewCount} preview{folder.previewCount === 1 ? '' : 's'}</span>
+      {folder.modifiedAt && (
+        <span>
+          modified {formatShortDate(folder.modifiedAt)} · {formatRelativeTime(folder.modifiedAt)}
+        </span>
+      )}
     </div>
   )
 }
 
-function LibraryCards({
-  items,
-  previewURL,
-  onOpen,
+function LibraryBreadcrumb({
+  currentPath,
+  onNavigate,
 }: {
-  items: FragmentBrowseItem[]
+  currentPath: string
+  onNavigate: (path: string) => void
+}) {
+  const segments = pathSegments(currentPath)
+  return (
+    <div className="flex flex-wrap items-center gap-1 border-b border-border-soft bg-panel-2/20 px-4 py-2 text-[11px] uppercase tracking-[.14em] text-text-subtle">
+      <button
+        type="button"
+        onClick={() => onNavigate('')}
+        className={`rounded px-2 py-1 transition hover:bg-panel-hover hover:text-text ${
+          segments.length === 0 ? 'bg-panel-hover text-text' : ''
+        }`}
+      >
+        ffs
+      </button>
+      {segments.map((segment, index) => {
+        const path = segments.slice(0, index + 1).join('/')
+        return (
+          <span key={path} className="inline-flex items-center gap-1">
+            <span className="text-text-subtle/60">/</span>
+            <button
+              type="button"
+              onClick={() => onNavigate(path)}
+              className={`rounded px-2 py-1 transition hover:bg-panel-hover hover:text-text ${
+                index === segments.length - 1 ? 'bg-panel-hover text-text' : ''
+              }`}
+            >
+              {segment}
+            </button>
+          </span>
+        )
+      })}
+    </div>
+  )
+}
+
+function LibraryListView({
+  entries,
+  previewURL,
+  onOpenFile,
+  onOpenFolder,
+}: {
+  entries: BrowserEntry[]
   previewURL: (item: FragmentBrowseItem) => string | undefined
-  onOpen: (fragmentId: string) => void
+  onOpenFile: (fragmentId: string) => void
+  onOpenFolder: (path: string) => void
+}) {
+  return (
+    <div className="flex flex-col divide-y divide-border-soft">
+      {entries.map((entry) => {
+        if (entry.kind === 'folder') {
+          return (
+            <button
+              key={`folder:${entry.path}`}
+              type="button"
+              onClick={() => onOpenFolder(entry.path)}
+              className="flex items-center gap-3 bg-bg px-4 py-3 text-left transition hover:bg-panel-hover/50"
+            >
+              <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-md border border-border bg-panel-2/50">
+                <Folder className="h-5 w-5 text-text-soft" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-[14px] text-text">{entry.name}</p>
+                <FolderSummary folder={entry} />
+              </div>
+              <span className="font-mono text-[10px] uppercase tracking-[.14em] text-text-subtle">
+                {entry.path}
+              </span>
+            </button>
+          )
+        }
+        const item = entry.item
+        const Icon = typeIcon(item)
+        const image = previewURL(item)
+        return (
+          <button
+            key={`file:${item.fragment_id}`}
+            type="button"
+            onClick={() => onOpenFile(item.fragment_id)}
+            className="flex items-center gap-3 bg-bg px-4 py-3 text-left transition hover:bg-panel-hover/50"
+          >
+            <div className="flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-md border border-border bg-panel-2/50">
+              {image ? (
+                <img
+                  src={image}
+                  alt={item.title || item.fragment_id}
+                  className="h-full w-full object-cover"
+                  loading="lazy"
+                />
+              ) : (
+                <Icon className="h-5 w-5 text-text-subtle" />
+              )}
+            </div>
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-[14px] text-text">{item.title || '(untitled fragment)'}</p>
+              <div className="flex flex-wrap items-center gap-2 text-[11px] text-text-subtle">
+                <span>{item.source_type || item.source}</span>
+                <span>{formatShortDate(item.modified_at)} · {formatRelativeTime(item.modified_at)}</span>
+                {item.materialized && <span className="text-status-routed">saved</span>}
+              </div>
+            </div>
+            <div className="hidden max-w-[26rem] flex-wrap justify-end gap-1 md:flex">
+              {(item.tags ?? []).slice(0, 5).map((tag) => (
+                <span
+                  key={tag}
+                  className="rounded border border-border bg-panel-2/50 px-1.5 py-0.5 text-[10px] text-text-soft"
+                >
+                  {tag}
+                </span>
+              ))}
+            </div>
+            <button
+              type="button"
+              onClick={(event) => {
+                event.stopPropagation()
+                copyText(item.canonical_path || virtualPath(item))
+              }}
+              className="inline-flex items-center gap-1 rounded border border-border bg-panel-2/50 px-2 py-1 font-mono text-[10px] text-text-subtle transition hover:text-text"
+              title="Copy path"
+            >
+              <Copy className="h-3 w-3" />
+            </button>
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
+function LibraryCardView({
+  entries,
+  previewURL,
+  onOpenFile,
+  onOpenFolder,
+}: {
+  entries: BrowserEntry[]
+  previewURL: (item: FragmentBrowseItem) => string | undefined
+  onOpenFile: (fragmentId: string) => void
+  onOpenFolder: (path: string) => void
 }) {
   return (
     <div className="flex flex-col gap-3 p-4">
-      {items.map((item) => {
+      {entries.map((entry) => {
+        if (entry.kind === 'folder') {
+          return (
+            <button
+              key={`folder:${entry.path}`}
+              type="button"
+              onClick={() => onOpenFolder(entry.path)}
+              className="group flex overflow-hidden rounded-md border border-border bg-panel-2/40 text-left transition hover:border-border-strong hover:bg-panel-hover/50"
+            >
+              <div className="flex h-28 w-40 shrink-0 items-center justify-center border-r border-border bg-bg">
+                <FolderOpen className="h-8 w-8 text-text-soft" />
+              </div>
+              <div className="flex min-w-0 flex-1 flex-col gap-2 p-4">
+                <div className="text-[10px] uppercase tracking-[.16em] text-text-subtle">folder</div>
+                <p className="truncate text-[15px] text-text">{entry.name}</p>
+                <FolderSummary folder={entry} />
+                <span className="mt-auto truncate font-mono text-[11px] text-text-subtle">{entry.path}</span>
+              </div>
+            </button>
+          )
+        }
+        const item = entry.item
         const Icon = typeIcon(item)
         return (
           <button
             key={item.fragment_id}
             type="button"
-            onClick={() => onOpen(item.fragment_id)}
-            className="group flex overflow-hidden rounded-xl border border-border bg-panel-2/40 text-left transition hover:border-border-strong hover:bg-panel-hover/50"
+            onClick={() => onOpenFile(item.fragment_id)}
+            className="group flex overflow-hidden rounded-md border border-border bg-panel-2/40 text-left transition hover:border-border-strong hover:bg-panel-hover/50"
           >
             <div className="flex h-28 w-40 shrink-0 items-center justify-center overflow-hidden border-r border-border bg-bg">
               {previewURL(item) ? (
@@ -264,6 +427,7 @@ export default function LibraryPage() {
   const [viewMode, setViewMode] = useState<ViewMode>('list')
   const [sortMode, setSortMode] = useState<SortMode>('modified_desc')
   const [kindFilter, setKindFilter] = useState<KindFilter>('all')
+  const [currentPath, setCurrentPath] = useState('')
   const [search, setSearch] = useState('')
   const [statuses, setStatuses] = useState<string[]>([])
   const [visualFilter, setVisualFilter] = useState<VisualFilter>('all')
@@ -304,6 +468,15 @@ export default function LibraryPage() {
     })
     return sortItems(searched, sortMode)
   }, [items, kindFilter, materializedFilter, search, sortMode, statuses, visualFilter])
+
+  useEffect(() => {
+    setCurrentPath('')
+  }, [kindFilter, materializedFilter, search, statuses, visualFilter])
+
+  const entries = useMemo(
+    () => childEntries(filtered, currentPath),
+    [currentPath, filtered],
+  )
 
   const previewURL = (item: FragmentBrowseItem) =>
     item.preview_attachment_id
@@ -395,42 +568,41 @@ export default function LibraryPage() {
           </div>
         </PageHeader>
       }
+      summary={!loading && !error ? <SummaryCards cards={summaryCards} /> : undefined}
+      filters={
+        <FilterBar
+          availableStatuses={availableStatuses}
+          activeStatuses={statuses}
+          onStatusToggle={(status) =>
+            setStatuses((current) =>
+              current.includes(status) ? current.filter((item) => item !== status) : [...current, status],
+            )
+          }
+          routeFilter="both"
+          onRouteFilterChange={() => {}}
+          visualFilter={visualFilter}
+          onVisualFilterChange={setVisualFilter}
+          materializedFilter={materializedFilter}
+          onMaterializedFilterChange={setMaterializedFilter}
+          entityGroups={[]}
+          entitySelection={null}
+          onEntityChange={() => {}}
+          searchQuery={search}
+          onSearchChange={setSearch}
+          searchMatchCount={filtered.length}
+          activeFilterCount={activeFilterCount}
+          onClear={() => {
+            setSearch('')
+            setStatuses([])
+            setVisualFilter('all')
+            setMaterializedFilter('all')
+            setKindFilter('all')
+            setCurrentPath('')
+          }}
+        />
+      }
     >
       <>
-        <div className="border-b border-border-strong px-4 py-4">
-          <SummaryCards cards={summaryCards} />
-        </div>
-        <div className="border-b border-border-strong px-4 py-4">
-          <FilterBar
-            availableStatuses={availableStatuses}
-            activeStatuses={statuses}
-            onStatusToggle={(status) =>
-              setStatuses((current) =>
-                current.includes(status) ? current.filter((item) => item !== status) : [...current, status],
-              )
-            }
-            routeFilter="both"
-            onRouteFilterChange={() => {}}
-            visualFilter={visualFilter}
-            onVisualFilterChange={setVisualFilter}
-            materializedFilter={materializedFilter}
-            onMaterializedFilterChange={setMaterializedFilter}
-            entityGroups={[]}
-            entitySelection={null}
-            onEntityChange={() => {}}
-            searchQuery={search}
-            onSearchChange={setSearch}
-            searchMatchCount={filtered.length}
-            activeFilterCount={activeFilterCount}
-            onClear={() => {
-              setSearch('')
-              setStatuses([])
-              setVisualFilter('all')
-              setMaterializedFilter('all')
-              setKindFilter('all')
-            }}
-          />
-        </div>
         {loading ? (
           <div className="flex flex-col gap-2 p-4">
             {Array.from({ length: 6 }).map((_, i) => (
@@ -439,7 +611,7 @@ export default function LibraryPage() {
           </div>
         ) : error ? (
           <p className="p-4 text-sm text-danger-soft">{error}</p>
-        ) : filtered.length === 0 ? (
+        ) : filtered.length === 0 || entries.length === 0 ? (
           <div className="p-4">
             <EmptyState
               variant="no-results"
@@ -448,9 +620,25 @@ export default function LibraryPage() {
             />
           </div>
         ) : viewMode === 'list' ? (
-          <LibraryList items={filtered} previewURL={previewURL} onOpen={setOpenFragmentId} />
+          <>
+            <LibraryBreadcrumb currentPath={currentPath} onNavigate={setCurrentPath} />
+            <LibraryListView
+              entries={entries}
+              previewURL={previewURL}
+              onOpenFile={setOpenFragmentId}
+              onOpenFolder={setCurrentPath}
+            />
+          </>
         ) : (
-          <LibraryCards items={filtered} previewURL={previewURL} onOpen={setOpenFragmentId} />
+          <>
+            <LibraryBreadcrumb currentPath={currentPath} onNavigate={setCurrentPath} />
+            <LibraryCardView
+              entries={entries}
+              previewURL={previewURL}
+              onOpenFile={setOpenFragmentId}
+              onOpenFolder={setCurrentPath}
+            />
+          </>
         )}
         <FragmentDetailDialog fragmentId={openFragmentId} onClose={() => setOpenFragmentId(null)} />
       </>

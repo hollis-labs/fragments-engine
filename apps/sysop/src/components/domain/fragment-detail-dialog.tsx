@@ -433,6 +433,16 @@ function DetailBody({
   const api = useApi()
   const { fragment, entities, attachments, route_log, related } = detail
   const editable = fragment.source === 'manual'
+  const primaryPreview = attachments.find((attachment) => isRenderableImage(attachment))
+  const primaryPreviewURL = primaryPreview
+    ? hasLocalMedia(primaryPreview)
+      ? api.fragmentAttachmentURL({
+          fragmentId: fragment.id,
+          attachmentId: primaryPreview.id,
+          variant: 'preview',
+        })
+      : primaryPreview.external_url
+    : undefined
   const outputRefs = route_log
     .map((entry) => routeRef(entry.reason))
     .filter((value, index, all) => value && all.indexOf(value) === index)
@@ -552,6 +562,18 @@ function DetailBody({
           </div>
         </div>
       </div>
+
+      {primaryPreview && primaryPreviewURL && (
+        <Section title="Preview">
+          <div className="overflow-hidden rounded-md border border-border bg-bg">
+            <img
+              src={primaryPreviewURL}
+              alt={primaryPreview.name || fragment.title || fragment.id}
+              className="max-h-[56vh] w-full object-contain"
+            />
+          </div>
+        </Section>
+      )}
 
       {editable && editing && (
         <Section title="Edit">
