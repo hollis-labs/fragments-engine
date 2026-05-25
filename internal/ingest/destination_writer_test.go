@@ -342,7 +342,7 @@ func TestFileDestinationExecutor_PathTemplate(t *testing.T) {
 	destination := domain.Destination{
 		Name:       "templated-file",
 		Kind:       "file",
-		ConfigJSON: fmt.Sprintf(`{"root":%q,"path_template":"docs/references/{platform}/{source_id}"}`, filepath.Join(tempDir, "ffs")),
+		ConfigJSON: fmt.Sprintf(`{"root":%q,"path_template":"docs/references/{platform}/{ref_name}"}`, filepath.Join(tempDir, "ffs")),
 	}
 	fragment := testFragment()
 	fragment.MetadataJSON = `{"platform":"github"}`
@@ -351,7 +351,7 @@ func TestFileDestinationExecutor_PathTemplate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("execute templated file destination: %v", err)
 	}
-	expected := filepath.Join(tempDir, "ffs", "docs", "references", "github", "session-123", "fragment.md")
+	expected := filepath.Join(tempDir, "ffs", "docs", "references", "github", "claude-session-roadmap-review", "fragment.md")
 	if written.Ref != expected {
 		t.Fatalf("unexpected templated fragment path: %s", written.Ref)
 	}

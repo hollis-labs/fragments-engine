@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -105,6 +106,7 @@ func resolveFileDestinationRelativePath(cfg domain.FileDestinationConfig, fragme
 	if raw := strings.TrimSpace(fragment.MetadataJSON); raw != "" {
 		_ = json.Unmarshal([]byte(raw), &meta)
 	}
+	domain := referenceDomain(fragment, meta)
 	rel := strings.TrimSpace(cfg.PathTemplate)
 	replacements := map[string]string{
 		"{id}":             sanitizePathSegment(fragment.ID),
@@ -112,8 +114,9 @@ func resolveFileDestinationRelativePath(cfg domain.FileDestinationConfig, fragme
 		"{source_type}":    sanitizePathSegment(fragment.SourceType),
 		"{source_id}":      sanitizePathSegment(fragment.SourceID),
 		"{title}":          sanitizePathSegment(fragment.Title),
+		"{ref_name}":       sanitizePathSegment(referenceName(fragment, meta)),
 		"{canonical_path}": sanitizeRelativePath(fragment.CanonicalPath),
-		"{domain}":         sanitizePathSegment(metaString(meta, "domain")),
+		"{domain}":         sanitizePathSegment(domain),
 		"{platform}":       sanitizePathSegment(metaString(meta, "platform")),
 		"{pin_id}":         sanitizePathSegment(metaString(meta, "pin_id")),
 		"{repo_owner}":     sanitizePathSegment(metaString(meta, "repo_owner")),
@@ -139,8 +142,37 @@ func metaString(meta map[string]any, key string) string {
 
 func sanitizePathSegment(value string) string {
 	value = strings.TrimSpace(value)
-	value = strings.ReplaceAll(value, "/", "_")
-	value = strings.ReplaceAll(value, string(filepath.Separator), "_")
+	if value == "" {
+		return ""
+	}
+	value = strings.ToLower(value)
+	var b strings.Builder
+	lastDash := false
+	for _, r := range value {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
+			b.WriteRune(r)
+			lastDash = false
+		case r == '.', r == '_', r == '-':
+			b.WriteRune(r)
+			lastDash = false
+		default:
+			if !lastDash {
+				b.WriteRune('-')
+				lastDash = true
+			}
+		}
+	}
+	value = strings.Trim(b.String(), "-._")
+	value = collapseRepeated(value, "--", "-")
+	value = collapseRepeated(value, "__", "_")
+	value = collapseRepeated(value, "..", ".")
+	if len(value) > 96 {
+		value = strings.Trim(value[:96], "-._")
+	}
+	if value == "" {
+		return "item"
+	}
 	return value
 }
 
@@ -150,6 +182,131 @@ func sanitizeRelativePath(value string) string {
 		return ""
 	}
 	return strings.TrimPrefix(filepath.Clean(filepath.FromSlash(value)), string(filepath.Separator))
+}
+
+func referenceDomain(fragment domain.Fragment, meta map[string]any) string {
+	if domain := metaString(meta, "domain"); domain != "" {
+		return domain
+	}
+	rawURL := referenceURL(fragment, meta)
+	if rawURL == "" {
+		return ""
+	}
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(parsed.Hostname())
+}
+
+func referenceName(fragment domain.Fragment, meta map[string]any) string {
+	if owner := metaString(meta, "repo_owner"); owner != "" {
+		if name := metaString(meta, "repo_name"); name != "" {
+			return owner + "-" + name
+		}
+	}
+	rawURL := referenceURL(fragment, meta)
+	if rawURL != "" {
+		if name := referenceNameFromURL(rawURL); name != "" {
+			return name
+		}
+	}
+	if title := strings.TrimSpace(fragment.Title); title != "" && !looksLikeURL(title) {
+		return title
+	}
+	if sourceID := strings.TrimSpace(fragment.SourceID); sourceID != "" {
+		return sourceID
+	}
+	return fragment.ID
+}
+
+func referenceURL(fragment domain.Fragment, meta map[string]any) string {
+	return firstNonEmpty(
+		metaString(meta, "url"),
+		metaString(meta, "external_url"),
+		extractLeadingURL(fragment.Title),
+		fragmentContentURL(fragment.Content),
+	)
+}
+
+func referenceNameFromURL(rawURL string) string {
+	parsed, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil {
+		return ""
+	}
+	segments := make([]string, 0)
+	for _, segment := range strings.Split(strings.Trim(parsed.Path, "/"), "/") {
+		segment = strings.TrimSpace(segment)
+		if segment == "" {
+			continue
+		}
+		segments = append(segments, segment)
+	}
+	host := strings.ToLower(strings.TrimSpace(parsed.Hostname()))
+	if strings.Contains(host, "reddit.com") && len(segments) >= 5 && segments[0] == "r" && segments[2] == "comments" {
+		return segments[4]
+	}
+	if len(segments) > 0 {
+		last := segments[len(segments)-1]
+		if last != "" && last != "comments" && last != "blog" && last != "docs" {
+			if parsed.Fragment != "" {
+				return last + "-" + parsed.Fragment
+			}
+			return last
+		}
+	}
+	if parsed.Fragment != "" {
+		return parsed.Fragment
+	}
+	if host != "" {
+		return host
+	}
+	return ""
+}
+
+func looksLikeURL(value string) bool {
+	value = strings.TrimSpace(strings.ToLower(value))
+	return strings.HasPrefix(value, "http://") || strings.HasPrefix(value, "https://")
+}
+
+func collapseRepeated(value, needle, replacement string) string {
+	for strings.Contains(value, needle) {
+		value = strings.ReplaceAll(value, needle, replacement)
+	}
+	return value
+}
+
+func fragmentContentURL(content string) string {
+	content = strings.TrimSpace(content)
+	if direct := extractLeadingURL(content); direct != "" {
+		return direct
+	}
+	return ""
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func extractLeadingURL(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	fields := strings.Fields(value)
+	if len(fields) == 0 {
+		return ""
+	}
+	candidate := strings.TrimSpace(fields[0])
+	if strings.HasPrefix(candidate, "http://") || strings.HasPrefix(candidate, "https://") {
+		return candidate
+	}
+	return ""
 }
 
 func renderFragmentMarkdown(fragment domain.Fragment) string {
