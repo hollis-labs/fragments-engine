@@ -113,6 +113,64 @@ func (s *RoutingService) ListDestinations(ctx context.Context) ([]domain.Destina
 	return s.repo.ListDestinations(ctx)
 }
 
+func (s *RoutingService) MaterializeFragmentToDestination(ctx context.Context, fragmentID, destinationName string) (domain.FragmentMaterializeResult, error) {
+	result := domain.FragmentMaterializeResult{FragmentID: strings.TrimSpace(fragmentID)}
+	if result.FragmentID == "" {
+		return result, fmt.Errorf("fragment id is required")
+	}
+	destination, err := s.findDestinationByName(ctx, destinationName)
+	if err != nil {
+		return result, err
+	}
+	result.DestinationID = destination.ID
+	result.DestinationName = destination.Name
+
+	fragment, err := s.fragments.GetByID(ctx, result.FragmentID)
+	if err != nil {
+		return result, err
+	}
+	var attachments []domain.FragmentAttachment
+	if s.attachments != nil {
+		attachments, err = s.attachments.ListByFragment(ctx, result.FragmentID)
+		if err != nil {
+			return result, err
+		}
+	}
+
+	delivery, err := ingest.ExecuteDestinationWithRetry(ctx, destination, fragment, attachments)
+	if err != nil {
+		_ = s.repo.LogDecision(ctx, domain.RouteLogEntry{
+			FragmentID:    result.FragmentID,
+			DestinationID: destination.ID,
+			Decision:      "materialize",
+			Reason:        encodeRouteDeliveryReason("materialize_destination_error", deliveryReasonPayload{Attempts: delivery.Attempts, Error: err.Error()}),
+			CreatedAt:     time.Now().UTC(),
+		})
+		return result, err
+	}
+	if s.attachments != nil && len(delivery.PublishedAttachments) > 0 {
+		if err := s.attachments.UpdateFragmentAttachmentStoragePaths(ctx, result.FragmentID, delivery.PublishedAttachments); err != nil {
+			return result, err
+		}
+	}
+	if item, err := s.inbox.Get(ctx, result.FragmentID); err == nil {
+		if err := s.inbox.UpdateReason(ctx, result.FragmentID, materializedInboxReason(item.Reason, destination.Name)); err != nil {
+			return result, err
+		}
+	}
+	if err := s.repo.LogDecision(ctx, domain.RouteLogEntry{
+		FragmentID:    result.FragmentID,
+		DestinationID: destination.ID,
+		Decision:      "materialize",
+		Reason:        encodeRouteDeliveryReason("materialize_destination", deliveryReasonPayload{Attempts: delivery.Attempts, Ref: delivery.Ref}),
+		CreatedAt:     time.Now().UTC(),
+	}); err != nil {
+		return result, err
+	}
+	result.WrittenPath = delivery.Ref
+	return result, nil
+}
+
 func (s *RoutingService) UpdateDestinationRetry(ctx context.Context, destinationID string, retry domain.DeliveryRetryConfig) (domain.Destination, error) {
 	item, err := s.repo.GetDestination(ctx, destinationID)
 	if err != nil {
@@ -916,6 +974,24 @@ func destinationProvider(item domain.Destination) string {
 	}
 	return item.Kind
 }
+
+func (s *RoutingService) findDestinationByName(ctx context.Context, destinationName string) (domain.Destination, error) {
+	name := strings.TrimSpace(destinationName)
+	if name == "" {
+		return domain.Destination{}, fmt.Errorf("destination name is required")
+	}
+	items, err := s.repo.ListDestinations(ctx)
+	if err != nil {
+		return domain.Destination{}, err
+	}
+	for _, item := range items {
+		if item.Name == name {
+			return item, nil
+		}
+	}
+	return domain.Destination{}, fmt.Errorf("destination %q not found", name)
+}
+
 
 func trimReasonPrefix(reason string, prefixes ...string) string {
 	for _, prefix := range prefixes {

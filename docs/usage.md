@@ -241,6 +241,7 @@ Notes:
 - `provider: "ffs"` gives Pinterest pin routes the same bundle layout FE already uses in `~/Documents/ffs/media/pins`
 - `path_template` can place generic file outputs under a stable namespace like `docs/references/{platform}/{source_id}`
 - `route materialize` writes through a destination without changing fragment status or removing the inbox item
+- sysop manual fragments can also use `Save to FFS`, which updates the current fragment and materializes it to the default destination for `source_type`
 - supported `path_template` tokens currently include `{id}`, `{title}`, `{ref_name}`, `{source}`, `{source_type}`, `{source_id}`, `{canonical_path}`, `{domain}`, `{platform}`, `{pin_id}`, `{repo_owner}`, and `{repo_name}`
 
 Nil via MCP:

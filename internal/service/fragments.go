@@ -357,6 +357,7 @@ type UpdateFragmentRequest struct {
 	Summary    string
 	Notes      string
 	Tags       []string
+	SourceType string
 }
 
 func (s *FragmentService) UpdateManualFragment(ctx context.Context, req UpdateFragmentRequest) (domain.FragmentDetail, error) {
@@ -380,6 +381,10 @@ func (s *FragmentService) UpdateManualFragment(ctx context.Context, req UpdateFr
 	title := strings.TrimSpace(req.Title)
 	if title == "" {
 		title = fragment.Title
+	}
+	sourceType := strings.TrimSpace(req.SourceType)
+	if sourceType == "" {
+		sourceType = fragment.SourceType
 	}
 	summary := strings.TrimSpace(req.Summary)
 	notes := strings.TrimSpace(req.Notes)
@@ -428,6 +433,9 @@ func (s *FragmentService) UpdateManualFragment(ctx context.Context, req UpdateFr
 	if err := s.repo.UpdateEditableFields(ctx, fragmentID, title, summary, string(rawMeta)); err != nil {
 		return domain.FragmentDetail{}, err
 	}
+	if err := s.repo.UpdateDerivedFields(ctx, fragmentID, title, sourceType, string(rawMeta), fragment.CanonicalPath); err != nil {
+		return domain.FragmentDetail{}, err
+	}
 
 	updated, err := s.repo.GetByID(ctx, fragmentID)
 	if err != nil {
@@ -439,6 +447,9 @@ func (s *FragmentService) UpdateManualFragment(ctx context.Context, req UpdateFr
 	// Recall indexing recomputes summary/entity state from content. Restore the
 	// explicit manual summary/metadata and authoritative tag set afterward.
 	if err := s.repo.UpdateEditableFields(ctx, fragmentID, title, summary, string(rawMeta)); err != nil {
+		return domain.FragmentDetail{}, err
+	}
+	if err := s.repo.UpdateDerivedFields(ctx, fragmentID, title, sourceType, string(rawMeta), fragment.CanonicalPath); err != nil {
 		return domain.FragmentDetail{}, err
 	}
 	if err := s.entities.ReplaceFragmentEntities(ctx, fragmentID, nextEntities); err != nil {

@@ -15,6 +15,7 @@ import (
 	"github.com/hollis-labs/fragments-engine/internal/app"
 	"github.com/hollis-labs/fragments-engine/internal/config"
 	"github.com/hollis-labs/fragments-engine/internal/domain"
+	"github.com/hollis-labs/fragments-engine/internal/service"
 )
 
 func TestFragmentsService_IngestAndSearchClaudeSession(t *testing.T) {
@@ -708,6 +709,78 @@ func TestRoutingService_MaterializeRouteKeepsInboxItems(t *testing.T) {
 	}
 	if len(logEntries) == 0 || logEntries[len(logEntries)-1].Decision != "materialize" {
 		t.Fatalf("expected materialize route log entry, got %+v", logEntries)
+	}
+}
+
+func TestRoutingService_MaterializeFragmentToDestination(t *testing.T) {
+	root := t.TempDir()
+	cfgPath := writeIntegrationConfigForRoot(t, root)
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+
+	instance, err := app.Open(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("open app: %v", err)
+	}
+	defer instance.Close()
+
+	intake, err := instance.Fragments.Intake(context.Background(), service.IntakeRequest{
+		Content: "A concise architectural note about routing and storage.",
+		Title:   "Routing architecture note",
+	})
+	if err != nil {
+		t.Fatalf("intake: %v", err)
+	}
+	if _, err := instance.Fragments.UpdateManualFragment(context.Background(), service.UpdateFragmentRequest{
+		FragmentID: intake.FragmentID,
+		Title:      "Routing architecture note",
+		SourceType: "note",
+		Summary:    "Notes on keeping inbox state while materializing to FFS.",
+		Notes:      "Preserve inbox visibility after write-through.",
+		Tags:       []string{"routing", "note"},
+	}); err != nil {
+		t.Fatalf("update manual fragment: %v", err)
+	}
+
+	ffsRoot := filepath.Join(filepath.Dir(cfgPath), "ffs", "docs", "notes")
+	if _, err := instance.Routing.AddDestination(context.Background(), domain.Destination{
+		Name:       "ffs-notes",
+		Kind:       "file",
+		ConfigJSON: `{"root":"` + ffsRoot + `","provider":"file","path_template":"manual/{source_type}/{title}"}`,
+	}); err != nil {
+		t.Fatalf("add destination: %v", err)
+	}
+
+	result, err := instance.Routing.MaterializeFragmentToDestination(context.Background(), intake.FragmentID, "ffs-notes")
+	if err != nil {
+		t.Fatalf("materialize fragment: %v", err)
+	}
+	if result.WrittenPath == "" || result.DestinationName != "ffs-notes" {
+		t.Fatalf("unexpected materialize result: %+v", result)
+	}
+	raw, err := os.ReadFile(result.WrittenPath)
+	if err != nil {
+		t.Fatalf("read written note: %v", err)
+	}
+	body := string(raw)
+	if !strings.Contains(body, "# Routing architecture note") {
+		t.Fatalf("expected note title in materialized file: %s", body)
+	}
+	items, err := instance.Inbox.List(context.Background(), 10)
+	if err != nil {
+		t.Fatalf("list inbox: %v", err)
+	}
+	if len(items) != 1 || !strings.Contains(items[0].Reason, "materialized to ffs-notes") {
+		t.Fatalf("expected inbox materialization marker, got %+v", items)
+	}
+	logEntries, err := instance.Routing.ListRouteLog(context.Background(), intake.FragmentID)
+	if err != nil {
+		t.Fatalf("list route log: %v", err)
+	}
+	if len(logEntries) == 0 || logEntries[len(logEntries)-1].DestinationID == "" {
+		t.Fatalf("expected destination-backed route log entry, got %+v", logEntries)
 	}
 }
 

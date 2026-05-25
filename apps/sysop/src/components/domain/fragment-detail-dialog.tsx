@@ -27,6 +27,14 @@ import { useApi } from '@/hooks/useApi'
 import { ApiError, type FragmentDetail } from '@/lib/api'
 import type { FragmentAttachment } from '@/lib/types'
 
+const FFS_SOURCE_TYPES = [
+  { value: 'note', label: 'Note' },
+  { value: 'quote', label: 'Quote' },
+  { value: 'report', label: 'Report' },
+  { value: 'pin', label: 'Pin' },
+  { value: 'reference', label: 'Reference' },
+] as const
+
 interface FragmentDetailDialogProps {
   /** Fragment to show; the dialog is open whenever this is non-null. */
   fragmentId: string | null
@@ -318,8 +326,22 @@ function AttachmentCard({
 interface DetailBodyProps {
   detail: FragmentDetail
   onRoute: () => void
-  onSave: (input: { title: string; summary: string; notes: string; tags: string[] }) => Promise<void>
+  onSave: (input: {
+    title: string
+    summary: string
+    notes: string
+    tags: string[]
+    sourceType: string
+  }) => Promise<void>
+  onMaterializeFFS: (input: {
+    title: string
+    summary: string
+    notes: string
+    tags: string[]
+    sourceType: string
+  }) => Promise<string | undefined>
   saving: boolean
+  materializing: boolean
   /** ids of attachments with an in-flight re-analyze request. */
   reanalyzingIds: Set<string>
   /** Re-analyze one attachment; pass undefined id to re-analyze the whole fragment. */
@@ -337,7 +359,9 @@ function DetailBody({
   detail,
   onRoute,
   onSave,
+  onMaterializeFFS,
   saving,
+  materializing,
   reanalyzingIds,
   onReanalyze,
   reanalyzeError,
@@ -348,6 +372,7 @@ function DetailBody({
   const [editing, setEditing] = useState(false)
   const [title, setTitle] = useState(fragment.title)
   const [summary, setSummary] = useState(fragment.summary)
+  const [sourceType, setSourceType] = useState(fragment.source_type)
   const [notes, setNotes] = useState(metadataText(fragment.metadata, 'user_notes'))
   const [tagsText, setTagsText] = useState(
     entities
@@ -360,6 +385,7 @@ function DetailBody({
     setEditing(false)
     setTitle(fragment.title)
     setSummary(fragment.summary)
+    setSourceType(fragment.source_type)
     setNotes(metadataText(fragment.metadata, 'user_notes'))
     setTagsText(
       entities
@@ -367,13 +393,28 @@ function DetailBody({
         .map((entity) => entity.value)
         .join(', '),
     )
-  }, [fragment.id, fragment.title, fragment.summary, fragment.metadata, entities])
+  }, [fragment.id, fragment.title, fragment.summary, fragment.source_type, fragment.metadata, entities])
 
   async function handleSave() {
     await onSave({
       title,
       summary,
       notes,
+      sourceType,
+      tags: tagsText
+        .split(',')
+        .map((tag) => tag.trim())
+        .filter(Boolean),
+    })
+    setEditing(false)
+  }
+
+  async function handleMaterialize() {
+    await onMaterializeFFS({
+      title,
+      summary,
+      notes,
+      sourceType,
       tags: tagsText
         .split(',')
         .map((tag) => tag.trim())
@@ -420,6 +461,16 @@ function DetailBody({
                 {editing ? 'Cancel edit' : 'Edit'}
               </Button>
             )}
+            {editable && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => void handleMaterialize()}
+                disabled={materializing || !sourceType.trim()}
+              >
+                {materializing ? 'Saving to FFS…' : 'Save to FFS'}
+              </Button>
+            )}
             {editable && editing && (
               <Button size="sm" onClick={() => void handleSave()} disabled={saving}>
                 {saving ? 'Saving…' : 'Save'}
@@ -439,6 +490,21 @@ function DetailBody({
                 onChange={(event) => setTitle(event.target.value)}
                 className="rounded-md border border-border bg-bg px-3 py-2 text-[13px] tracking-normal text-text outline-none transition focus:border-text-soft"
               />
+            </label>
+            <label className="flex flex-col gap-1 text-[11px] uppercase tracking-[.12em] text-text-subtle">
+              Source type
+              <select
+                value={sourceType}
+                onChange={(event) => setSourceType(event.target.value)}
+                className="rounded-md border border-border bg-bg px-3 py-2 text-[13px] tracking-normal text-text outline-none transition focus:border-text-soft"
+              >
+                <option value="">Unclassified</option>
+                {FFS_SOURCE_TYPES.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
             </label>
             <label className="flex flex-col gap-1 text-[11px] uppercase tracking-[.12em] text-text-subtle">
               Description
@@ -588,6 +654,7 @@ export function FragmentDetailDialog({ fragmentId, onClose }: FragmentDetailDial
   const [reanalyzingIds, setReanalyzingIds] = useState<Set<string>>(new Set())
   const [reanalyzeError, setReanalyzeError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
+  const [materializing, setMaterializing] = useState(false)
 
   useEffect(() => {
     if (!fragmentId) return
@@ -650,6 +717,7 @@ export function FragmentDetailDialog({ fragmentId, onClose }: FragmentDetailDial
     summary: string
     notes: string
     tags: string[]
+    sourceType: string
   }) {
     if (!fragmentId) return
     setSaving(true)
@@ -661,6 +729,7 @@ export function FragmentDetailDialog({ fragmentId, onClose }: FragmentDetailDial
         summary: input.summary,
         notes: input.notes,
         tags: input.tags,
+        sourceType: input.sourceType,
       })
       setDetail(updated)
     } catch (err) {
@@ -672,6 +741,39 @@ export function FragmentDetailDialog({ fragmentId, onClose }: FragmentDetailDial
       throw err
     } finally {
       setSaving(false)
+    }
+  }
+
+  async function handleMaterializeFFS(input: {
+    title: string
+    summary: string
+    notes: string
+    tags: string[]
+    sourceType: string
+  }) {
+    if (!fragmentId) return undefined
+    setMaterializing(true)
+    setError(null)
+    try {
+      const response = await api.materializeFragmentFFS({
+        fragmentId,
+        title: input.title,
+        summary: input.summary,
+        notes: input.notes,
+        tags: input.tags,
+        sourceType: input.sourceType,
+      })
+      setDetail(response.detail)
+      return response.result.written_path
+    } catch (err) {
+      setError(
+        err instanceof ApiError || err instanceof Error
+          ? err.message
+          : 'Failed to save fragment to FFS',
+      )
+      throw err
+    } finally {
+      setMaterializing(false)
     }
   }
 
@@ -703,6 +805,8 @@ export function FragmentDetailDialog({ fragmentId, onClose }: FragmentDetailDial
                 onRoute={() => setApplyOpen(true)}
                 onSave={handleSave}
                 saving={saving}
+                onMaterializeFFS={handleMaterializeFFS}
+                materializing={materializing}
                 reanalyzingIds={reanalyzingIds}
                 onReanalyze={handleReanalyze}
                 reanalyzeError={reanalyzeError}

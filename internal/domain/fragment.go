@@ -366,6 +366,13 @@ type RouteMaterializeResult struct {
 	Items             []RouteMaterializeItem `json:"items"`
 }
 
+type FragmentMaterializeResult struct {
+	FragmentID      string `json:"fragment_id"`
+	DestinationID   string `json:"destination_id"`
+	DestinationName string `json:"destination_name"`
+	WrittenPath     string `json:"written_path,omitempty"`
+}
+
 type RouteDeleteResult struct {
 	RouteID      string `json:"route_id"`
 	Deleted      bool   `json:"deleted"`

@@ -178,6 +178,24 @@ WHERE fragment_id = ?`, reason, fragmentID)
 	return nil
 }
 
+func (r *InboxRepository) Get(ctx context.Context, fragmentID string) (domain.InboxItem, error) {
+	var item domain.InboxItem
+	var stagedAt string
+	var routeID sql.NullString
+	err := r.db.QueryRowContext(ctx, `
+SELECT fragment_id, reason, staged_at, route_id
+FROM inbox
+WHERE fragment_id = ?`, fragmentID).Scan(&item.FragmentID, &item.Reason, &stagedAt, &routeID)
+	if err != nil {
+		return domain.InboxItem{}, fmt.Errorf("get inbox item: %w", err)
+	}
+	item.StagedAt, _ = time.Parse(time.RFC3339, stagedAt)
+	if routeID.Valid {
+		item.RouteID = routeID.String
+	}
+	return item, nil
+}
+
 func (r *InboxRepository) ListDetailedOldestFirst(ctx context.Context, limit int) ([]domain.InboxItemDetail, error) {
 	if limit <= 0 {
 		limit = 50

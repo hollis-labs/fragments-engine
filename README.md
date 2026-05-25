@@ -245,6 +245,12 @@ go run ./cmd/fragments-engine route materialize \
   -limit 20
 ```
 
+Sysop now also supports the same write-through flow directly from a manual fragment modal:
+
+- set `source_type` to `note`, `quote`, `report`, `pin`, or `reference`
+- click `Save to FFS`
+- FE updates the fragment metadata and materializes it to the default destination (`ffs-notes`, `ffs-quotes`, `ffs-reports`, `ffs-pins`, or `ffs-references`) without removing the fragment from inbox
+
 Delivery retry defaults are transport-aware:
 
 - `file`: `max_attempts=1`

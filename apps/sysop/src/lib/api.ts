@@ -68,6 +68,16 @@ export interface UpdateFragmentInput {
 	summary?: string
 	notes?: string
 	tags?: string[]
+	sourceType?: string
+}
+
+export interface MaterializeFragmentFFSInput {
+	fragmentId: string
+	title?: string
+	summary?: string
+	notes?: string
+	tags?: string[]
+	sourceType: string
 }
 
 export interface FragmentAttachmentURLInput {
@@ -480,6 +490,18 @@ export interface RouteMaterializeResult {
   items: RouteMaterializeItem[]
 }
 
+export interface FragmentMaterializeResult {
+  fragment_id: string
+  destination_id: string
+  destination_name: string
+  written_path?: string
+}
+
+export interface MaterializeFragmentFFSResponse {
+  detail: FragmentDetail
+  result: FragmentMaterializeResult
+}
+
 export interface DestinationStatusRecord {
   destination: Destination
   provider?: string
@@ -651,6 +673,10 @@ function mapRouteMaterializeResult(value: unknown): RouteMaterializeResult {
   return normalizeKeys(value) as RouteMaterializeResult
 }
 
+function mapFragmentMaterializeResult(value: unknown): FragmentMaterializeResult {
+  return normalizeKeys(value) as FragmentMaterializeResult
+}
+
 function mapDestinationDeleteResult(value: unknown): DestinationDeleteResult {
   return normalizeKeys(value) as DestinationDeleteResult
 }
@@ -807,8 +833,29 @@ export async function updateFragment(input: UpdateFragmentInput): Promise<Fragme
 		summary: input.summary ?? '',
 		notes: input.notes ?? '',
 		tags: input.tags ?? [],
+		source_type: input.sourceType ?? '',
 	})
 	return mapFragmentDetail(data.detail)
+}
+
+export async function materializeFragmentFFS(
+  input: MaterializeFragmentFFSInput,
+): Promise<MaterializeFragmentFFSResponse> {
+  const data = await postJson<{ detail: FragmentDetail; result: FragmentMaterializeResult }>(
+    '/v1/fragments/materialize-ffs',
+    {
+      fragment_id: input.fragmentId,
+      title: input.title ?? '',
+      summary: input.summary ?? '',
+      notes: input.notes ?? '',
+      tags: input.tags ?? [],
+      source_type: input.sourceType,
+    },
+  )
+  return {
+    detail: mapFragmentDetail(data.detail),
+    result: mapFragmentMaterializeResult(data.result),
+  }
 }
 
 export function fragmentAttachmentURL(input: FragmentAttachmentURLInput): string {
@@ -1323,6 +1370,7 @@ export const apiClient = {
   fetchInboxEntityItems,
   fetchFragment,
   updateFragment,
+  materializeFragmentFFS,
   fetchRelatedFragments,
   fragmentAttachmentURL,
   reanalyzeFragmentAttachments,

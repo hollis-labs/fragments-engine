@@ -51,6 +51,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/fragments", s.handleFragmentList)
 	mux.HandleFunc("/v1/fragments/get", s.handleFragmentGet)
 	mux.HandleFunc("/v1/fragments/update", s.handleFragmentUpdate)
+	mux.HandleFunc("/v1/fragments/materialize-ffs", s.handleFragmentMaterializeFFS)
 	mux.HandleFunc("/v1/fragments/related", s.handleFragmentRelated)
 	mux.HandleFunc("/v1/fragments/attachment", s.handleFragmentAttachment)
 	mux.HandleFunc("/v1/fragments/reanalyze-attachments", s.handleFragmentReanalyzeAttachments)
@@ -246,6 +247,16 @@ type fragmentUpdateRequest struct {
 	Summary    string   `json:"summary"`
 	Notes      string   `json:"notes"`
 	Tags       []string `json:"tags"`
+	SourceType string   `json:"source_type"`
+}
+
+type fragmentMaterializeFFSRequest struct {
+	FragmentID string   `json:"fragment_id"`
+	Title      string   `json:"title"`
+	Summary    string   `json:"summary"`
+	Notes      string   `json:"notes"`
+	Tags       []string `json:"tags"`
+	SourceType string   `json:"source_type"`
 }
 
 func (s *Server) ListenAndServe(addr string) error {
@@ -1167,12 +1178,64 @@ func (s *Server) handleFragmentUpdate(w http.ResponseWriter, r *http.Request) {
 		Summary:    input.Summary,
 		Notes:      input.Notes,
 		Tags:       input.Tags,
+		SourceType: input.SourceType,
 	})
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"detail": detail})
+}
+
+func (s *Server) handleFragmentMaterializeFFS(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var input fragmentMaterializeFFSRequest
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil && err != io.EOF {
+		http.Error(w, "invalid json body", http.StatusBadRequest)
+		return
+	}
+	cfg, err := config.Load(s.cfgPath)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	instance, err := app.Open(r.Context(), cfg)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer instance.Close()
+	detail, err := instance.Fragments.UpdateManualFragment(r.Context(), service.UpdateFragmentRequest{
+		FragmentID: input.FragmentID,
+		Title:      input.Title,
+		Summary:    input.Summary,
+		Notes:      input.Notes,
+		Tags:       input.Tags,
+		SourceType: input.SourceType,
+	})
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	destinationName, err := defaultFFSDestinationName(detail.Fragment.SourceType)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	result, err := instance.Routing.MaterializeFragmentToDestination(r.Context(), detail.Fragment.ID, destinationName)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	refreshed, err := instance.Fragments.GetDetail(r.Context(), detail.Fragment.ID, 10)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"detail": refreshed, "result": result})
 }
 
 func (s *Server) handleFragmentRelated(w http.ResponseWriter, r *http.Request) {
@@ -1965,6 +2028,23 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(value)
+}
+
+func defaultFFSDestinationName(sourceType string) (string, error) {
+	switch strings.TrimSpace(sourceType) {
+	case "pin":
+		return "ffs-pins", nil
+	case "note":
+		return "ffs-notes", nil
+	case "quote":
+		return "ffs-quotes", nil
+	case "report":
+		return "ffs-reports", nil
+	case "repo", "url", "article", "reference":
+		return "ffs-references", nil
+	default:
+		return "", fmt.Errorf("no default ffs destination for source_type %q", sourceType)
+	}
 }
 
 // localhostOnly wraps a handler so it only serves requests originating from the

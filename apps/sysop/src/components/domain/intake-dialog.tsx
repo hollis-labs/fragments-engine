@@ -4,6 +4,15 @@ import { useApi } from '@/hooks/useApi'
 import { ApiError } from '@/lib/api'
 import type { Fragment } from '@/lib/types'
 
+const SOURCE_TYPE_OPTIONS = [
+  { value: '', label: 'Unclassified' },
+  { value: 'note', label: 'Note' },
+  { value: 'quote', label: 'Quote' },
+  { value: 'report', label: 'Report' },
+  { value: 'reference', label: 'Reference' },
+  { value: 'pin', label: 'Pin' },
+] as const
+
 interface IntakeDialogProps {
   open: boolean
   onClose: () => void
@@ -138,19 +147,24 @@ export function IntakeDialog({ open, onClose, onCreated }: IntakeDialogProps) {
               />
             </Field>
             <Field label="Source type">
-              <input
+              <select
                 className={FIELD}
                 value={sourceType}
                 onChange={(e) => setSourceType(e.target.value)}
-                placeholder="optional — e.g. note, clip"
-              />
+              >
+                {SOURCE_TYPE_OPTIONS.map((option) => (
+                  <option key={option.value || 'empty'} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
             </Field>
             <Field label="Tags">
               <input
                 className={FIELD}
                 value={tags}
                 onChange={(e) => setTags(e.target.value)}
-                placeholder="optional — comma separated"
+                placeholder="optional — comma separated, e.g. writing, quote, report"
               />
             </Field>
             {error && <p className="text-sm text-danger-soft">{error}</p>}

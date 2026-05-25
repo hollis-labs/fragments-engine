@@ -215,6 +215,7 @@ func TestFragmentServiceUpdateManualFragment(t *testing.T) {
 	detail, err := svcs.fragments.UpdateManualFragment(context.Background(), UpdateFragmentRequest{
 		FragmentID: intake.FragmentID,
 		Title:      "Desk moodboard",
+		SourceType: "pin",
 		Summary:    "Warm wood, shelves, and compact workspace ideas.",
 		Notes:      "Focus on references that can become corpus docs later.",
 		Tags:       []string{"pinterest", "workspace", "pinterest"},
@@ -224,6 +225,9 @@ func TestFragmentServiceUpdateManualFragment(t *testing.T) {
 	}
 	if detail.Fragment.Title != "Desk moodboard" {
 		t.Fatalf("unexpected title: %s", detail.Fragment.Title)
+	}
+	if detail.Fragment.SourceType != "pin" {
+		t.Fatalf("unexpected source type: %s", detail.Fragment.SourceType)
 	}
 	if detail.Fragment.Summary != "Warm wood, shelves, and compact workspace ideas." {
 		t.Fatalf("unexpected summary: %s", detail.Fragment.Summary)
