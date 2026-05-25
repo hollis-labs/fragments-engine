@@ -111,9 +111,13 @@ func resolveFileDestinationRelativePath(cfg domain.FileDestinationConfig, fragme
 		"{source}":         sanitizePathSegment(fragment.Source),
 		"{source_type}":    sanitizePathSegment(fragment.SourceType),
 		"{source_id}":      sanitizePathSegment(fragment.SourceID),
+		"{title}":          sanitizePathSegment(fragment.Title),
 		"{canonical_path}": sanitizeRelativePath(fragment.CanonicalPath),
+		"{domain}":         sanitizePathSegment(metaString(meta, "domain")),
 		"{platform}":       sanitizePathSegment(metaString(meta, "platform")),
 		"{pin_id}":         sanitizePathSegment(metaString(meta, "pin_id")),
+		"{repo_owner}":     sanitizePathSegment(metaString(meta, "repo_owner")),
+		"{repo_name}":      sanitizePathSegment(metaString(meta, "repo_name")),
 	}
 	for token, value := range replacements {
 		rel = strings.ReplaceAll(rel, token, value)

@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Play, Plus, RefreshCw } from 'lucide-react'
+import { Download, Eye, Play, Plus, RefreshCw } from 'lucide-react'
 import { ListPageLayout, PageHeader, Button, Skeleton } from '@hollis-labs/sysop-ui'
 import { DestinationCreateDialog, RouteCreateDialog } from '@/components/domain/routing-dialogs'
 import { useApi } from '@/hooks/useApi'
-import type { QueueStats } from '@/lib/api'
+import type { QueueStats, RouteMaterializeResult, RoutePreviewResult } from '@/lib/api'
 import type { Destination, Route } from '@/lib/types'
 
 function Section({
@@ -51,6 +51,9 @@ export default function RoutingPage() {
   const [draining, setDraining] = useState(false)
   const [destCreateOpen, setDestCreateOpen] = useState(false)
   const [routeCreateOpen, setRouteCreateOpen] = useState(false)
+  const [routeActionBusy, setRouteActionBusy] = useState<string | null>(null)
+  const [routePreview, setRoutePreview] = useState<RoutePreviewResult | null>(null)
+  const [routeMaterialize, setRouteMaterialize] = useState<RouteMaterializeResult | null>(null)
 
   const load = useCallback(async () => {
     setError(null)
@@ -82,6 +85,31 @@ export default function RoutingPage() {
       // surfaced on next load; keep the button responsive
     } finally {
       setDraining(false)
+    }
+  }
+
+  async function handlePreviewRoute(routeId: string) {
+    setRouteActionBusy(`preview:${routeId}`)
+    try {
+      setRouteMaterialize(null)
+      setRoutePreview(await api.fetchRoutePreview({ routeId }))
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to preview route')
+    } finally {
+      setRouteActionBusy(null)
+    }
+  }
+
+  async function handleMaterializeRoute(routeId: string) {
+    setRouteActionBusy(`materialize:${routeId}`)
+    try {
+      setRoutePreview(null)
+      setRouteMaterialize(await api.materializeRoute({ routeId, limit: 100 }))
+      await load()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to materialize route')
+    } finally {
+      setRouteActionBusy(null)
     }
   }
 
@@ -203,6 +231,7 @@ export default function RoutingPage() {
                       <th className="px-4 py-1.5 text-left font-medium">Match</th>
                       <th className="px-4 py-1.5 text-left font-medium">Destination</th>
                       <th className="px-4 py-1.5 text-left font-medium">Auto</th>
+                      <th className="px-4 py-1.5 text-left font-medium">Actions</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-border-soft">
@@ -220,10 +249,49 @@ export default function RoutingPage() {
                             {r.auto_route ? 'auto' : 'manual'}
                           </span>
                         </td>
+                        <td className="px-4 py-1.5">
+                          <div className="flex items-center gap-2">
+                            <Button
+                              variant="outline"
+                              size="xs"
+                              onClick={() => void handlePreviewRoute(r.id)}
+                              disabled={routeActionBusy !== null}
+                            >
+                              <Eye className="h-3 w-3" />
+                              Preview
+                            </Button>
+                            <Button
+                              variant="outline"
+                              size="xs"
+                              onClick={() => void handleMaterializeRoute(r.id)}
+                              disabled={routeActionBusy !== null}
+                            >
+                              <Download className="h-3 w-3" />
+                              Materialize
+                            </Button>
+                          </div>
+                        </td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
+              )}
+              {(routePreview || routeMaterialize) && (
+                <div className="border-t border-border-soft px-4 py-3 text-[12px] text-text-soft">
+                  {routePreview && (
+                    <div>
+                      Preview for <span className="font-mono">{routePreview.route_id}</span>: matched{' '}
+                      {routePreview.matched_count}
+                    </div>
+                  )}
+                  {routeMaterialize && (
+                    <div>
+                      Materialized for <span className="font-mono">{routeMaterialize.route_id}</span>:
+                      {' '}matched {routeMaterialize.matched_count} · saved{' '}
+                      {routeMaterialize.materialized_count} · failed {routeMaterialize.failed_count}
+                    </div>
+                  )}
+                </div>
               )}
             </Section>
           </>

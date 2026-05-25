@@ -1099,8 +1099,7 @@ export async function fetchRoutes(): Promise<Route[]> {
 export async function fetchRoutePreview(
   params: FetchRoutePreviewParams,
 ): Promise<RoutePreviewResult> {
-  const data = await apiFetch<{ item: RoutePreviewResult }>('/v1/routes/preview', undefined, {
-    'route-id': params.routeId,
+  const data = await postJson<{ item: RoutePreviewResult }>('/v1/routes/preview', {
     route_id: params.routeId,
   })
   return mapRoutePreviewResult(data.item)
