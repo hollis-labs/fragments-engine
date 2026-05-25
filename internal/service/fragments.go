@@ -273,6 +273,10 @@ func (s *FragmentService) List(ctx context.Context, status string, limit, offset
 	return s.repo.List(ctx, repository.ListOptions{Status: domain.FragmentStatus(status), Limit: limit, Offset: offset})
 }
 
+func (s *FragmentService) ListBrowse(ctx context.Context, status string, limit, offset int) ([]domain.FragmentBrowseItem, int, error) {
+	return s.repo.ListBrowse(ctx, repository.ListOptions{Status: domain.FragmentStatus(status), Limit: limit, Offset: offset})
+}
+
 func (s *FragmentService) Related(ctx context.Context, fragmentID string, limit int) ([]domain.SearchResult, error) {
 	return s.recall.Related(ctx, fragmentID, limit)
 }

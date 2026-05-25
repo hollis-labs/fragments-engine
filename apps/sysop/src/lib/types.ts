@@ -111,6 +111,22 @@ export interface InboxItem {
   preview_attachment_id?: string
 }
 
+export interface FragmentBrowseItem {
+  fragment_id: string
+  title: string
+  source: string
+  source_type: string
+  status: string
+  summary: string
+  canonical_path: string
+  source_id: string
+  created_at: ISODateString
+  modified_at: ISODateString
+  preview_attachment_id?: string
+  tags?: string[]
+  materialized: boolean
+}
+
 export interface InboxEntityGroup {
   kind: string
   value: string

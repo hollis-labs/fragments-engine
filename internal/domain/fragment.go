@@ -117,6 +117,22 @@ type FragmentDetail struct {
 	Related     []SearchResult
 }
 
+type FragmentBrowseItem struct {
+	FragmentID          string    `json:"fragment_id"`
+	Title               string    `json:"title"`
+	Source              string    `json:"source"`
+	SourceType          string    `json:"source_type"`
+	Status              string    `json:"status"`
+	Summary             string    `json:"summary"`
+	CanonicalPath       string    `json:"canonical_path"`
+	SourceID            string    `json:"source_id"`
+	CreatedAt           time.Time `json:"created_at"`
+	ModifiedAt          time.Time `json:"modified_at"`
+	PreviewAttachmentID string    `json:"preview_attachment_id,omitempty"`
+	Tags                []string  `json:"tags,omitempty"`
+	Materialized        bool      `json:"materialized"`
+}
+
 type AttachmentReanalysisResult struct {
 	FragmentID      string   `json:"fragment_id"`
 	AttachmentIDs   []string `json:"attachment_ids"`

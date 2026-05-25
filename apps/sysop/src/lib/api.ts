@@ -3,6 +3,7 @@ import type {
   Destination,
   DestinationStatusSummary,
   Fragment,
+  FragmentBrowseItem,
   FragmentAttachment,
   FragmentEntity,
   FragmentRelation,
@@ -15,6 +16,7 @@ import type {
 } from './types'
 import {
   normalizeFragment,
+  normalizeFragmentBrowseItem,
   normalizeFragmentAttachment,
   normalizeFragmentEntity,
   normalizeFragmentRelation,
@@ -55,6 +57,12 @@ export interface FetchInboxEntityItemsParams {
 
 export interface FetchFragmentParams {
   fragmentId: string
+}
+
+export interface FetchBrowseFragmentsParams {
+  status?: string
+  limit?: number
+  offset?: number
 }
 
 export interface ReanalyzeFragmentAttachmentsInput {
@@ -818,6 +826,25 @@ export async function fetchFragment(params: FetchFragmentParams): Promise<Fragme
   return mapFragmentDetail(data.detail)
 }
 
+export async function fetchBrowseFragments(
+  params: FetchBrowseFragmentsParams = {},
+  options?: ApiRequestOptions,
+): Promise<{ items: FragmentBrowseItem[]; total: number }> {
+  const data = await apiFetch<{ items?: FragmentBrowseItem[]; total?: number }>(
+    '/v1/fragments/browse',
+    { signal: options?.signal },
+    {
+      status: params.status,
+      limit: params.limit,
+      offset: params.offset,
+    },
+  )
+  return {
+    items: (data.items ?? []).map((item) => normalizeFragmentBrowseItem(item)),
+    total: typeof data.total === 'number' ? data.total : 0,
+  }
+}
+
 export async function fetchRelatedFragments(params: FetchFragmentParams): Promise<SearchResult[]> {
   const data = await apiFetch<{ results: SearchResult[] }>('/v1/fragments/related', undefined, {
     'fragment-id': params.fragmentId,
@@ -1368,6 +1395,7 @@ export const apiClient = {
   fetchInbox,
   fetchInboxEntities,
   fetchInboxEntityItems,
+  fetchBrowseFragments,
   fetchFragment,
   updateFragment,
   materializeFragmentFFS,

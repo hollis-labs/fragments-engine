@@ -10,6 +10,7 @@ import {
 import type {
   Fragment,
   FragmentAttachment,
+  FragmentBrowseItem,
   FragmentEntity,
   FragmentRelation,
   InboxEntityGroup,
@@ -167,6 +168,26 @@ export function normalizeInboxItem(value: unknown): InboxItem {
     status: str('status'),
     created_at: normalizeDateString(normalized.created_at),
     preview_attachment_id: str('preview_attachment_id') || undefined,
+  }
+}
+
+export function normalizeFragmentBrowseItem(value: unknown): FragmentBrowseItem {
+  const normalized = normalizeKeys(value) as Record<string, unknown>
+  const str = (key: string) => (typeof normalized[key] === 'string' ? (normalized[key] as string) : '')
+  return {
+    fragment_id: str('fragment_id'),
+    title: str('title'),
+    source: str('source'),
+    source_type: str('source_type'),
+    status: str('status'),
+    summary: str('summary'),
+    canonical_path: str('canonical_path'),
+    source_id: str('source_id'),
+    created_at: normalizeDateString(normalized.created_at),
+    modified_at: normalizeDateString(normalized.modified_at),
+    preview_attachment_id: str('preview_attachment_id') || undefined,
+    tags: normalizeStringArray(normalized.tags),
+    materialized: normalizeBoolean(normalized.materialized) ?? false,
   }
 }
 

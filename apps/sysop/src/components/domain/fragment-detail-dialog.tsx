@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import {
   ChevronDown,
   ChevronRight,
+  Copy,
   ExternalLink,
   FileText,
   Film,
@@ -355,6 +356,69 @@ function metadataText(metadata: Record<string, unknown>, key: string): string {
   return typeof value === 'string' ? value : ''
 }
 
+function copyText(value: string) {
+  void navigator.clipboard?.writeText(value)
+}
+
+function pathHref(value: string): string | undefined {
+  const trimmed = value.trim()
+  if (!trimmed) return undefined
+  if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) return trimmed
+  if (trimmed.startsWith('/')) return `file://${trimmed}`
+  return undefined
+}
+
+function routeRef(reason: string): string {
+  const sep = reason.indexOf(':')
+  if (sep < 0) return ''
+  try {
+    const parsed = JSON.parse(reason.slice(sep + 1)) as { ref?: string }
+    return typeof parsed.ref === 'string' ? parsed.ref : ''
+  } catch {
+    return ''
+  }
+}
+
+function MetaRow({
+  label,
+  value,
+}: {
+  label: string
+  value: string
+}) {
+  if (!value.trim()) return null
+  const href = pathHref(value)
+  return (
+    <div className="flex items-center gap-2 rounded-md border border-border bg-bg px-3 py-2">
+      <span className="w-28 shrink-0 text-[10px] font-semibold uppercase tracking-[.18em] text-text-subtle">
+        {label}
+      </span>
+      <span className="min-w-0 flex-1 truncate font-mono text-[12px] text-text-soft" title={value}>
+        {value}
+      </span>
+      {href && (
+        <a
+          href={href}
+          target="_blank"
+          rel="noreferrer"
+          className="inline-flex items-center gap-1 rounded border border-border bg-panel-2/50 px-2 py-1 text-[10px] uppercase tracking-[.12em] text-text-soft transition hover:text-text"
+        >
+          <ExternalLink className="h-3 w-3" />
+          Open
+        </a>
+      )}
+      <button
+        type="button"
+        onClick={() => copyText(value)}
+        className="inline-flex items-center gap-1 rounded border border-border bg-panel-2/50 px-2 py-1 text-[10px] uppercase tracking-[.12em] text-text-soft transition hover:text-text"
+      >
+        <Copy className="h-3 w-3" />
+        Copy
+      </button>
+    </div>
+  )
+}
+
 function DetailBody({
   detail,
   onRoute,
@@ -369,6 +433,15 @@ function DetailBody({
   const api = useApi()
   const { fragment, entities, attachments, route_log, related } = detail
   const editable = fragment.source === 'manual'
+  const outputRefs = route_log
+    .map((entry) => routeRef(entry.reason))
+    .filter((value, index, all) => value && all.indexOf(value) === index)
+  const attachmentLinks = attachments.flatMap((attachment) => [
+    attachment.external_url ?? '',
+    attachment.source_path ?? '',
+    attachment.storage_path ?? '',
+    attachment.preview_storage_path ?? '',
+  ]).filter((value, index, all) => value && all.indexOf(value) === index)
   const [editing, setEditing] = useState(false)
   const [title, setTitle] = useState(fragment.title)
   const [summary, setSummary] = useState(fragment.summary)
@@ -550,6 +623,22 @@ function DetailBody({
           </p>
         </Section>
       )}
+
+      <Section title="Metadata">
+        <div className="flex flex-col gap-2">
+          <MetaRow label="Fragment ID" value={fragment.id} />
+          <MetaRow label="Source ID" value={fragment.source_id} />
+          <MetaRow label="Canonical path" value={fragment.canonical_path} />
+          <MetaRow label="URL" value={metadataText(fragment.metadata, 'url')} />
+          <MetaRow label="External URL" value={metadataText(fragment.metadata, 'external_url')} />
+          {outputRefs.map((value, index) => (
+            <MetaRow key={`output-ref:${index}`} label="Output" value={value} />
+          ))}
+          {attachmentLinks.map((value, index) => (
+            <MetaRow key={`attachment-link:${index}`} label="Attachment" value={value} />
+          ))}
+        </div>
+      </Section>
 
       <Section title="Content">
         {fragment.content ? (

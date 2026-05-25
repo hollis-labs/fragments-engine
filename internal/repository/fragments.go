@@ -484,6 +484,130 @@ LIMIT ? OFFSET ?`, listArgs...)
 	return items, total, nil
 }
 
+func (r *FragmentRepository) ListBrowse(ctx context.Context, opts ListOptions) ([]domain.FragmentBrowseItem, int, error) {
+	limit := opts.Limit
+	if limit <= 0 {
+		limit = 100
+	}
+	if limit > 500 {
+		limit = 500
+	}
+	offset := opts.Offset
+	if offset < 0 {
+		offset = 0
+	}
+
+	var (
+		clauses []string
+		args    []any
+		where   string
+	)
+	if opts.Status != "" {
+		clauses = append(clauses, "f.status = ?")
+		args = append(args, opts.Status)
+	}
+	if strings.TrimSpace(opts.Source) != "" {
+		clauses = append(clauses, "f.source = ?")
+		args = append(args, strings.TrimSpace(opts.Source))
+	}
+	if strings.TrimSpace(opts.SourceType) != "" {
+		clauses = append(clauses, "f.source_type = ?")
+		args = append(args, strings.TrimSpace(opts.SourceType))
+	}
+	if len(clauses) > 0 {
+		where = " WHERE " + strings.Join(clauses, " AND ")
+	}
+
+	var total int
+	if err := r.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM fragments f`+where, args...).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("count browse fragments: %w", err)
+	}
+
+	listArgs := append(append([]any{}, args...), limit, offset)
+	rows, err := r.db.QueryContext(ctx, `
+SELECT
+  f.id,
+  f.title,
+  f.source,
+  f.source_type,
+  f.status,
+  f.summary_text,
+  f.canonical_path,
+  f.source_id,
+  f.created_at,
+  COALESCE(NULLIF(f.indexed_at, ''), f.ingested_at, f.created_at) AS modified_at,
+  COALESCE((
+    SELECT fa.attachment_id
+    FROM fragment_attachments fa
+    JOIN attachments a ON a.id = fa.attachment_id
+    WHERE fa.fragment_id = f.id
+      AND a.kind = 'image'
+    ORDER BY fa.created_at ASC
+    LIMIT 1
+  ), '') AS preview_attachment_id,
+  COALESCE((
+    SELECT GROUP_CONCAT(e.value, char(31))
+    FROM fragment_entities fe
+    JOIN entities e ON e.id = fe.entity_id
+    WHERE fe.fragment_id = f.id
+      AND e.kind = 'tag'
+  ), '') AS tags,
+  EXISTS(
+    SELECT 1
+    FROM inbox i
+    WHERE i.fragment_id = f.id
+      AND LOWER(i.reason) LIKE '%materialized%'
+  ) AS materialized
+FROM fragments f`+where+`
+ORDER BY modified_at DESC, f.id DESC
+LIMIT ? OFFSET ?`, listArgs...)
+	if err != nil {
+		return nil, 0, fmt.Errorf("list browse fragments: %w", err)
+	}
+	defer rows.Close()
+
+	items := make([]domain.FragmentBrowseItem, 0, limit)
+	for rows.Next() {
+		var (
+			item               domain.FragmentBrowseItem
+			createdAt          string
+			modifiedAt         string
+			previewAttachment  string
+			tagsRaw            string
+			materializedInt    int
+		)
+		if err := rows.Scan(
+			&item.FragmentID,
+			&item.Title,
+			&item.Source,
+			&item.SourceType,
+			&item.Status,
+			&item.Summary,
+			&item.CanonicalPath,
+			&item.SourceID,
+			&createdAt,
+			&modifiedAt,
+			&previewAttachment,
+			&tagsRaw,
+			&materializedInt,
+		); err != nil {
+			return nil, 0, fmt.Errorf("scan browse fragment: %w", err)
+		}
+		item.CreatedAt, _ = time.Parse(time.RFC3339, createdAt)
+		item.ModifiedAt, _ = time.Parse(time.RFC3339, modifiedAt)
+		item.PreviewAttachmentID = strings.TrimSpace(previewAttachment)
+		if strings.TrimSpace(tagsRaw) != "" {
+			item.Tags = strings.Split(tagsRaw, string(rune(31)))
+		}
+		item.Materialized = materializedInt != 0
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, fmt.Errorf("iterate browse fragments: %w", err)
+	}
+	return items, total, nil
+}
+
 func (r *FragmentRepository) FindRelationCandidates(ctx context.Context, fragment domain.Fragment, limit int) ([]domain.Fragment, error) {
 	if limit <= 0 {
 		limit = 5
