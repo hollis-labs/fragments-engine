@@ -615,6 +615,102 @@ func TestRoutingService_ApplyRouteByEntity(t *testing.T) {
 	}
 }
 
+func TestRoutingService_MaterializeRouteKeepsInboxItems(t *testing.T) {
+	root := writeClaudeFixture(t, []string{
+		`{"type":"user","timestamp":"2026-04-25T10:00:00Z","sessionId":"session-123","slug":"roadmap-review","cwd":"/tmp/sample-project","message":{"content":"Summarize the roadmap with sqlite and llama3.1."}}
+{"type":"assistant","timestamp":"2026-04-25T10:00:05Z","sessionId":"session-123","slug":"roadmap-review","cwd":"/tmp/sample-project","message":{"content":[{"type":"text","text":"The roadmap starts with deterministic ingest and search through Vanta and Ollama."}]}}`,
+	})
+	cfgPath := writeIntegrationConfigForRoot(t, root)
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	ffsRoot := filepath.Join(filepath.Dir(cfgPath), "ffs", "docs", "references")
+
+	instance, err := app.Open(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("open app: %v", err)
+	}
+	defer instance.Close()
+
+	if _, err := instance.Fragments.RunAllIngests(context.Background(), cfg); err != nil {
+		t.Fatalf("run ingests: %v", err)
+	}
+	before, err := instance.Inbox.ListByEntity(context.Background(), "repo", "sample-project", 10)
+	if err != nil {
+		t.Fatalf("list inbox by entity: %v", err)
+	}
+	if len(before) != 1 {
+		t.Fatalf("expected 1 staged repo inbox item, got %d", len(before))
+	}
+
+	dest, err := instance.Routing.AddDestination(context.Background(), domain.Destination{
+		Name:       "ffs-references",
+		Kind:       "file",
+		ConfigJSON: `{"root":"` + ffsRoot + `","provider":"file","path_template":"repo/{source_id}"}`,
+	})
+	if err != nil {
+		t.Fatalf("add destination: %v", err)
+	}
+	route, err := instance.Routing.AddRoute(context.Background(), domain.Route{
+		Name:             "materialize-repo-route",
+		MatchEntityKind:  "repo",
+		MatchEntityValue: "sample-project",
+		DestinationID:    dest.ID,
+		AutoRoute:        false,
+	})
+	if err != nil {
+		t.Fatalf("add route: %v", err)
+	}
+
+	result, err := instance.Routing.MaterializeRoute(context.Background(), route.ID, 10)
+	if err != nil {
+		t.Fatalf("materialize route: %v", err)
+	}
+	if result.MatchedCount != 1 || result.MaterializedCount != 1 || result.FailedCount != 0 {
+		t.Fatalf("unexpected materialize result: %+v", result)
+	}
+	if len(result.Items) != 1 || result.Items[0].Status != "materialized" {
+		t.Fatalf("unexpected materialize items: %+v", result.Items)
+	}
+	if result.Items[0].WrittenPath == "" {
+		t.Fatal("expected written path for materialized item")
+	}
+
+	after, err := instance.Inbox.List(context.Background(), 10)
+	if err != nil {
+		t.Fatalf("list inbox: %v", err)
+	}
+	if len(after) != 1 {
+		t.Fatalf("expected inbox item to remain after materialize, got %d", len(after))
+	}
+	if !strings.Contains(after[0].Reason, "materialized") {
+		t.Fatalf("expected inbox reason to note materialization, got %s", after[0].Reason)
+	}
+
+	fragment, err := instance.Fragments.GetDetail(context.Background(), after[0].FragmentID, 10)
+	if err != nil {
+		t.Fatalf("get fragment detail: %v", err)
+	}
+	if fragment.Fragment.Status != domain.FragmentStatusInbox {
+		t.Fatalf("expected fragment to remain inbox after materialize, got %s", fragment.Fragment.Status)
+	}
+	raw, err := os.ReadFile(result.Items[0].WrittenPath)
+	if err != nil {
+		t.Fatalf("read materialized file: %v", err)
+	}
+	if !strings.Contains(string(raw), "# Claude session: roadmap-review") {
+		t.Fatalf("expected fragment markdown in materialized file: %s", string(raw))
+	}
+	logEntries, err := instance.Routing.ListRouteLog(context.Background(), after[0].FragmentID)
+	if err != nil {
+		t.Fatalf("list route log: %v", err)
+	}
+	if len(logEntries) == 0 || logEntries[len(logEntries)-1].Decision != "materialize" {
+		t.Fatalf("expected materialize route log entry, got %+v", logEntries)
+	}
+}
+
 func writeIntegrationConfig(t *testing.T) string {
 	t.Helper()
 	tempDir := t.TempDir()

@@ -240,6 +240,7 @@ Notes:
 - `file` destinations now support `provider` and optional `path_template`
 - `provider: "ffs"` gives Pinterest pin routes the same bundle layout FE already uses in `~/Documents/ffs/media/pins`
 - `path_template` can place generic file outputs under a stable namespace like `docs/references/{platform}/{source_id}`
+- `route materialize` writes through a destination without changing fragment status or removing the inbox item
 
 Nil via MCP:
 

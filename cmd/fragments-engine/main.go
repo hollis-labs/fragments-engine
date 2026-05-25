@@ -862,7 +862,7 @@ func runInboxReview(args []string) error {
 
 func runRoute(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: fragments-engine route <destination-add|destination-list|destination-status|destination-rename|destination-validate|destination-delete|destination-retry-set|destination-queue-policy-set|add|rename|list|log|preview|delete|apply-entity> ...")
+		return fmt.Errorf("usage: fragments-engine route <destination-add|destination-list|destination-status|destination-rename|destination-validate|destination-delete|destination-retry-set|destination-queue-policy-set|add|rename|list|log|preview|materialize|delete|apply-entity> ...")
 	}
 	switch args[0] {
 	case "destination-add":
@@ -891,12 +891,14 @@ func runRoute(args []string) error {
 		return runRouteLog(args[1:])
 	case "preview":
 		return runRoutePreview(args[1:])
+	case "materialize":
+		return runRouteMaterialize(args[1:])
 	case "delete":
 		return runRouteDelete(args[1:])
 	case "apply-entity":
 		return runRouteApplyEntity(args[1:])
 	default:
-		return fmt.Errorf("usage: fragments-engine route <destination-add|destination-list|destination-status|destination-rename|destination-validate|destination-delete|destination-retry-set|destination-queue-policy-set|add|rename|list|log|preview|delete|apply-entity> ...")
+		return fmt.Errorf("usage: fragments-engine route <destination-add|destination-list|destination-status|destination-rename|destination-validate|destination-delete|destination-retry-set|destination-queue-policy-set|add|rename|list|log|preview|materialize|delete|apply-entity> ...")
 	}
 }
 
@@ -1318,6 +1320,37 @@ func runRoutePreview(args []string) error {
 	fmt.Printf("route=%s matched=%d\n", result.RouteID, result.MatchedCount)
 	for _, item := range result.PreviewItems {
 		fmt.Printf("%s %s source=%s type=%s reason=%s\n", item.FragmentID, item.Title, item.Source, item.SourceType, item.Reason)
+	}
+	return nil
+}
+
+func runRouteMaterialize(args []string) error {
+	fs := flag.NewFlagSet("route materialize", flag.ContinueOnError)
+	configPath := fs.String("config", "fragments.example.yaml", "path to config file")
+	routeID := fs.String("route-id", "", "route id")
+	limit := fs.Int("limit", 50, "maximum staged items to materialize")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *routeID == "" {
+		return fmt.Errorf("route materialize requires -route-id")
+	}
+	cfg, err := config.Load(*configPath)
+	if err != nil {
+		return err
+	}
+	instance, err := app.Open(context.Background(), cfg)
+	if err != nil {
+		return err
+	}
+	defer instance.Close()
+	result, err := instance.Routing.MaterializeRoute(context.Background(), *routeID, *limit)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("route=%s matched=%d materialized=%d failed=%d\n", result.RouteID, result.MatchedCount, result.MaterializedCount, result.FailedCount)
+	for _, item := range result.Items {
+		fmt.Printf("%s %s %s %s\n", item.FragmentID, item.Status, item.WrittenPath, item.Error)
 	}
 	return nil
 }

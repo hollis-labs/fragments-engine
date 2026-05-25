@@ -237,6 +237,12 @@ go run ./cmd/fragments-engine route destination-add \
     "root": "~/Documents/ffs/media/pins",
     "provider": "ffs"
   }'
+
+# Materialize matching inbox items into FFS while keeping them in inbox
+go run ./cmd/fragments-engine route materialize \
+  -config ./fragments.yaml \
+  -route-id <route-id> \
+  -limit 20
 ```
 
 Delivery retry defaults are transport-aware:

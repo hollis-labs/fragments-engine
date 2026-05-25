@@ -351,6 +351,21 @@ type RoutePreviewResult struct {
 	PreviewItems []RoutePreviewItem `json:"preview_items"`
 }
 
+type RouteMaterializeItem struct {
+	FragmentID  string `json:"fragment_id"`
+	Status      string `json:"status"`
+	WrittenPath string `json:"written_path,omitempty"`
+	Error       string `json:"error,omitempty"`
+}
+
+type RouteMaterializeResult struct {
+	RouteID           string                 `json:"route_id"`
+	MatchedCount      int                    `json:"matched_count"`
+	MaterializedCount int                    `json:"materialized_count"`
+	FailedCount       int                    `json:"failed_count"`
+	Items             []RouteMaterializeItem `json:"items"`
+}
+
 type RouteDeleteResult struct {
 	RouteID      string `json:"route_id"`
 	Deleted      bool   `json:"deleted"`

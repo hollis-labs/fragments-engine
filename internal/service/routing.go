@@ -301,6 +301,92 @@ func (s *RoutingService) PreviewRoute(ctx context.Context, routeID string, limit
 	return result, nil
 }
 
+func (s *RoutingService) MaterializeRoute(ctx context.Context, routeID string, limit int) (domain.RouteMaterializeResult, error) {
+	result := domain.RouteMaterializeResult{RouteID: routeID}
+	if strings.TrimSpace(routeID) == "" {
+		return result, fmt.Errorf("route id is required")
+	}
+	route, err := s.repo.GetRoute(ctx, routeID)
+	if err != nil {
+		return result, err
+	}
+	destination, err := s.repo.GetDestination(ctx, route.DestinationID)
+	if err != nil {
+		return result, err
+	}
+	items, err := s.inbox.List(ctx, limit)
+	if err != nil {
+		return result, err
+	}
+	now := time.Now().UTC()
+	for _, item := range items {
+		fragment, err := s.fragments.GetByID(ctx, item.FragmentID)
+		if err != nil {
+			continue
+		}
+		entities, err := s.entities.ListByFragment(ctx, item.FragmentID)
+		if err != nil {
+			continue
+		}
+		if !routeMatchesPreview(route, fragment, entities) {
+			continue
+		}
+		result.MatchedCount++
+		entry := domain.RouteMaterializeItem{FragmentID: item.FragmentID}
+		var attachments []domain.FragmentAttachment
+		if s.attachments != nil {
+			attachments, err = s.attachments.ListByFragment(ctx, item.FragmentID)
+			if err != nil {
+				entry.Status = "failed"
+				entry.Error = err.Error()
+				result.Items = append(result.Items, entry)
+				result.FailedCount++
+				continue
+			}
+		}
+
+		delivery, err := ingest.ExecuteDestinationWithRetry(ctx, destination, fragment, attachments)
+		if err != nil {
+			entry.Status = "failed"
+			entry.Error = err.Error()
+			result.Items = append(result.Items, entry)
+			result.FailedCount++
+			_ = s.repo.LogDecision(ctx, domain.RouteLogEntry{
+				FragmentID:    item.FragmentID,
+				RouteID:       route.ID,
+				DestinationID: destination.ID,
+				Decision:      "materialize",
+				Reason:        encodeRouteDeliveryReason("materialize_error", deliveryReasonPayload{Attempts: delivery.Attempts, Error: err.Error()}),
+				CreatedAt:     now,
+			})
+			continue
+		}
+		if s.attachments != nil && len(delivery.PublishedAttachments) > 0 {
+			if err := s.attachments.UpdateFragmentAttachmentStoragePaths(ctx, item.FragmentID, delivery.PublishedAttachments); err != nil {
+				return result, err
+			}
+		}
+		if err := s.inbox.UpdateReason(ctx, item.FragmentID, materializedInboxReason(item.Reason, destination.Name)); err != nil {
+			return result, err
+		}
+		if err := s.repo.LogDecision(ctx, domain.RouteLogEntry{
+			FragmentID:    item.FragmentID,
+			RouteID:       route.ID,
+			DestinationID: destination.ID,
+			Decision:      "materialize",
+			Reason:        encodeRouteDeliveryReason("materialize_route", deliveryReasonPayload{Attempts: delivery.Attempts, Ref: delivery.Ref}),
+			CreatedAt:     now,
+		}); err != nil {
+			return result, err
+		}
+		entry.Status = "materialized"
+		entry.WrittenPath = delivery.Ref
+		result.Items = append(result.Items, entry)
+		result.MaterializedCount++
+	}
+	return result, nil
+}
+
 func (s *RoutingService) DeleteRoute(ctx context.Context, routeID string, force bool) (domain.RouteDeleteResult, error) {
 	result := domain.RouteDeleteResult{RouteID: routeID, Force: force}
 	var err error
@@ -846,6 +932,21 @@ func trimReasonPrefix(reason string, prefixes ...string) string {
 	return reason
 }
 
+func materializedInboxReason(reason, destinationName string) string {
+	reason = strings.TrimSpace(reason)
+	suffix := "materialized"
+	if strings.TrimSpace(destinationName) != "" {
+		suffix = "materialized to " + strings.TrimSpace(destinationName)
+	}
+	if strings.Contains(strings.ToLower(reason), "materialized") {
+		return reason
+	}
+	if reason == "" {
+		return suffix
+	}
+	return reason + "; " + suffix
+}
+
 func maxInt(a, b int) int {
 	if a > b {
 		return a
@@ -857,6 +958,14 @@ type deliveryReasonPayload struct {
 	Attempts int    `json:"attempts"`
 	Ref      string `json:"ref"`
 	Error    string `json:"error"`
+}
+
+func encodeRouteDeliveryReason(prefix string, payload deliveryReasonPayload) string {
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return prefix
+	}
+	return prefix + ":" + string(raw)
 }
 
 func parseDeliveryReason(reason string) (string, deliveryReasonPayload, bool) {

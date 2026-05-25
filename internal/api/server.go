@@ -80,6 +80,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/routes/create", s.handleRouteCreate)
 	mux.HandleFunc("/v1/routes/rename", s.handleRouteRename)
 	mux.HandleFunc("/v1/routes/preview", s.handleRoutePreview)
+	mux.HandleFunc("/v1/routes/materialize", s.handleRouteMaterialize)
 	mux.HandleFunc("/v1/routes/delete", s.handleRouteDelete)
 	mux.HandleFunc("/v1/routes/apply-entity", s.handleRouteApplyEntity)
 	mux.HandleFunc("/v1/route-log", s.handleRouteLog)
@@ -106,6 +107,11 @@ type routeRenameRequest struct {
 }
 
 type routePreviewRequest struct {
+	RouteID string `json:"route_id"`
+	Limit   int    `json:"limit"`
+}
+
+type routeMaterializeRequest struct {
 	RouteID string `json:"route_id"`
 	Limit   int    `json:"limit"`
 }
@@ -1808,6 +1814,39 @@ func (s *Server) handleRoutePreview(w http.ResponseWriter, r *http.Request) {
 	}
 	defer instance.Close()
 	item, err := instance.Routing.PreviewRoute(r.Context(), input.RouteID, input.Limit)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"item": item})
+}
+
+func (s *Server) handleRouteMaterialize(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var input routeMaterializeRequest
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil && err != io.EOF {
+		http.Error(w, "invalid json body", http.StatusBadRequest)
+		return
+	}
+	if input.RouteID == "" {
+		http.Error(w, "missing route_id", http.StatusBadRequest)
+		return
+	}
+	cfg, err := config.Load(s.cfgPath)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	instance, err := app.Open(r.Context(), cfg)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer instance.Close()
+	item, err := instance.Routing.MaterializeRoute(r.Context(), input.RouteID, input.Limit)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
