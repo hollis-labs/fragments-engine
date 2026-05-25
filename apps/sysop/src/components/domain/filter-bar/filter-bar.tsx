@@ -8,7 +8,12 @@ import {
   type FilterChip,
   statusTone,
 } from '@hollis-labs/sysop-ui'
-import type { EntitySelection, RouteFilter, VisualFilter } from '@/lib/inbox-filters-storage'
+import type {
+  EntitySelection,
+  MaterializedFilter,
+  RouteFilter,
+  VisualFilter,
+} from '@/lib/inbox-filters-storage'
 import type { InboxEntityGroup } from '@/lib/types'
 import type { SearchMode } from '@/lib/api'
 
@@ -29,6 +34,24 @@ const VISUAL_CYCLE_OPTIONS: readonly [CycleOption<VisualFilter>, ...CycleOption<
   { value: 'all', label: 'All', dotColor: 'bg-text-subtle', title: 'All fragments' },
   { value: 'visual', label: 'Visual', dotColor: 'bg-status-indexed', title: 'Only fragments with preview media' },
   { value: 'pins', label: 'Pins', dotColor: 'bg-status-routed', title: 'Pinterest pin fragments only' },
+]
+const MATERIALIZED_CYCLE_OPTIONS: readonly [
+  CycleOption<MaterializedFilter>,
+  ...CycleOption<MaterializedFilter>[],
+] = [
+  { value: 'all', label: 'All', dotColor: 'bg-text-subtle', title: 'All fragments' },
+  {
+    value: 'pending',
+    label: 'Pending',
+    dotColor: 'bg-status-inbox',
+    title: 'Not yet materialized',
+  },
+  {
+    value: 'materialized',
+    label: 'Saved',
+    dotColor: 'bg-status-routed',
+    title: 'Already materialized to an output destination',
+  },
 ]
 
 // Entity selections are encoded into a single combobox id; a space separates
@@ -53,6 +76,8 @@ interface FilterBarProps {
   onRouteFilterChange: (value: RouteFilter) => void
   visualFilter: VisualFilter
   onVisualFilterChange: (value: VisualFilter) => void
+  materializedFilter: MaterializedFilter
+  onMaterializedFilterChange: (value: MaterializedFilter) => void
   entityGroups: InboxEntityGroup[]
   entitySelection: EntitySelection | null
   onEntityChange: (selection: EntitySelection | null) => void
@@ -87,6 +112,8 @@ export default function FilterBar({
   onRouteFilterChange,
   visualFilter,
   onVisualFilterChange,
+  materializedFilter,
+  onMaterializedFilterChange,
   entityGroups,
   entitySelection,
   onEntityChange,
@@ -213,6 +240,18 @@ export default function FilterBar({
           value={visualFilter}
           onChange={onVisualFilterChange}
           ariaLabel="Visual filter"
+        />
+      </div>
+
+      <div className="flex items-center gap-1 border-l border-border pl-3">
+        <span className="mr-1 text-[10px] uppercase tracking-wider text-text-subtle">
+          Saved:
+        </span>
+        <FilterCycleToggle
+          options={MATERIALIZED_CYCLE_OPTIONS}
+          value={materializedFilter}
+          onChange={onMaterializedFilterChange}
+          ariaLabel="Materialized filter"
         />
       </div>
 

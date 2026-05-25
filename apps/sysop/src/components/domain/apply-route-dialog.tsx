@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Dialog, DialogContent, DialogTitle, Button } from '@hollis-labs/sysop-ui'
 import { useApi } from '@/hooks/useApi'
-import { ApiError, type RouteApplyResult } from '@/lib/api'
+import { ApiError, type RouteApplyResult, type RouteMaterializeResult } from '@/lib/api'
 import type { Route } from '@/lib/types'
 
 export interface EntityRef {
@@ -34,11 +34,13 @@ export function ApplyRouteDialog({ open, onClose, entityOptions, onApplied }: Ap
   const [applying, setApplying] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [result, setResult] = useState<RouteApplyResult | null>(null)
+  const [materializeResult, setMaterializeResult] = useState<RouteMaterializeResult | null>(null)
 
   useEffect(() => {
     if (!open) return
     setError(null)
     setResult(null)
+    setMaterializeResult(null)
     setEntityIdx(0)
     void api
       .fetchRoutes()
@@ -61,10 +63,29 @@ export function ApplyRouteDialog({ open, onClose, entityOptions, onApplied }: Ap
     try {
       const res = await api.applyRouteEntity({ routeId, kind: entity.kind, value: entity.value })
       setResult(res)
+      setMaterializeResult(null)
       onApplied?.()
     } catch (err) {
       setError(
         err instanceof ApiError || err instanceof Error ? err.message : 'Failed to apply route',
+      )
+    } finally {
+      setApplying(false)
+    }
+  }
+
+  async function handleMaterialize() {
+    if (!routeId) return
+    setApplying(true)
+    setError(null)
+    try {
+      const res = await api.materializeRoute({ routeId, limit: 100 })
+      setMaterializeResult(res)
+      setResult(null)
+      onApplied?.()
+    } catch (err) {
+      setError(
+        err instanceof ApiError || err instanceof Error ? err.message : 'Failed to materialize route',
       )
     } finally {
       setApplying(false)
@@ -126,7 +147,7 @@ export function ApplyRouteDialog({ open, onClose, entityOptions, onApplied }: Ap
               <span className="text-text-soft">
                 {entity ? `${entity.kind}: ${entity.value}` : '—'}
               </span>
-              .
+              . Materialize writes matching fragments through the destination but keeps them in inbox.
             </p>
 
             {error && <p className="text-sm text-danger-soft">{error}</p>}
@@ -138,9 +159,24 @@ export function ApplyRouteDialog({ open, onClose, entityOptions, onApplied }: Ap
               </div>
             )}
 
+            {materializeResult && (
+              <div className="rounded-md border border-border bg-bg p-2 text-[12px] text-text-muted">
+                Matched {materializeResult.matched_count} · materialized{' '}
+                {materializeResult.materialized_count} · failed {materializeResult.failed_count}
+              </div>
+            )}
+
             <div className="flex justify-end gap-2">
               <Button variant="ghost" size="sm" onClick={onClose}>
-                {result ? 'Close' : 'Cancel'}
+                {result || materializeResult ? 'Close' : 'Cancel'}
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleMaterialize}
+                disabled={applying || !routeId}
+              >
+                {applying ? 'Working…' : 'Materialize'}
               </Button>
               <Button
                 size="sm"

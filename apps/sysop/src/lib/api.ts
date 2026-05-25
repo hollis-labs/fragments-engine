@@ -261,6 +261,11 @@ export interface DeleteRouteInput {
   force?: boolean
 }
 
+export interface MaterializeRouteInput {
+  routeId: string
+  limit?: number
+}
+
 export interface ApplyRouteEntityInput {
   routeId: string
   kind: string
@@ -460,6 +465,21 @@ export interface RouteApplyResult {
   items: RouteApplyItem[]
 }
 
+export interface RouteMaterializeItem {
+  fragment_id: string
+  status: string
+  written_path?: string
+  error?: string
+}
+
+export interface RouteMaterializeResult {
+  route_id: string
+  matched_count: number
+  materialized_count: number
+  failed_count: number
+  items: RouteMaterializeItem[]
+}
+
 export interface DestinationStatusRecord {
   destination: Destination
   provider?: string
@@ -625,6 +645,10 @@ function mapRouteDeleteResult(value: unknown): RouteDeleteResult {
 
 function mapRouteApplyResult(value: unknown): RouteApplyResult {
   return normalizeKeys(value) as RouteApplyResult
+}
+
+function mapRouteMaterializeResult(value: unknown): RouteMaterializeResult {
+  return normalizeKeys(value) as RouteMaterializeResult
 }
 
 function mapDestinationDeleteResult(value: unknown): DestinationDeleteResult {
@@ -1108,6 +1132,16 @@ export async function applyRouteEntity(input: ApplyRouteEntityInput): Promise<Ro
   return mapRouteApplyResult(data.result)
 }
 
+export async function materializeRoute(
+  input: MaterializeRouteInput,
+): Promise<RouteMaterializeResult> {
+  const data = await postJson<{ item: RouteMaterializeResult }>('/v1/routes/materialize', {
+    route_id: input.routeId,
+    ...(input.limit !== undefined ? { limit: input.limit } : {}),
+  })
+  return mapRouteMaterializeResult(data.item)
+}
+
 export interface CreateRouteInput {
   name: string
   matchSource?: string
@@ -1325,6 +1359,7 @@ export const apiClient = {
   renameRoute,
   deleteRoute,
   applyRouteEntity,
+  materializeRoute,
   fetchDestinations,
   fetchDestinationStatus,
   validateDestination,

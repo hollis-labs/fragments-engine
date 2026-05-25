@@ -19,10 +19,15 @@ function shortId(id: string): string {
   return id.length > 12 ? `${id.slice(0, 12)}…` : id
 }
 
+function isMaterialized(reason: string): boolean {
+  return reason.toLowerCase().includes('materialized')
+}
+
 /** A single inbox fragment row — mirrors Torque's TaskRow. */
 export function FragmentRow({ item, selected, onSelect, onOpen, previewURL }: FragmentRowProps) {
   const dateStr = formatShortDate(item.staged_at)
   const agoStr = formatRelativeTime(item.staged_at)
+  const materialized = isMaterialized(item.reason)
 
   function handleOpen(e: React.MouseEvent<HTMLTableRowElement>) {
     if (!onOpen) return
@@ -85,6 +90,11 @@ export function FragmentRow({ item, selected, onSelect, onOpen, previewURL }: Fr
             <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
               {item.source_type && (
                 <span className="text-[10px] text-text-subtle/80">{item.source_type}</span>
+              )}
+              {materialized && (
+                <span className="rounded border border-status-routed/30 bg-status-routed/10 px-1.5 py-0.5 text-[10px] uppercase tracking-[.14em] text-status-routed">
+                  saved
+                </span>
               )}
               <span className="font-mono text-[10px] text-text-subtle/80">id:</span>
               <CopyableId id={item.fragment_id} label={shortId(item.fragment_id)} />

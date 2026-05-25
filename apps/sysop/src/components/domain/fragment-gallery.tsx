@@ -15,6 +15,7 @@ export default function FragmentGallery({
     <div className="grid grid-cols-1 gap-4 p-4 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
       {items.map((item) => {
         const imageURL = previewURL(item)
+        const materialized = item.reason.toLowerCase().includes('materialized')
         return (
           <button
             key={item.fragment_id}
@@ -42,6 +43,11 @@ export default function FragmentGallery({
                 <span className="rounded border border-border bg-bg px-1.5 py-0.5 text-text-soft">
                   {item.status}
                 </span>
+                {materialized && (
+                  <span className="rounded border border-status-routed/30 bg-status-routed/10 px-1.5 py-0.5 text-status-routed">
+                    saved
+                  </span>
+                )}
               </div>
               <div>
                 <p className="line-clamp-2 text-[14px] leading-5 text-text">

@@ -24,12 +24,17 @@ import {
   saveInboxFilters,
   type EntitySelection,
   type InboxFilters,
+  type MaterializedFilter,
   type RouteFilter,
   type VisualFilter,
 } from '@/lib/inbox-filters-storage'
 import type { InboxEntityGroup, InboxItem, SearchResult } from '@/lib/types'
 
 type ViewMode = 'table' | 'gallery'
+
+function isMaterializedReason(reason: string): boolean {
+  return reason.toLowerCase().includes('materialized')
+}
 
 function TableSkeleton() {
   return (
@@ -196,13 +201,15 @@ export default function OperationsPage() {
       if (filters.statuses.length > 0 && !filters.statuses.includes(it.status)) return false
       if (filters.visual === 'visual' && !it.preview_attachment_id) return false
       if (filters.visual === 'pins' && it.source_type !== 'pin') return false
+      if (filters.materialized === 'materialized' && !isMaterializedReason(it.reason)) return false
+      if (filters.materialized === 'pending' && isMaterializedReason(it.reason)) return false
       if (!searchMode) {
         if (filters.route === 'routed' && !it.route_id) return false
         if (filters.route === 'unrouted' && it.route_id) return false
       }
       return true
     })
-  }, [items, filters.statuses, filters.visual, filters.route, searchMode])
+  }, [items, filters.statuses, filters.visual, filters.materialized, filters.route, searchMode])
 
   const previewURL = (item: InboxItem) =>
     item.preview_attachment_id
@@ -227,8 +234,10 @@ export default function OperationsPage() {
       ]
     }
     const routed = items.filter((i) => i.route_id).length
+    const materialized = items.filter((i) => isMaterializedReason(i.reason)).length
     return [
       { label: 'Staged', value: items.length, accentColor: SUMMARY_ACCENTS.total },
+      { label: 'Saved', value: materialized, accentColor: 'var(--color-status-routed)' },
       { label: 'Unrouted', value: items.length - routed, accentColor: SUMMARY_ACCENTS.unrouted },
       { label: 'Routed', value: routed, accentColor: SUMMARY_ACCENTS.routed },
       { label: 'Sources', value: sources, accentColor: SUMMARY_ACCENTS.sources },
@@ -248,6 +257,7 @@ export default function OperationsPage() {
   const activeFilterCount =
     (filters.statuses.length > 0 ? 1 : 0) +
     (filters.visual !== 'all' ? 1 : 0) +
+    (filters.materialized !== 'all' ? 1 : 0) +
     (!searchMode && filters.route !== 'both' ? 1 : 0) +
     (!searchMode && filters.entity !== null ? 1 : 0)
 
@@ -337,6 +347,10 @@ export default function OperationsPage() {
           onRouteFilterChange={(route: RouteFilter) => patchFilters({ route })}
           visualFilter={filters.visual}
           onVisualFilterChange={(visual: VisualFilter) => patchFilters({ visual })}
+          materializedFilter={filters.materialized}
+          onMaterializedFilterChange={(materialized: MaterializedFilter) =>
+            patchFilters({ materialized })
+          }
           entityGroups={entityGroups}
           entitySelection={filters.entity}
           onEntityChange={(selection) => patchFilters({ entity: selection })}

@@ -8,9 +8,15 @@ const KEY = 'sysop:inbox:filters:v1'
  */
 export type RouteFilter = 'both' | 'routed' | 'unrouted'
 export type VisualFilter = 'all' | 'visual' | 'pins'
+export type MaterializedFilter = 'all' | 'materialized' | 'pending'
 
 const ROUTE_VALUES: readonly RouteFilter[] = ['both', 'routed', 'unrouted'] as const
 const VISUAL_VALUES: readonly VisualFilter[] = ['all', 'visual', 'pins'] as const
+const MATERIALIZED_VALUES: readonly MaterializedFilter[] = [
+  'all',
+  'materialized',
+  'pending',
+] as const
 
 export function parseRouteFilter(raw: unknown): RouteFilter {
   if (typeof raw !== 'string') return 'both'
@@ -20,6 +26,13 @@ export function parseRouteFilter(raw: unknown): RouteFilter {
 export function parseVisualFilter(raw: unknown): VisualFilter {
   if (typeof raw !== 'string') return 'all'
   return (VISUAL_VALUES as readonly string[]).includes(raw) ? (raw as VisualFilter) : 'all'
+}
+
+export function parseMaterializedFilter(raw: unknown): MaterializedFilter {
+  if (typeof raw !== 'string') return 'all'
+  return (MATERIALIZED_VALUES as readonly string[]).includes(raw)
+    ? (raw as MaterializedFilter)
+    : 'all'
 }
 
 /** Selected entity facet, encoded as `kind` + `value`. */
@@ -39,6 +52,8 @@ export interface InboxFilters {
   entity: EntitySelection | null
   /** Visual narrowing for image-backed work, including Pinterest pins. */
   visual: VisualFilter
+  /** Whether a fragment has already been materialized into an output destination. */
+  materialized: MaterializedFilter
 }
 
 export const EMPTY_INBOX_FILTERS: InboxFilters = {
@@ -47,6 +62,7 @@ export const EMPTY_INBOX_FILTERS: InboxFilters = {
   route: 'both',
   entity: null,
   visual: 'all',
+  materialized: 'all',
 }
 
 export function saveInboxFilters(filters: InboxFilters): void {
@@ -80,6 +96,7 @@ export function readInboxFilters(): InboxFilters | null {
       route: parseRouteFilter(f.route),
       entity,
       visual: parseVisualFilter(f.visual),
+      materialized: parseMaterializedFilter(f.materialized),
     }
   } catch {
     return null
