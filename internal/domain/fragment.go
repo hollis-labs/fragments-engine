@@ -453,6 +453,19 @@ type CLIDestinationConfig struct {
 	QueuePolicy    *QueuePolicyConfig  `json:"queue_policy,omitempty"`
 }
 
+// CallbackDestinationConfig is the fifth FE destination kind (loom-architecture.md
+// §3-§4). It never fires synchronously: delivery is always deferred to the
+// existing async delivery queue (see internal/service/delivery_queue.go and
+// internal/app/queue_runtime.go), which is dispatch-wiring's job, not this
+// package's. FE treats Generator as an opaque tag and never interprets it —
+// it is only forwarded to Target, Curator's Nanite durable-agent wake endpoint.
+type CallbackDestinationConfig struct {
+	Target      string              `json:"target" yaml:"target"`
+	Generator   string              `json:"generator" yaml:"generator"`
+	Retry       DeliveryRetryConfig `json:"retry" yaml:"retry"`
+	QueuePolicy *QueuePolicyConfig  `json:"queue_policy,omitempty" yaml:"queue_policy,omitempty"`
+}
+
 type APINaniteMessagingConfig struct {
 	Endpoint      string `json:"endpoint"`
 	FromSessionID string `json:"from_session_id"`

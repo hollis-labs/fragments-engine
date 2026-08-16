@@ -14,6 +14,9 @@ delivery:
   cli:
     max_attempts: 3
     backoff_ms: 500
+  callback:
+    max_attempts: 3
+    backoff_ms: 500
 
 queue:
   auto_drain: true

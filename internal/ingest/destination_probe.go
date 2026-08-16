@@ -33,6 +33,8 @@ func ProbeDestination(ctx context.Context, destination domain.Destination) (Prob
 		return probeAPIDestination(ctx, destination)
 	case "cli":
 		return probeCLIDestination(destination)
+	case "callback":
+		return probeCallbackDestination(destination)
 	default:
 		return ProbeResult{}, fmt.Errorf("unsupported destination kind %q", destination.Kind)
 	}
@@ -183,6 +185,32 @@ func probeCLIDestination(destination domain.Destination) (ProbeResult, error) {
 		}
 	}
 	return ProbeResult{Reachable: true, Message: "cli_ready:" + command}, nil
+}
+
+// probeCallbackDestination deliberately performs config-only validation
+// instead of a live reachability check. Callback delivery is always async
+// (it is only ever fired from the queue drainer, never inline from the
+// routing hot path), so probing it with a live network call against
+// Curator's Nanite wake endpoint would defeat the point of never doing
+// synchronous I/O against that endpoint from FE. Unlike
+// probeAPIDestination/probeMCPDestination, this never dials out.
+func probeCallbackDestination(destination domain.Destination) (ProbeResult, error) {
+	cfg, err := domain.DecodeDestinationConfig[domain.CallbackDestinationConfig](destination)
+	if err != nil {
+		return ProbeResult{}, err
+	}
+	target := strings.TrimSpace(cfg.Target)
+	if target == "" {
+		return ProbeResult{}, fmt.Errorf("callback destination %q missing target", destination.Name)
+	}
+	u, err := url.Parse(target)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return ProbeResult{Reachable: false, Message: "invalid_target:" + target}, nil
+	}
+	if strings.TrimSpace(cfg.Generator) == "" {
+		return ProbeResult{Reachable: false, Message: "missing_generator"}, nil
+	}
+	return ProbeResult{Reachable: true, Message: "config_valid:" + target}, nil
 }
 
 func minDuration(a, b time.Duration) time.Duration {

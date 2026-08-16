@@ -221,6 +221,17 @@ func (s *RoutingService) UpdateDestinationRetry(ctx context.Context, destination
 			return domain.Destination{}, err
 		}
 		return s.AddDestination(ctx, updated)
+	case "callback":
+		cfg, err := domain.DecodeDestinationConfig[domain.CallbackDestinationConfig](item)
+		if err != nil {
+			return domain.Destination{}, err
+		}
+		cfg.Retry = retry
+		updated, err := encodeDestinationConfig(item, cfg)
+		if err != nil {
+			return domain.Destination{}, err
+		}
+		return s.AddDestination(ctx, updated)
 	default:
 		return domain.Destination{}, fmt.Errorf("unsupported destination kind %q for retry update", item.Kind)
 	}
@@ -267,6 +278,17 @@ func (s *RoutingService) UpdateDestinationQueuePolicy(ctx context.Context, desti
 		return s.AddDestination(ctx, updated)
 	case "cli":
 		cfg, err := domain.DecodeDestinationConfig[domain.CLIDestinationConfig](item)
+		if err != nil {
+			return domain.Destination{}, err
+		}
+		cfg.QueuePolicy = &policy
+		updated, err := encodeDestinationConfig(item, cfg)
+		if err != nil {
+			return domain.Destination{}, err
+		}
+		return s.AddDestination(ctx, updated)
+	case "callback":
+		cfg, err := domain.DecodeDestinationConfig[domain.CallbackDestinationConfig](item)
 		if err != nil {
 			return domain.Destination{}, err
 		}
@@ -728,6 +750,19 @@ func normalizeDestination(in domain.Destination, defaults config.DeliveryConfig)
 		}
 		cfg.Retry = destinationRetryConfig(in, defaults)
 		return encodeDestinationConfig(in, cfg)
+	case "callback":
+		cfg, err := domain.DecodeDestinationConfig[domain.CallbackDestinationConfig](in)
+		if err != nil {
+			return domain.Destination{}, err
+		}
+		if strings.TrimSpace(cfg.Target) == "" {
+			return domain.Destination{}, fmt.Errorf("callback destination %q missing target", in.Name)
+		}
+		if strings.TrimSpace(cfg.Generator) == "" {
+			return domain.Destination{}, fmt.Errorf("callback destination %q missing generator", in.Name)
+		}
+		cfg.Retry = destinationRetryConfig(in, defaults)
+		return encodeDestinationConfig(in, cfg)
 	default:
 		return domain.Destination{}, fmt.Errorf("unsupported destination kind %q", in.Kind)
 	}
@@ -768,6 +803,11 @@ func destinationRetryConfig(destination domain.Destination, defaults config.Deli
 		if err == nil {
 			return normalizeRetry(cfg.Retry, deliveryRetryDefaults("cli", defaults).MaxAttempts, deliveryRetryDefaults("cli", defaults).BackoffMS)
 		}
+	case "callback":
+		cfg, err := domain.DecodeDestinationConfig[domain.CallbackDestinationConfig](destination)
+		if err == nil {
+			return normalizeRetry(cfg.Retry, deliveryRetryDefaults("callback", defaults).MaxAttempts, deliveryRetryDefaults("callback", defaults).BackoffMS)
+		}
 	}
 	return domain.DeliveryRetryConfig{MaxAttempts: 1, BackoffMS: 0}
 }
@@ -802,6 +842,16 @@ func deliveryRetryDefaults(kind string, defaults config.DeliveryConfig) domain.D
 			backoff = 500
 		}
 		attempts := defaults.CLI.MaxAttempts
+		if attempts <= 0 {
+			attempts = 3
+		}
+		return domain.DeliveryRetryConfig{MaxAttempts: attempts, BackoffMS: backoff}
+	case "callback":
+		backoff := defaults.Callback.BackoffMS
+		if backoff <= 0 {
+			backoff = 500
+		}
+		attempts := defaults.Callback.MaxAttempts
 		if attempts <= 0 {
 			attempts = 3
 		}
@@ -971,6 +1021,9 @@ func destinationProvider(item domain.Destination) string {
 		if err == nil && strings.TrimSpace(cfg.Provider) != "" {
 			return cfg.Provider
 		}
+	case "callback":
+		// CallbackDestinationConfig has no provider field (loom-architecture.md
+		// §4's config shape doesn't include one) - fall through to item.Kind.
 	}
 	return item.Kind
 }

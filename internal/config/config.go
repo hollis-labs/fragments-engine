@@ -85,10 +85,11 @@ type LinkContentFirecrawlConfig struct {
 }
 
 type DeliveryConfig struct {
-	File DeliveryRetryDefaults `json:"file" yaml:"file"`
-	MCP  DeliveryRetryDefaults `json:"mcp" yaml:"mcp"`
-	API  DeliveryRetryDefaults `json:"api" yaml:"api"`
-	CLI  DeliveryRetryDefaults `json:"cli" yaml:"cli"`
+	File     DeliveryRetryDefaults `json:"file" yaml:"file"`
+	MCP      DeliveryRetryDefaults `json:"mcp" yaml:"mcp"`
+	API      DeliveryRetryDefaults `json:"api" yaml:"api"`
+	CLI      DeliveryRetryDefaults `json:"cli" yaml:"cli"`
+	Callback DeliveryRetryDefaults `json:"callback" yaml:"callback"`
 }
 
 type DeliveryRetryDefaults struct {
@@ -263,6 +264,12 @@ func (c *Config) Validate() error {
 	}
 	if c.Delivery.CLI.BackoffMS <= 0 {
 		c.Delivery.CLI.BackoffMS = 500
+	}
+	if c.Delivery.Callback.MaxAttempts <= 0 {
+		c.Delivery.Callback.MaxAttempts = 3
+	}
+	if c.Delivery.Callback.BackoffMS <= 0 {
+		c.Delivery.Callback.BackoffMS = 500
 	}
 	if strings.TrimSpace(c.Recall.Backend) == "" {
 		c.Recall.Backend = "sqlite"

@@ -57,6 +57,86 @@ func TestProbeDestination_API(t *testing.T) {
 	}
 }
 
+func TestProbeDestination_Callback(t *testing.T) {
+	result, err := ProbeDestination(context.Background(), domain.Destination{
+		Name:       "curator-wake",
+		Kind:       "callback",
+		ConfigJSON: `{"target":"https://curator.example.com/nanite/wake","generator":"wiki_page"}`,
+	})
+	if err != nil {
+		t.Fatalf("probe callback destination: %v", err)
+	}
+	if !result.Reachable {
+		t.Fatalf("expected callback destination config to be valid: %+v", result)
+	}
+	if !strings.Contains(result.Message, "config_valid:") {
+		t.Fatalf("unexpected probe message: %s", result.Message)
+	}
+}
+
+func TestProbeDestination_Callback_MissingTarget(t *testing.T) {
+	_, err := ProbeDestination(context.Background(), domain.Destination{
+		Name:       "curator-wake",
+		Kind:       "callback",
+		ConfigJSON: `{"generator":"wiki_page"}`,
+	})
+	if err == nil || !strings.Contains(err.Error(), "missing target") {
+		t.Fatalf("expected missing target error, got %v", err)
+	}
+}
+
+func TestProbeDestination_Callback_MalformedTarget(t *testing.T) {
+	result, err := ProbeDestination(context.Background(), domain.Destination{
+		Name:       "curator-wake",
+		Kind:       "callback",
+		ConfigJSON: `{"target":"not-a-url","generator":"wiki_page"}`,
+	})
+	if err != nil {
+		t.Fatalf("probe callback destination: %v", err)
+	}
+	if result.Reachable {
+		t.Fatalf("expected malformed target to be reported as invalid: %+v", result)
+	}
+	if !strings.Contains(result.Message, "invalid_target:") {
+		t.Fatalf("unexpected probe message: %s", result.Message)
+	}
+}
+
+func TestProbeDestination_Callback_MissingGenerator(t *testing.T) {
+	result, err := ProbeDestination(context.Background(), domain.Destination{
+		Name:       "curator-wake",
+		Kind:       "callback",
+		ConfigJSON: `{"target":"https://curator.example.com/nanite/wake"}`,
+	})
+	if err != nil {
+		t.Fatalf("probe callback destination: %v", err)
+	}
+	if result.Reachable {
+		t.Fatalf("expected missing generator to be reported as invalid: %+v", result)
+	}
+	if !strings.Contains(result.Message, "missing_generator") {
+		t.Fatalf("unexpected probe message: %s", result.Message)
+	}
+}
+
+// TestProbeDestination_Callback_NeverDialsOut ensures probing a callback
+// destination whose target is unreachable still reports config-only
+// validity, proving the probe never performs live network I/O against
+// Curator's endpoint (unlike probeAPIDestination/probeMCPDestination).
+func TestProbeDestination_Callback_NeverDialsOut(t *testing.T) {
+	result, err := ProbeDestination(context.Background(), domain.Destination{
+		Name:       "curator-wake-unreachable",
+		Kind:       "callback",
+		ConfigJSON: `{"target":"https://127.0.0.1:1/nanite/wake","generator":"wiki_page"}`,
+	})
+	if err != nil {
+		t.Fatalf("probe callback destination: %v", err)
+	}
+	if !result.Reachable {
+		t.Fatalf("expected config-only validation to succeed regardless of live reachability: %+v", result)
+	}
+}
+
 func TestProbeDestination_CLI(t *testing.T) {
 	result, err := ProbeDestination(context.Background(), domain.Destination{
 		Name: "cli-export",

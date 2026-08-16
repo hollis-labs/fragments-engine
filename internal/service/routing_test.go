@@ -581,3 +581,270 @@ func TestRoutingService_DestinationStatus(t *testing.T) {
 		t.Fatalf("unexpected effective queue policy: %+v", status.EffectiveQueuePolicy)
 	}
 }
+
+func TestRoutingService_AddDestination_CallbackDefaults(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "fragments.db")
+	st, err := store.Open(dbPath)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+
+	svc := NewRoutingService(
+		repository.NewRoutingRepository(st.DB),
+		repository.NewFragmentRepository(st.DB),
+		repository.NewEntityRepository(st.DB),
+		repository.NewInboxRepository(st.DB),
+		config.DeliveryConfig{
+			Callback: config.DeliveryRetryDefaults{MaxAttempts: 6, BackoffMS: 750},
+		},
+		config.QueueConfig{},
+	)
+
+	dest, err := svc.AddDestination(context.Background(), domain.Destination{
+		Name:       "curator-wake",
+		Kind:       "callback",
+		ConfigJSON: `{"target":"https://curator.example.com/nanite/wake","generator":"wiki_page"}`,
+	})
+	if err != nil {
+		t.Fatalf("add callback destination: %v", err)
+	}
+	cfg, err := domain.DecodeDestinationConfig[domain.CallbackDestinationConfig](dest)
+	if err != nil {
+		t.Fatalf("decode callback config: %v", err)
+	}
+	if cfg.Target != "https://curator.example.com/nanite/wake" {
+		t.Fatalf("unexpected target: %s", cfg.Target)
+	}
+	if cfg.Generator != "wiki_page" {
+		t.Fatalf("unexpected generator: %s", cfg.Generator)
+	}
+	if cfg.Retry.MaxAttempts != 6 || cfg.Retry.BackoffMS != 750 {
+		t.Fatalf("unexpected callback retry defaults: %+v", cfg.Retry)
+	}
+}
+
+func TestRoutingService_AddDestination_CallbackRequiresTargetAndGenerator(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "fragments.db")
+	st, err := store.Open(dbPath)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+
+	svc := NewRoutingService(
+		repository.NewRoutingRepository(st.DB),
+		repository.NewFragmentRepository(st.DB),
+		repository.NewEntityRepository(st.DB),
+		repository.NewInboxRepository(st.DB),
+		config.DeliveryConfig{},
+		config.QueueConfig{},
+	)
+
+	if _, err := svc.AddDestination(context.Background(), domain.Destination{
+		Name:       "missing-target",
+		Kind:       "callback",
+		ConfigJSON: `{"generator":"wiki_page"}`,
+	}); err == nil || !strings.Contains(err.Error(), "missing target") {
+		t.Fatalf("expected missing target error, got %v", err)
+	}
+
+	if _, err := svc.AddDestination(context.Background(), domain.Destination{
+		Name:       "missing-generator",
+		Kind:       "callback",
+		ConfigJSON: `{"target":"https://curator.example.com/nanite/wake"}`,
+	}); err == nil || !strings.Contains(err.Error(), "missing generator") {
+		t.Fatalf("expected missing generator error, got %v", err)
+	}
+}
+
+func TestRoutingService_Callback_CRUDParity(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "fragments.db")
+	st, err := store.Open(dbPath)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+
+	svc := NewRoutingService(
+		repository.NewRoutingRepository(st.DB),
+		repository.NewFragmentRepository(st.DB),
+		repository.NewEntityRepository(st.DB),
+		repository.NewInboxRepository(st.DB),
+		config.DeliveryConfig{},
+		config.QueueConfig{},
+	)
+
+	// Create.
+	dest, err := svc.AddDestination(context.Background(), domain.Destination{
+		Name:       "curator-wake",
+		Kind:       "callback",
+		ConfigJSON: `{"target":"https://curator.example.com/nanite/wake","generator":"wiki_page"}`,
+	})
+	if err != nil {
+		t.Fatalf("add callback destination: %v", err)
+	}
+
+	// List.
+	items, err := svc.ListDestinations(context.Background())
+	if err != nil {
+		t.Fatalf("list destinations: %v", err)
+	}
+	found := false
+	for _, item := range items {
+		if item.ID == dest.ID {
+			found = true
+			if item.Kind != "callback" {
+				t.Fatalf("unexpected kind in list: %s", item.Kind)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("expected callback destination in list: %+v", items)
+	}
+
+	// Config-validate (config-only, since the callback probe never dials out).
+	validation, err := svc.ValidateDestination(context.Background(), dest)
+	if err != nil {
+		t.Fatalf("validate callback destination: %v", err)
+	}
+	if !validation.ConfigValid {
+		t.Fatalf("expected callback config to be valid: %+v", validation)
+	}
+	if validation.Provider != "callback" {
+		t.Fatalf("expected callback provider to fall back to kind, got %q", validation.Provider)
+	}
+	if !validation.Reachable || !strings.Contains(validation.Reachability, "config_valid:") {
+		t.Fatalf("expected config-only reachability result, got %+v", validation)
+	}
+
+	// Update retry policy.
+	dest, err = svc.UpdateDestinationRetry(context.Background(), dest.ID, domain.DeliveryRetryConfig{
+		MaxAttempts: 5,
+		BackoffMS:   1500,
+	})
+	if err != nil {
+		t.Fatalf("update callback retry: %v", err)
+	}
+	cfg, err := domain.DecodeDestinationConfig[domain.CallbackDestinationConfig](dest)
+	if err != nil {
+		t.Fatalf("decode updated callback config: %v", err)
+	}
+	if cfg.Retry.MaxAttempts != 5 || cfg.Retry.BackoffMS != 1500 {
+		t.Fatalf("unexpected updated callback retry: %+v", cfg.Retry)
+	}
+
+	// Update queue policy.
+	dest, err = svc.UpdateDestinationQueuePolicy(context.Background(), dest.ID, domain.QueuePolicyConfig{
+		ReplayCooldownSeconds:    20,
+		MaxReplaysPerHour:        3,
+		AlertPendingThreshold:    5,
+		AlertDeadLetterThreshold: 2,
+	})
+	if err != nil {
+		t.Fatalf("update callback queue policy: %v", err)
+	}
+	cfg, err = domain.DecodeDestinationConfig[domain.CallbackDestinationConfig](dest)
+	if err != nil {
+		t.Fatalf("decode updated callback config after queue policy: %v", err)
+	}
+	if cfg.QueuePolicy == nil || cfg.QueuePolicy.ReplayCooldownSeconds != 20 || cfg.QueuePolicy.MaxReplaysPerHour != 3 {
+		t.Fatalf("unexpected updated callback queue policy: %+v", cfg.QueuePolicy)
+	}
+
+	// Delete.
+	result, err := svc.DeleteDestination(context.Background(), dest.ID, false)
+	if err != nil {
+		t.Fatalf("delete callback destination: %v", err)
+	}
+	if !result.Deleted {
+		t.Fatalf("expected callback destination to be deleted: %+v", result)
+	}
+	if _, err := svc.repo.GetDestination(context.Background(), dest.ID); err == nil {
+		t.Fatalf("expected callback destination to be gone after delete")
+	}
+}
+
+// TestRoutingService_CallbackRoute_DoesNotFireEndToEnd verifies the explicit
+// scope boundary for this task: creating a route pointing at a callback
+// destination and attempting to materialize a fragment through it does NOT
+// deliver anything. Dispatch mechanics (firing the callback via the async
+// delivery queue) are deliberately out of scope here and belong to the
+// dispatch-wiring follow-up task; internal/ingest/delivery.go's
+// executeDestinationOnce has no "callback" case, so any attempt to execute a
+// callback destination directly (outside the queue drainer) must fail with
+// an "unsupported destination kind" error rather than silently succeeding.
+func TestRoutingService_CallbackRoute_DoesNotFireEndToEnd(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "fragments.db")
+	st, err := store.Open(dbPath)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+
+	fragmentRepo := repository.NewFragmentRepository(st.DB)
+	entityRepo := repository.NewEntityRepository(st.DB)
+	routingRepo := repository.NewRoutingRepository(st.DB)
+	inboxRepo := repository.NewInboxRepository(st.DB)
+	svc := NewRoutingService(routingRepo, fragmentRepo, entityRepo, inboxRepo,
+		config.DeliveryConfig{},
+		config.QueueConfig{},
+	)
+
+	dest, err := svc.AddDestination(context.Background(), domain.Destination{
+		Name:       "curator-wake",
+		Kind:       "callback",
+		ConfigJSON: `{"target":"https://curator.example.com/nanite/wake","generator":"wiki_page"}`,
+	})
+	if err != nil {
+		t.Fatalf("add callback destination: %v", err)
+	}
+	route, err := svc.AddRoute(context.Background(), domain.Route{
+		Name:          "callback-route",
+		DestinationID: dest.ID,
+	})
+	if err != nil {
+		t.Fatalf("add route: %v", err)
+	}
+	if route.DestinationID != dest.ID {
+		t.Fatalf("unexpected route destination: %+v", route)
+	}
+
+	fragment, err := repository.BuildFragment(domain.PipelineFragment{
+		Source:        "claude",
+		SourceType:    "chat",
+		SourceID:      "session-callback-1",
+		Title:         "Claude session: callback-test",
+		Content:       "This fragment should never actually reach Curator from this task's plumbing alone.",
+		CreatedAt:     time.Date(2026, 8, 16, 10, 0, 0, 0, time.UTC),
+		CanonicalPath: "fragments/chats/claude/2026-08-16/session-callback-1",
+	}, "claude-default", time.Date(2026, 8, 16, 10, 5, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("build fragment: %v", err)
+	}
+	if _, err := fragmentRepo.Upsert(context.Background(), fragment); err != nil {
+		t.Fatalf("upsert fragment: %v", err)
+	}
+
+	result, err := svc.MaterializeFragmentToDestination(context.Background(), fragment.ID, dest.Name)
+	if err == nil {
+		t.Fatalf("expected materialize through callback destination to fail (dispatch wiring is a separate task), got result=%+v", result)
+	}
+	if !strings.Contains(err.Error(), "unsupported destination kind") {
+		t.Fatalf("expected unsupported-kind error proving no delivery executor runs for callback yet, got: %v", err)
+	}
+	if result.WrittenPath != "" {
+		t.Fatalf("expected no written path for callback destination, got %+v", result)
+	}
+
+	logs, err := svc.ListRouteLog(context.Background(), fragment.ID)
+	if err != nil {
+		t.Fatalf("list route log: %v", err)
+	}
+	if len(logs) != 1 {
+		t.Fatalf("expected exactly one route log entry recording the failed attempt, got %d: %+v", len(logs), logs)
+	}
+	if !strings.Contains(logs[0].Reason, "materialize_destination_error") {
+		t.Fatalf("expected materialize_destination_error log entry, got %+v", logs[0])
+	}
+}

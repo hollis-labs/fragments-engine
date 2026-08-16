@@ -40,6 +40,12 @@ func effectiveRetryConfig(destination domain.Destination, defaults config.Delive
 			base := deliveryRetryDefaults("cli", defaults)
 			return normalizeRetry(cfg.Retry, base.MaxAttempts, base.BackoffMS)
 		}
+	case "callback":
+		cfg, err := domain.DecodeDestinationConfig[domain.CallbackDestinationConfig](destination)
+		if err == nil {
+			base := deliveryRetryDefaults("callback", defaults)
+			return normalizeRetry(cfg.Retry, base.MaxAttempts, base.BackoffMS)
+		}
 	}
 	return domain.DeliveryRetryConfig{MaxAttempts: 1, BackoffMS: 0}
 }
