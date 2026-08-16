@@ -186,6 +186,65 @@ go run ./cmd/fragments-engine ingest validate -config ./fragments.yaml -name hol
 go run ./cmd/fragments-engine ingest preview -config ./fragments.yaml -name hollis-git-changes -limit 10
 ```
 
+### 3d. Link ingest (single link and batch-from-file)
+
+Adding a link deterministically pulls a title and summary from the source. Primary extraction is local (readability-style article parsing plus `og:title`/`og:description`/meta-description scraping); an optional Firecrawl fallback (`link_content.fallback_backend: firecrawl` in `fragments.yaml`, see the `link_content` block near the top of `fragments.example.yaml`) is retried asynchronously by the inbox reviewer when the primary fetch is blocked or errors — it is never called synchronously on the ingest hot path. Summary precedence: `og:description`/meta description when present, else the first ~200 characters of extracted article text, trimmed at a word boundary.
+
+**Single link, via manual intake:**
+
+Manual intake is HTTP-only today (no CLI equivalent yet) — start the API server first:
+
+```bash
+go run ./cmd/fragments-engine serve-api -config ./fragments.yaml -addr :8091
+```
+
+Then POST content containing a URL. Either a bare URL alone, or a `#link` hashtag anywhere alongside a URL embedded in other text, triggers link enrichment — the hashtag is recorded as a tag and left in place in the stored content, never stripped:
+
+```bash
+curl -s -X POST http://127.0.0.1:8091/v1/intake \
+  -H 'Content-Type: application/json' \
+  -d '{"content": "https://example.com/some-article"}'
+
+curl -s -X POST http://127.0.0.1:8091/v1/intake \
+  -H 'Content-Type: application/json' \
+  -d '{"content": "worth reading later #link https://example.com/some-article"}'
+```
+
+Response:
+
+```json
+{"result": {"fragment_id": "<id>", "outcome": "inserted", "status": "inbox"}}
+```
+
+Verify the enriched title/summary landed:
+
+```bash
+go run ./cmd/fragments-engine fragment get -config ./fragments.yaml -fragment-id <id>
+```
+
+If the source blocks the fetch (bot detection, 403/429/503, or a near-empty extraction), intake still returns immediately with a placeholder summary and `metadata.enrichment_status = "pending"`. The inbox reviewer (see [§2a](#2a-configure-the-inbox-reviewer)) retries it on its normal poll cycle with the full local-then-Firecrawl chain, up to a bounded number of attempts (`metadata.enrichment_attempts`) before giving up and marking `metadata.enrichment_status = "failed"`.
+
+**Batch, from a file of links:**
+
+Reuses the `url_source` ingest kind ([§3a](#3a-url-source-manifests)) — no separate batch-intake mechanism exists. Point an ingest entry's `source.root` at a directory and drop a manifest file in it:
+
+```bash
+mkdir -p ~/Documents/corpus/url-inbox
+cat > ~/Documents/corpus/url-inbox/reading-list.txt <<'EOF'
+https://example.com/some-article
+https://example.com/another-post
+EOF
+```
+
+Enable the matching entry in `fragments.yaml` (`fragments.example.yaml` ships this as `name: saved-urls`, `enabled: false` — flip it to `true` in your live config), then run:
+
+```bash
+go run ./cmd/fragments-engine ingest preview -config ./fragments.yaml -name saved-urls -limit 10
+go run ./cmd/fragments-engine ingest run -config ./fragments.yaml
+```
+
+`ingest run` executes every enabled ingest, not just this one — use `ingest preview` first to check just this source. Note `preview` still performs a real fetch of every URL in the manifest (it shares the same `Collect` path as a real run) — it just doesn't insert anything into FE's database. A blocked/failed URL within the batch does not abort the run; it lands as a placeholder fragment with `enrichment_status = "pending"` and gets picked up by the same inbox-reviewer retry cycle as the single-link path above, alongside every other blocked URL in the batch.
+
 ### 4. Inspect fragment provenance
 
 ```bash
@@ -333,5 +392,6 @@ go run ./cmd/fragments-engine route destination-queue-policy-set -config ./fragm
 - Prefer `fragment get` after `url_source` ingest to verify extracted content type, canonical URL, and reference attachment shape
 - Prefer `fragment get` after `filesystem_docs` ingest to verify repo/path/frontmatter metadata and canonical paths
 - Prefer `fragment get` after `git_changes` ingest to verify commit/file metadata, especially include/exclude filtering
+- Prefer `fragment get` after single or batch link ingest to check whether `enrichment_status` landed on `done` versus `pending`/`failed` before assuming the title/summary is final
 - Prefer `route preview` before broad inbox bulk actions
 - Use `fragment get` and `route destination-status` as the default debugging pair
