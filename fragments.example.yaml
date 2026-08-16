@@ -71,6 +71,13 @@ analysis:
 # the reviewer's first attempt. "firecrawl" is only ever invoked from the async
 # inbox-reviewer retry path (never synchronously during intake or batch ingest) and
 # requires api_key_env below to name an environment variable holding a real key.
+#
+# That variable is read once via plain os.Getenv at process startup -- FE never
+# loads a .env file. Exporting it in your shell only reaches ad hoc CLI runs; the
+# long-running serve-api dev process (Cerberus resource fragments-engine-dev,
+# launchd-managed) needs it in that resource's env: block in
+# ~/.cerberus/projects/fragments-engine.cerberus.yaml, followed by a reload/restart.
+# See README.md "Environment variables for API keys".
 link_content:
   backend: local
   fallback_backend: firecrawl

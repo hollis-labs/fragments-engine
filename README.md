@@ -46,6 +46,29 @@ against a gitignored runtime copy — `fragments.yaml` — never the template it
 Seed it once with `make seed-config` (copies `fragments.example.yaml` →
 `fragments.yaml`), then edit `fragments.yaml`:
 
+### Environment variables for API keys
+
+Several config fields (`openai.api_key_env`, `firecrawl.api_key_env`,
+`reviewer.github_token_env`, ...) name an environment variable to read a
+secret from, e.g. `api_key_env: FIRECRAWL_API_KEY` — the field holds the
+variable *name*, never the key itself. FE reads it with a plain
+`os.Getenv(name)` at construction time; nothing in this repo loads a `.env`
+file, so the variable must already be in the process's environment when FE
+starts:
+
+- **Ad hoc CLI runs** (`go run ./cmd/fragments-engine ...`, `make test`, etc.)
+  inherit whatever is exported in your interactive shell. A repo-root `.env`
+  file is *not* auto-loaded — `export FIRECRAWL_API_KEY=...` (or source the
+  file yourself) before running, in that shell session.
+- **The long-running dev API service** (`serve-api`, Cerberus resource
+  `fragments-engine-dev`, launchd-managed) does **not** inherit your shell —
+  launchd processes only get what's declared for them. Add the variable to
+  that resource's `env:` block in `~/.cerberus/projects/fragments-engine.cerberus.yaml`
+  and reload the resource so Cerberus regenerates the launchd plist with it;
+  a shell export or `.env` entry alone will never reach this process. The
+  provider also only reads the variable once at process startup, so an
+  already-running service needs a restart after the key is added.
+
 ```yaml
 database:
   path: ./data/fragments-engine.db
