@@ -38,25 +38,27 @@ FROM todos
 WHERE kind IN ('note', 'scratch')
 ORDER BY id`
 
-const projectsQuery = `
-SELECT p.name FROM todo_projects tp
+// allProjectsQuery/allContextsQuery/allTagsQuery/allRefsQuery are fetched
+// once per vault (not once per item) and grouped in memory by todo_id --
+// avoids an N+1 query pattern against a foreign, potentially
+// concurrently-written database, which would otherwise multiply lock
+// contention with Nil's own writer connections.
+const allProjectsQuery = `
+SELECT tp.todo_id, p.name FROM todo_projects tp
 JOIN projects p ON p.id = tp.project_id
-WHERE tp.todo_id = ?
-ORDER BY p.name`
+ORDER BY tp.todo_id, p.name`
 
-const contextsQuery = `
-SELECT c.name FROM todo_contexts tc
+const allContextsQuery = `
+SELECT tc.todo_id, c.name FROM todo_contexts tc
 JOIN contexts c ON c.id = tc.context_id
-WHERE tc.todo_id = ?
-ORDER BY c.name`
+ORDER BY tc.todo_id, c.name`
 
-const tagsQuery = `
-SELECT t.name FROM todo_tags tt
+const allTagsQuery = `
+SELECT tt.todo_id, t.name FROM todo_tags tt
 JOIN tags t ON t.id = tt.tag_id
-WHERE tt.todo_id = ?
-ORDER BY t.name`
+ORDER BY tt.todo_id, t.name`
 
-const refsQuery = `SELECT target_id FROM refs WHERE source_id = ? ORDER BY target_id`
+const allRefsQuery = `SELECT source_id, target_id FROM refs ORDER BY source_id, target_id`
 
 type Source struct{}
 
@@ -216,14 +218,17 @@ func toStringSet(items []string) map[string]struct{} {
 // prefix is NOT safe: the Go-level DSN parser strips everything after '?'
 // before it ever reaches SQLite's URI parser unless the DSN starts with
 // "file:", silently discarding "mode=ro" and opening read-write. So the
-// "file:" prefix here is load-bearing, not decorative.
+// "file:" prefix here is load-bearing, not decorative. The path itself is
+// built via sourceutil.FileURI, which percent-encodes it through Go's
+// net/url -- a raw fmt.Sprintf-ed path could otherwise be misparsed by
+// SQLite's URI parser if it contains '#', '%', '?', or spaces.
 func collectVaultItems(ctx context.Context, cfg config.IngestConfig, vault nilVault) ([]domain.PipelineFragment, error) {
 	dbPath := filepath.Join(vault.Path, "todo.db")
 	absPath, err := filepath.Abs(dbPath)
 	if err != nil {
 		return nil, fmt.Errorf("resolve todo.db path: %w", err)
 	}
-	dsn := fmt.Sprintf("file:%s?mode=ro&_pragma=busy_timeout(5000)", absPath)
+	dsn := sourceutil.FileURI(absPath) + "?mode=ro&_pragma=busy_timeout(5000)"
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open todo.db: %w", err)
@@ -238,9 +243,7 @@ func collectVaultItems(ctx context.Context, cfg config.IngestConfig, vault nilVa
 	if err != nil {
 		return nil, fmt.Errorf("query todos: %w", err)
 	}
-	defer rows.Close()
-
-	var out []domain.PipelineFragment
+	var items []todoRow
 	for rows.Next() {
 		var item todoRow
 		if err := rows.Scan(
@@ -248,9 +251,39 @@ func collectVaultItems(ctx context.Context, cfg config.IngestConfig, vault nilVa
 			&item.Priority, &item.Section, &item.Pinned, &item.Completed, &item.Archived,
 			&item.DueAt, &item.Kind, &item.APISource,
 		); err != nil {
+			rows.Close()
 			return nil, fmt.Errorf("scan todos row: %w", err)
 		}
+		items = append(items, item)
+	}
+	scanErr := rows.Err()
+	rows.Close()
+	if scanErr != nil {
+		return nil, fmt.Errorf("iterate todos rows: %w", scanErr)
+	}
 
+	// Taxonomy/refs are fetched once per vault, not once per item -- avoids
+	// an N+1 query pattern against a foreign, potentially
+	// concurrently-written database.
+	projectsByID, err := queryGroupedNames(ctx, db, allProjectsQuery)
+	if err != nil {
+		return nil, fmt.Errorf("query projects: %w", err)
+	}
+	contextsByID, err := queryGroupedNames(ctx, db, allContextsQuery)
+	if err != nil {
+		return nil, fmt.Errorf("query contexts: %w", err)
+	}
+	tagsByID, err := queryGroupedNames(ctx, db, allTagsQuery)
+	if err != nil {
+		return nil, fmt.Errorf("query tags: %w", err)
+	}
+	refsByID, err := queryGroupedRefs(ctx, db)
+	if err != nil {
+		return nil, fmt.Errorf("query refs: %w", err)
+	}
+
+	var out []domain.PipelineFragment
+	for _, item := range items {
 		content, docLinkedIDs := convertNotesDoc(item.NotesDoc.String)
 		if strings.TrimSpace(content) == "" {
 			continue
@@ -261,66 +294,47 @@ func collectVaultItems(ctx context.Context, cfg config.IngestConfig, vault nilVa
 			return nil, fmt.Errorf("parse created_at for item %d: %w", item.ID, err)
 		}
 
-		projects, err := queryNames(ctx, db, projectsQuery, item.ID)
-		if err != nil {
-			return nil, fmt.Errorf("query projects for item %d: %w", item.ID, err)
-		}
-		contexts, err := queryNames(ctx, db, contextsQuery, item.ID)
-		if err != nil {
-			return nil, fmt.Errorf("query contexts for item %d: %w", item.ID, err)
-		}
-		tags, err := queryNames(ctx, db, tagsQuery, item.ID)
-		if err != nil {
-			return nil, fmt.Errorf("query tags for item %d: %w", item.ID, err)
-		}
-		refTargets, err := queryRefTargets(ctx, db, item.ID)
-		if err != nil {
-			return nil, fmt.Errorf("query refs for item %d: %w", item.ID, err)
-		}
-
-		linkedIDs := dedupStrings(append(refTargets, docLinkedIDs...))
+		linkedIDs := dedupStrings(append(append([]string{}, refsByID[item.ID]...), docLinkedIDs...))
 		sort.Strings(linkedIDs)
 
-		out = append(out, buildFragment(cfg, vault, item, content, createdAt, projects, contexts, tags, linkedIDs))
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate todos rows: %w", err)
+		out = append(out, buildFragment(cfg, vault, item, content, createdAt, projectsByID[item.ID], contextsByID[item.ID], tagsByID[item.ID], linkedIDs))
 	}
 	return out, nil
 }
 
-func queryNames(ctx context.Context, db *sql.DB, query string, todoID int64) ([]string, error) {
-	rows, err := db.QueryContext(ctx, query, todoID)
+func queryGroupedNames(ctx context.Context, db *sql.DB, query string) (map[int64][]string, error) {
+	rows, err := db.QueryContext(ctx, query)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var names []string
+	out := make(map[int64][]string)
 	for rows.Next() {
+		var todoID int64
 		var name string
-		if err := rows.Scan(&name); err != nil {
+		if err := rows.Scan(&todoID, &name); err != nil {
 			return nil, err
 		}
-		names = append(names, name)
+		out[todoID] = append(out[todoID], name)
 	}
-	return names, rows.Err()
+	return out, rows.Err()
 }
 
-func queryRefTargets(ctx context.Context, db *sql.DB, todoID int64) ([]string, error) {
-	rows, err := db.QueryContext(ctx, refsQuery, todoID)
+func queryGroupedRefs(ctx context.Context, db *sql.DB) (map[int64][]string, error) {
+	rows, err := db.QueryContext(ctx, allRefsQuery)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var ids []string
+	out := make(map[int64][]string)
 	for rows.Next() {
-		var target int64
-		if err := rows.Scan(&target); err != nil {
+		var sourceID, targetID int64
+		if err := rows.Scan(&sourceID, &targetID); err != nil {
 			return nil, err
 		}
-		ids = append(ids, strconv.FormatInt(target, 10))
+		out[sourceID] = append(out[sourceID], strconv.FormatInt(targetID, 10))
 	}
-	return ids, rows.Err()
+	return out, rows.Err()
 }
 
 // parseNilTime parses Nil's created_at/updated_at strings. Nil writes these

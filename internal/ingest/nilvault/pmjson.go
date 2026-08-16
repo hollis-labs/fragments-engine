@@ -67,7 +67,7 @@ func renderBlock(n pmNode, linked *[]string) string {
 	case "paragraph", "heading":
 		text := renderInline(n.Content, linked)
 		if n.Type == "heading" {
-			level := attrInt(n.Attrs, "level", 1)
+			level := max(attrInt(n.Attrs, "level", 1), 1)
 			text = strings.Repeat("#", level) + " " + text
 		}
 		return text
@@ -77,7 +77,7 @@ func renderBlock(n pmNode, linked *[]string) string {
 		inner := renderBlocks(n.Content, linked)
 		var quoted []string
 		for _, block := range inner {
-			for _, line := range strings.Split(block, "\n") {
+			for line := range strings.SplitSeq(block, "\n") {
 				quoted = append(quoted, "> "+line)
 			}
 		}
@@ -117,7 +117,7 @@ func renderList(items []pmNode, linked *[]string, ordered bool) string {
 		}
 		lines = append(lines, marker+itemBlocks[0])
 		for _, extra := range itemBlocks[1:] {
-			for _, line := range strings.Split(extra, "\n") {
+			for line := range strings.SplitSeq(extra, "\n") {
 				lines = append(lines, "  "+line)
 			}
 		}
