@@ -341,6 +341,56 @@ func (e *ManualIntakeEnricher) ReviewURL(ctx context.Context, fragment domain.Fr
 		}
 		return base, true, nil
 	default:
+		// Retry pending generic-URL fragments through the fallback-capable
+		// provider (local -> firecrawl). Gate on currentMeta (the fragment's
+		// state as of BEFORE this review pass), not base.Metadata -- the
+		// latter may already read "done" or "pending" purely as a side
+		// effect of EnrichIntake's own internal local-only re-fetch above,
+		// and gating on that would either skip retries that should run or
+		// re-invoke the fallback provider (and re-bill Firecrawl) on every
+		// poll cycle for links that are already done/given-up.
+		if e.linkFallback != nil && currentMetaValue(currentMeta, "enrichment_status") == "pending" {
+			fetched, fetchErr := e.linkFallback.Fetch(ctx, u.String())
+			if fetchErr == nil && !fetched.Blocked {
+				// Only replace the title if the fragment doesn't already have
+				// a real, user-meaningful one. base.Title is always
+				// non-empty by this point (EnrichIntake falls back to a
+				// derived-from-URL placeholder), so checking base.Title
+				// itself would never let a fetched title through. And
+				// fragment.Title alone isn't enough either: once a "pending"
+				// fragment survives one review pass, applyEnrichment
+				// persists that same derived placeholder back as
+				// fragment.Title, so on the NEXT poll cycle fragment.Title
+				// is non-empty too even though nothing real was ever set.
+				// So treat the title as "already set" only when it's
+				// non-empty AND differs from what EnrichIntake would derive
+				// fresh from the URL right now -- i.e. it's either a real
+				// user-provided title or a title a prior successful fetch
+				// already populated.
+				if strings.TrimSpace(fragment.Title) == "" || fragment.Title == deriveTitleFromURL(u) {
+					if title := strings.TrimSpace(fetched.Title); title != "" {
+						base.Title = title
+					}
+				}
+				if summary := strings.TrimSpace(fetched.Summary); summary != "" {
+					base.Summary = summary
+				}
+				if text := strings.TrimSpace(fetched.Text); text != "" {
+					base.Metadata["link_text"] = text
+				}
+				for key, value := range fetched.Metadata {
+					base.Metadata[key] = value
+				}
+				// Matches EnrichIntake's own generic-URL branch convention.
+				base.Metadata["enrichment_status"] = "done"
+			} else {
+				// Fallback fetch failed or the site is still blocking us --
+				// leave enrichment_status pending so the next reviewer poll
+				// cycle tries again. No retry cap here by design; that's a
+				// follow-up task.
+				base.Metadata["enrichment_status"] = "pending"
+			}
+		}
 		return base, true, nil
 	}
 }

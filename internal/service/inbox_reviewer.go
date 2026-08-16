@@ -343,6 +343,15 @@ func metadataString(meta map[string]any, key string) string {
 }
 
 func (s *InboxReviewerService) needsReReview(fragment domain.Fragment, meta map[string]any) bool {
+	// A fragment left "pending" by ReviewURL's generic-URL fallback retry
+	// (see ManualIntakeEnricher.ReviewURL's default branch) always needs
+	// another look, regardless of source type -- ReviewURL sets
+	// review_version on every pass (success or still-pending), so without
+	// this check reviewFragment's top-level "review_version already
+	// matches" gate would permanently skip it after the very first pass.
+	if currentMetaValue(meta, "enrichment_status") == "pending" {
+		return true
+	}
 	if strings.TrimSpace(fragment.SourceType) == "pin" {
 		return currentMetaValue(meta, "pin_image_url") == ""
 	}
