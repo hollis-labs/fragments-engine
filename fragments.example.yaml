@@ -177,3 +177,13 @@ ingests:
         - "**/dist/**"
         - "**/build/**"
       emit_doc_file_fragments: false
+  - name: nil-vaults
+    kind: nil_vault
+    enabled: false
+    source:
+      root: ~/.config/nil
+    routing:
+      namespace: fragments/nil
+    rules:
+      include_vaults: []
+      exclude_vaults: []
