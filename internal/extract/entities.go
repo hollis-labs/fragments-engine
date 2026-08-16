@@ -70,6 +70,16 @@ func FromFragment(fragment domain.Fragment) []domain.FragmentEntity {
 	return entities
 }
 
+// Kinds returns the full set of entity kinds FromFragment can produce.
+// Callers that replace FromFragment's output (e.g. RecallStage, via
+// repository.EntityRepository.ReplaceFragmentEntitiesByKind) use this to
+// scope their delete+reinsert to just these kinds, so they don't disturb
+// entities owned by other ingest stages (e.g. directive tagging, manual
+// tags) for the same fragment.
+func Kinds() []string {
+	return []string{"workspace", "repo", "model", "tool"}
+}
+
 func SharedByKind(left, right []domain.FragmentEntity) map[string][]string {
 	leftByKind := map[string]map[string]struct{}{}
 	rightByKind := map[string]map[string]struct{}{}

@@ -31,7 +31,12 @@ func (s *SQLiteIndexer) IndexFragment(ctx context.Context, fragment domain.Fragm
 	fragmentWithSummary.Summary = summary
 	fragmentEntities := extract.FromFragment(fragmentWithSummary)
 	if s.entities != nil {
-		if err := s.entities.ReplaceFragmentEntities(ctx, fragment.ID, fragmentEntities); err != nil {
+		// Scoped to extract.Kinds() rather than a blanket replace: this
+		// stage only owns workspace/repo/model/tool entities, and must not
+		// clobber entities other ingest stages wrote for this fragment
+		// earlier in the same pipeline run (e.g. DirectiveStage's
+		// Kind:"directive" rows, or manual intake's Kind:"tag" rows).
+		if err := s.entities.ReplaceFragmentEntitiesByKind(ctx, fragment.ID, fragmentEntities, extract.Kinds()...); err != nil {
 			return err
 		}
 	}

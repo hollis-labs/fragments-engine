@@ -105,6 +105,9 @@ func Open(ctx context.Context, cfg config.Config) (*App, error) {
 	stackExplorerClient := service.NewStackExplorerClient(cfg.Reviewer.StackExplorerAPIBase)
 	pipeline := ingest.NewPipeline(fragmentRepo, visionAnalyzer, []ingest.Stage{
 		ingest.NewAttachmentStage(attachmentRepo),
+		// DirectiveStage must run before RouteStage so directive tags exist
+		// in fragment_entities before routing decisions are made.
+		ingest.NewDirectiveStage(entityRepo),
 		ingest.NewRouteStage(fragmentRepo, attachmentRepo, routingRepo, inboxRepo, deliveryQueue),
 		ingest.NewInboxStage(inboxRepo),
 		ingest.NewRecallStage(recallIndex),

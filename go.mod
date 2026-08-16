@@ -3,6 +3,7 @@ module github.com/hollis-labs/fragments-engine
 go 1.26.1
 
 require (
+	github.com/hollis-labs/go-directives v0.1.0
 	github.com/hollis-labs/go-embed-contracts v0.1.1
 	github.com/hollis-labs/go-queue v0.1.0
 	github.com/hollis-labs/go-scheduler v0.1.0

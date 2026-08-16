@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/hollis-labs/fragments-engine/internal/domain"
@@ -38,6 +39,79 @@ func (r *EntityRepository) ReplaceFragmentEntities(ctx context.Context, fragment
 		return fmt.Errorf("clear fragment entities: %w", err)
 	}
 
+	if err := upsertFragmentEntities(ctx, tx, fragmentID, entities); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit fragment entities: %w", err)
+	}
+	return nil
+}
+
+// ReplaceFragmentEntitiesByKind replaces the fragment_entities rows for the
+// given kind(s) only, leaving entities of any other kind untouched.
+//
+// This exists because independent ingest stages own disjoint entity kinds
+// for the same fragment within a single pipeline run — e.g. DirectiveStage
+// owns Kind:"directive", extract.FromFragment (written by RecallStage) owns
+// Kind:"workspace"/"repo"/"model"/"tool", and manual intake owns
+// Kind:"tag". ReplaceFragmentEntities does a blanket delete-all-then-insert
+// for the fragment; if two stages in the same run both called it, whichever
+// ran last would silently wipe out the other's rows. This method scopes the
+// delete+reinsert to just the kind(s) the caller is responsible for, so
+// stages can safely write in sequence without clobbering each other.
+//
+// Every entity in entities must have a Kind present in kinds; entities
+// outside that scope are rejected rather than silently written or dropped.
+func (r *EntityRepository) ReplaceFragmentEntitiesByKind(ctx context.Context, fragmentID string, entities []domain.FragmentEntity, kinds ...string) error {
+	if len(kinds) == 0 {
+		return fmt.Errorf("replace fragment entities by kind: at least one kind is required")
+	}
+	kindSet := make(map[string]struct{}, len(kinds))
+	for _, kind := range kinds {
+		kindSet[kind] = struct{}{}
+	}
+	for _, entity := range entities {
+		if _, ok := kindSet[entity.Kind]; !ok {
+			return fmt.Errorf("replace fragment entities by kind: entity kind %q is outside scope %v", entity.Kind, kinds)
+		}
+	}
+
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin replace fragment entities by kind: %w", err)
+	}
+	defer tx.Rollback()
+
+	placeholders := make([]string, len(kinds))
+	args := make([]any, 0, len(kinds)+1)
+	args = append(args, fragmentID)
+	for i, kind := range kinds {
+		placeholders[i] = "?"
+		args = append(args, kind)
+	}
+	deleteQuery := fmt.Sprintf(`
+DELETE FROM fragment_entities
+WHERE fragment_id = ?
+  AND entity_id IN (SELECT id FROM entities WHERE kind IN (%s))`, strings.Join(placeholders, ", "))
+	if _, err := tx.ExecContext(ctx, deleteQuery, args...); err != nil {
+		return fmt.Errorf("clear fragment entities by kind: %w", err)
+	}
+
+	if err := upsertFragmentEntities(ctx, tx, fragmentID, entities); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit fragment entities by kind: %w", err)
+	}
+	return nil
+}
+
+// upsertFragmentEntities upserts each entity and its fragment link within an
+// already-open transaction. Shared by ReplaceFragmentEntities and
+// ReplaceFragmentEntitiesByKind, which differ only in how much of the
+// fragment's existing entities they clear first.
+func upsertFragmentEntities(ctx context.Context, tx *sql.Tx, fragmentID string, entities []domain.FragmentEntity) error {
 	now := time.Now().UTC().Format(time.RFC3339)
 	for _, entity := range entities {
 		entityID := stableEntityID(entity.Kind, entity.Value)
@@ -61,9 +135,6 @@ ON CONFLICT(fragment_id, entity_id, source) DO UPDATE SET
 		); err != nil {
 			return fmt.Errorf("upsert fragment entity: %w", err)
 		}
-	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit fragment entities: %w", err)
 	}
 	return nil
 }
