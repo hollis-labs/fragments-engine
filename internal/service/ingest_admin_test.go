@@ -270,3 +270,82 @@ func TestIngestAdminService_ValidateFilesystemDocsAndGitChanges(t *testing.T) {
 		t.Fatalf("expected valid git ingest: %+v", gitResult)
 	}
 }
+
+func TestIngestAdminService_ValidateNilVault(t *testing.T) {
+	populatedRoot := t.TempDir()
+	nilConfigJSON := `{"activeVaultId":"vault-1","inboxPath":"","vaults":[{"id":"vault-1","name":"Personal","path":"` + filepath.ToSlash(t.TempDir()) + `","created_at":"2026-01-01T00:00:00Z"}]}`
+	if err := os.WriteFile(filepath.Join(populatedRoot, "config.json"), []byte(nilConfigJSON), 0o600); err != nil {
+		t.Fatalf("write nil config: %v", err)
+	}
+
+	emptyRoot := t.TempDir()
+	if err := os.WriteFile(filepath.Join(emptyRoot, "config.json"), []byte(`{"activeVaultId":"","inboxPath":"","vaults":[]}`), 0o600); err != nil {
+		t.Fatalf("write empty nil config: %v", err)
+	}
+
+	missingConfigRoot := t.TempDir()
+
+	cfgPath := filepath.Join(t.TempDir(), "fragments.yaml")
+	cfg := config.Config{
+		Database: config.DatabaseConfig{Path: filepath.Join(t.TempDir(), "fragments.db")},
+		Recall:   config.RecallConfig{Backend: "sqlite"},
+		Ingests: []config.IngestConfig{
+			{
+				Name:    "nil-fixture",
+				Kind:    "nil_vault",
+				Enabled: true,
+				Source:  config.IngestSource{Root: populatedRoot},
+				Routing: config.IngestRouting{Namespace: "fragments/nil"},
+			},
+			{
+				Name:    "nil-empty",
+				Kind:    "nil_vault",
+				Enabled: true,
+				Source:  config.IngestSource{Root: emptyRoot},
+				Routing: config.IngestRouting{Namespace: "fragments/nil"},
+			},
+			{
+				Name:    "nil-missing-config",
+				Kind:    "nil_vault",
+				Enabled: true,
+				Source:  config.IngestSource{Root: missingConfigRoot},
+				Routing: config.IngestRouting{Namespace: "fragments/nil"},
+			},
+		},
+	}
+	if err := config.Save(cfgPath, cfg); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+
+	svc := NewIngestAdminService(cfgPath)
+
+	populatedResult, err := svc.Validate(context.Background(), "nil-fixture")
+	if err != nil {
+		t.Fatalf("validate nil ingest: %v", err)
+	}
+	if !populatedResult.Valid {
+		t.Fatalf("expected valid nil ingest: %+v", populatedResult)
+	}
+	if len(populatedResult.Warnings) != 0 {
+		t.Fatalf("expected no warnings for a vault with matches: %+v", populatedResult.Warnings)
+	}
+
+	emptyResult, err := svc.Validate(context.Background(), "nil-empty")
+	if err != nil {
+		t.Fatalf("validate empty nil ingest: %v", err)
+	}
+	if !emptyResult.Valid {
+		t.Fatalf("expected valid (but warned) nil ingest: %+v", emptyResult)
+	}
+	if len(emptyResult.Warnings) == 0 || !strings.Contains(strings.Join(emptyResult.Warnings, " "), "no nil vaults found") {
+		t.Fatalf("expected 'no nil vaults found' warning: %+v", emptyResult.Warnings)
+	}
+
+	missingResult, err := svc.Validate(context.Background(), "nil-missing-config")
+	if err != nil {
+		t.Fatalf("validate missing-config nil ingest: %v", err)
+	}
+	if missingResult.Valid {
+		t.Fatalf("expected invalid result for missing config.json: %+v", missingResult)
+	}
+}

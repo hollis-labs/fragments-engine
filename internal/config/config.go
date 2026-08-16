@@ -171,6 +171,17 @@ type GitChangesRules struct {
 	EmitDocFileFragments bool     `json:"emit_doc_file_fragments" yaml:"emit_doc_file_fragments"`
 }
 
+// NilVaultRules configures the nil_vault ingest source. Source.Root should
+// point at Nil's config directory (e.g. ~/.config/nil), which holds
+// config.json -- the registry of named vaults, each a standalone SQLite file
+// at <vault.path>/todo.db. IncludeVaults/ExcludeVaults select vaults by
+// either name or ID; both empty (the default) means "ingest every vault
+// found in config.json".
+type NilVaultRules struct {
+	IncludeVaults []string `json:"include_vaults" yaml:"include_vaults"`
+	ExcludeVaults []string `json:"exclude_vaults" yaml:"exclude_vaults"`
+}
+
 func Load(path string) (Config, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {

@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -256,6 +257,13 @@ func validateIngestRules(ic config.IngestConfig) error {
 			return err
 		}
 		return validateGitRepoRoots(config.ExpandHome(ic.Source.Root), rules.Repos)
+	case "nil_vault":
+		rules, err := config.DecodeRules[config.NilVaultRules](ic)
+		if err != nil {
+			return err
+		}
+		_, err = nilVaultConfigMatches(config.ExpandHome(ic.Source.Root), rules)
+		return err
 	}
 	return nil
 }
@@ -366,6 +374,22 @@ func (s *IngestAdminService) Validate(_ context.Context, name string) (domain.In
 		}
 		if count := len(gitRepoMatches(root, rules.Repos)); count == 0 {
 			result.Warnings = append(result.Warnings, "no git repositories found")
+		}
+	case "nil_vault":
+		rules, err := config.DecodeRules[config.NilVaultRules](ingestCfg)
+		if err != nil {
+			result.Valid = false
+			result.Errors = append(result.Errors, err.Error())
+			break
+		}
+		matches, err := nilVaultConfigMatches(root, rules)
+		if err != nil {
+			result.Valid = false
+			result.Errors = append(result.Errors, err.Error())
+			break
+		}
+		if len(matches) == 0 {
+			result.Warnings = append(result.Warnings, "no nil vaults found")
 		}
 	}
 	return result, nil
@@ -570,6 +594,60 @@ func gitRepoMatches(root string, repos []string) []string {
 		out = append(out, filepath.Join(root, repo))
 	}
 	return out
+}
+
+// nilVaultConfigMatches reads root/config.json (Nil's vault registry) and
+// returns the names of vaults selected by rules' include/exclude lists
+// (matched by either vault ID or name, mirroring nilvault's own filtering).
+// An unreadable or unparseable config.json is an error, not an empty match
+// list, since that means the ingest can never find any vaults at all.
+func nilVaultConfigMatches(root string, rules config.NilVaultRules) ([]string, error) {
+	configPath := filepath.Join(root, "config.json")
+	raw, err := os.ReadFile(configPath)
+	if err != nil {
+		return nil, fmt.Errorf("read nil config %s: %w", configPath, err)
+	}
+	var parsed struct {
+		Vaults []struct {
+			ID   string `json:"id"`
+			Name string `json:"name"`
+		} `json:"vaults"`
+	}
+	if err := json.Unmarshal(raw, &parsed); err != nil {
+		return nil, fmt.Errorf("decode nil config %s: %w", configPath, err)
+	}
+
+	include := make(map[string]struct{}, len(rules.IncludeVaults))
+	for _, v := range rules.IncludeVaults {
+		if v = strings.TrimSpace(v); v != "" {
+			include[v] = struct{}{}
+		}
+	}
+	exclude := make(map[string]struct{}, len(rules.ExcludeVaults))
+	for _, v := range rules.ExcludeVaults {
+		if v = strings.TrimSpace(v); v != "" {
+			exclude[v] = struct{}{}
+		}
+	}
+
+	var out []string
+	for _, vault := range parsed.Vaults {
+		if len(include) > 0 {
+			_, byID := include[vault.ID]
+			_, byName := include[vault.Name]
+			if !byID && !byName {
+				continue
+			}
+		}
+		if _, byID := exclude[vault.ID]; byID {
+			continue
+		}
+		if _, byName := exclude[vault.Name]; byName {
+			continue
+		}
+		out = append(out, vault.Name)
+	}
+	return out, nil
 }
 
 func min(a, b int) int {

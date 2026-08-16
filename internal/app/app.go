@@ -18,6 +18,7 @@ import (
 	"github.com/hollis-labs/fragments-engine/internal/ingest/claude"
 	"github.com/hollis-labs/fragments-engine/internal/ingest/filesystemdocs"
 	"github.com/hollis-labs/fragments-engine/internal/ingest/gitchanges"
+	"github.com/hollis-labs/fragments-engine/internal/ingest/nilvault"
 	"github.com/hollis-labs/fragments-engine/internal/ingest/urlsource"
 	"github.com/hollis-labs/fragments-engine/internal/linkcontent"
 	"github.com/hollis-labs/fragments-engine/internal/recall"
@@ -111,7 +112,7 @@ func Open(ctx context.Context, cfg config.Config) (*App, error) {
 		ingest.NewRouteStage(fragmentRepo, attachmentRepo, routingRepo, inboxRepo, entityRepo, deliveryQueue),
 		ingest.NewInboxStage(inboxRepo),
 		ingest.NewRecallStage(recallIndex),
-	}, claude.Source{}, chatgpt.Source{}, urlsource.Source{}, filesystemdocs.Source{}, gitchanges.Source{})
+	}, claude.Source{}, chatgpt.Source{}, urlsource.Source{}, filesystemdocs.Source{}, gitchanges.Source{}, nilvault.Source{})
 	scheduleRepo := repository.NewIngestScheduleRepository(st.DB)
 	return &App{
 		store:           st,

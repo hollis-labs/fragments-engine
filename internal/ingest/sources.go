@@ -10,6 +10,7 @@ import (
 	"github.com/hollis-labs/fragments-engine/internal/ingest/claude"
 	"github.com/hollis-labs/fragments-engine/internal/ingest/filesystemdocs"
 	"github.com/hollis-labs/fragments-engine/internal/ingest/gitchanges"
+	"github.com/hollis-labs/fragments-engine/internal/ingest/nilvault"
 	"github.com/hollis-labs/fragments-engine/internal/ingest/urlsource"
 )
 
@@ -20,6 +21,7 @@ func DefaultSources() []Source {
 		urlsource.Source{},
 		filesystemdocs.Source{},
 		gitchanges.Source{},
+		nilvault.Source{},
 	}
 }
 
