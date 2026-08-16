@@ -2,6 +2,9 @@ package service
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -65,6 +68,47 @@ func TestFragmentServiceIntake_LinkTagWithEmbeddedURL(t *testing.T) {
 		t.Fatalf("expected content to be detected as link-shaped (source type url), got %s", detail.Fragment.SourceType)
 	}
 	assertEntityPresent(t, detail.Entities, "tag", "link")
+}
+
+// TestFragmentServiceIntake_LinkTagWithEmbeddedURL_FetchesRealContent covers
+// the enrichment side of the "link tag + embedded URL" path: EnrichIntake
+// must actually fetch the extracted linkURL via the local-only linkcontent
+// provider (not just detect it), pulling a real title into the stored
+// fragment and marking it enriched.
+func TestFragmentServiceIntake_LinkTagWithEmbeddedURL_FetchesRealContent(t *testing.T) {
+	svcs := setupManualTestServices(t)
+	defer svcs.close()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write([]byte(`<!doctype html><html><head>
+<meta property="og:title" content="Embedded Link Article">
+<meta property="og:description" content="Fetched because a link tag pointed at an embedded URL.">
+</head><body><article><p>Enough article body prose to clear the blocked-page minimum character threshold used by the local link-content provider.</p></article></body></html>`))
+	}))
+	defer server.Close()
+
+	content := "check this out #link " + server.URL
+	result, err := svcs.fragments.Intake(context.Background(), IntakeRequest{
+		Content: content,
+	})
+	if err != nil {
+		t.Fatalf("intake: %v", err)
+	}
+	if result.LinkURL != server.URL {
+		t.Fatalf("expected extracted url %q, got %q", server.URL, result.LinkURL)
+	}
+
+	detail, err := svcs.fragments.GetDetail(context.Background(), result.FragmentID, 5)
+	if err != nil {
+		t.Fatalf("detail: %v", err)
+	}
+	if detail.Fragment.Title != "Embedded Link Article" {
+		t.Fatalf("expected fetched title from embedded link, got %q", detail.Fragment.Title)
+	}
+	if !strings.Contains(detail.Fragment.MetadataJSON, `"enrichment_status":"done"`) {
+		t.Fatalf("expected enrichment_status done in metadata: %s", detail.Fragment.MetadataJSON)
+	}
 }
 
 // TestFragmentServiceIntake_BareURL_RegressionUnaffected covers: a bare

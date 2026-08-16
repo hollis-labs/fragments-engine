@@ -19,6 +19,7 @@ import (
 	"github.com/hollis-labs/fragments-engine/internal/ingest/filesystemdocs"
 	"github.com/hollis-labs/fragments-engine/internal/ingest/gitchanges"
 	"github.com/hollis-labs/fragments-engine/internal/ingest/urlsource"
+	"github.com/hollis-labs/fragments-engine/internal/linkcontent"
 	"github.com/hollis-labs/fragments-engine/internal/recall"
 	"github.com/hollis-labs/fragments-engine/internal/repository"
 	"github.com/hollis-labs/fragments-engine/internal/service"
@@ -85,6 +86,12 @@ func Open(ctx context.Context, cfg config.Config) (*App, error) {
 	manualEnricher := service.NewManualIntakeEnricher(visionAnalyzer, cfg.Reviewer.DownloadRoot)
 	corpusWriter := service.NewPinterestCorpusWriter(cfg.Reviewer.CorpusRoot)
 	manualEnricher.SetGitHubToken(os.Getenv(strings.TrimSpace(cfg.Reviewer.GitHubTokenEnv)))
+	// Local-only link-content provider: per product decision, Firecrawl is
+	// never invoked synchronously during intake, so this deliberately uses
+	// NewLocalProvider directly rather than the fallback-wrapped
+	// linkcontent.NewProvider(cfg.LinkContent), which retries a Firecrawl
+	// backend and is reserved for callers that can tolerate that latency.
+	manualEnricher.SetLinkProvider(linkcontent.NewLocalProvider(cfg.LinkContent.Local))
 	stackExplorerClient := service.NewStackExplorerClient(cfg.Reviewer.StackExplorerAPIBase)
 	pipeline := ingest.NewPipeline(fragmentRepo, visionAnalyzer, []ingest.Stage{
 		ingest.NewAttachmentStage(attachmentRepo),

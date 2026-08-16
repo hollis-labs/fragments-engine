@@ -17,12 +17,19 @@ import (
 	"time"
 
 	"github.com/hollis-labs/fragments-engine/internal/analyze"
+	"github.com/hollis-labs/fragments-engine/internal/config"
 	"github.com/hollis-labs/fragments-engine/internal/domain"
 	"github.com/hollis-labs/fragments-engine/internal/extract"
 	"github.com/hollis-labs/fragments-engine/internal/linkcontent"
 )
 
 const inboxReviewerVersion = "inbox-reviewer-v1"
+
+// genericLinkFetchTimeout bounds how long EnrichIntake's generic-URL branch
+// waits on the local link-content provider. Kept well under the surrounding
+// HTTP request's own reasonable budget so a slow/unresponsive site can never
+// hang POST /v1/intake indefinitely.
+const genericLinkFetchTimeout = 9 * time.Second
 
 type ManualIntakeEnricher struct {
 	client        *http.Client
@@ -32,6 +39,7 @@ type ManualIntakeEnricher struct {
 	githubAPIBase string
 	githubToken   string
 	pinterestBase string
+	linkProvider  linkcontent.Provider
 }
 
 type ManualEnrichment struct {
@@ -57,6 +65,13 @@ func NewManualIntakeEnricher(vision analyze.VisionAnalyzer, downloadRoot string)
 		now:           func() time.Time { return time.Now().UTC() },
 		downloadRoot:  strings.TrimSpace(downloadRoot),
 		githubAPIBase: "https://api.github.com",
+		// Local-only by default. Per product decision, Firecrawl (or any
+		// fallback-wrapped provider) is never invoked synchronously during
+		// intake -- callers that want a configured local provider (timeouts,
+		// user agent, etc.) should call SetLinkProvider explicitly, e.g. with
+		// linkcontent.NewLocalProvider(cfg.LinkContent.Local) as done in
+		// internal/app/app.go.
+		linkProvider: linkcontent.NewLocalProvider(config.LinkContentLocalConfig{}),
 	}
 }
 
@@ -67,7 +82,22 @@ func (e *ManualIntakeEnricher) SetGitHubToken(token string) {
 	e.githubToken = strings.TrimSpace(token)
 }
 
-func (e *ManualIntakeEnricher) EnrichIntake(_ context.Context, content, title, sourceType string, tags []string) (ManualEnrichment, error) {
+// SetLinkProvider overrides the local-only linkcontent.Provider used by the
+// generic (non-GitHub, non-Pinterest) URL branch of EnrichIntake. Must remain
+// local-only -- Firecrawl (or any fallback-wrapped provider) is never invoked
+// synchronously during intake.
+func (e *ManualIntakeEnricher) SetLinkProvider(provider linkcontent.Provider) {
+	if e == nil {
+		return
+	}
+	e.linkProvider = provider
+}
+
+// EnrichIntake derives a ManualEnrichment for the given fragment content. The
+// linkURL parameter is an explicitly-detected target URL to fall back to when
+// content isn't itself a bare URL (e.g. content has a "link" tag with the URL
+// embedded mid-text) -- pass "" when no such URL was detected.
+func (e *ManualIntakeEnricher) EnrichIntake(ctx context.Context, content, title, sourceType string, tags []string, linkURL string) (ManualEnrichment, error) {
 	normalizedTitle := strings.TrimSpace(title)
 	normalizedType := strings.TrimSpace(sourceType)
 	if normalizedType == "url" || normalizedType == "article" {
@@ -81,6 +111,10 @@ func (e *ManualIntakeEnricher) EnrichIntake(_ context.Context, content, title, s
 		return ManualEnrichment{}, nil
 	}
 	rawURL, ok := singleURL(trimmed)
+	if !ok {
+		rawURL = strings.TrimSpace(linkURL)
+		ok = rawURL != ""
+	}
 	if !ok {
 		return ManualEnrichment{}, nil
 	}
@@ -156,6 +190,36 @@ func (e *ManualIntakeEnricher) EnrichIntake(_ context.Context, content, title, s
 	if normalizedType == "" {
 		normalizedType = "url"
 	}
+	summary := "Saved URL from " + u.Hostname() + "."
+	fetchedTitle := ""
+	if e.linkProvider != nil {
+		fetchCtx, cancel := context.WithTimeout(ctx, genericLinkFetchTimeout)
+		fetched, fetchErr := e.linkProvider.Fetch(fetchCtx, u.String())
+		cancel()
+		if fetchErr == nil && !fetched.Blocked {
+			fetchedTitle = strings.TrimSpace(fetched.Title)
+			if strings.TrimSpace(fetched.Summary) != "" {
+				summary = strings.TrimSpace(fetched.Summary)
+			}
+			if strings.TrimSpace(fetched.Text) != "" {
+				metadata["link_text"] = fetched.Text
+			}
+			for key, value := range fetched.Metadata {
+				metadata[key] = value
+			}
+			// Marks this fragment as already enriched so a later reviewer
+			// doesn't re-fetch it every cycle.
+			metadata["enrichment_status"] = "done"
+		} else {
+			// Fetch failed or the site blocked us -- keep the placeholder
+			// summary so intake never fails or hangs, but flag this fragment
+			// for a later retry mechanism.
+			metadata["enrichment_status"] = "pending"
+		}
+	}
+	if normalizedTitle == "" {
+		normalizedTitle = fetchedTitle
+	}
 	if normalizedTitle == "" {
 		normalizedTitle = deriveTitleFromURL(u)
 	}
@@ -163,7 +227,7 @@ func (e *ManualIntakeEnricher) EnrichIntake(_ context.Context, content, title, s
 		Title:         normalizedTitle,
 		SourceType:    normalizedType,
 		CanonicalPath: path.Join("fragments", "manual", normalizedType, u.Hostname(), canonicalURLLeaf(u)),
-		Summary:       "Saved URL from " + u.Hostname() + ".",
+		Summary:       summary,
 		Metadata:      metadata,
 		Entities:      entities,
 		Attachments: []domain.PipelineAttachment{
@@ -181,7 +245,10 @@ func (e *ManualIntakeEnricher) ReviewURL(ctx context.Context, fragment domain.Fr
 	if err != nil {
 		return ManualEnrichment{}, false, nil
 	}
-	base, err := e.EnrichIntake(ctx, fragment.Content, fragment.Title, fragment.SourceType, nil)
+	// ReviewURL operates on already-stored fragments; retrying enrichment from
+	// an embedded (non-bare-URL) link is out of scope here -- pass "" and rely
+	// on singleURL(fragment.Content) alone, matching today's behavior.
+	base, err := e.EnrichIntake(ctx, fragment.Content, fragment.Title, fragment.SourceType, nil, "")
 	if err != nil {
 		return ManualEnrichment{}, false, err
 	}

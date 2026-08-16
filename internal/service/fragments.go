@@ -589,7 +589,7 @@ func (s *FragmentService) Intake(ctx context.Context, req IntakeRequest) (Intake
 		derivedEntities []domain.FragmentEntity
 	)
 	if s.enricher != nil {
-		enriched, err = s.enricher.EnrichIntake(ctx, req.Content, title, sourceType, req.Tags)
+		enriched, err = s.enricher.EnrichIntake(ctx, req.Content, title, sourceType, req.Tags, linkURL)
 		if err != nil {
 			return IntakeResult{}, fmt.Errorf("intake: enrich: %w", err)
 		}
