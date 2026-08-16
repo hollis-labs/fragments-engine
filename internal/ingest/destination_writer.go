@@ -25,6 +25,7 @@ type FileDestinationExecutor struct{}
 type MCPDestinationExecutor struct{}
 type APIDestinationExecutor struct{}
 type CLIDestinationExecutor struct{}
+type CallbackDestinationExecutor struct{}
 
 func (FileDestinationExecutor) Execute(_ context.Context, destination domain.Destination, fragment domain.Fragment, attachments []domain.FragmentAttachment) (DeliveryResult, error) {
 	cfg, err := domain.DecodeDestinationConfig[domain.FileDestinationConfig](destination)
@@ -446,6 +447,75 @@ func (APIDestinationExecutor) Execute(ctx context.Context, destination domain.De
 		return DeliveryResult{}, err
 	}
 	return DeliveryResult{Ref: "api:" + method + ":" + req.URL.String()}, nil
+}
+
+// Execute performs the callback destination's HTTP POST against
+// CallbackDestinationConfig.Target -- Curator's Nanite durable-agent wake
+// endpoint. This is the only place in the callback dispatch path that does
+// live network I/O; every call site that can reach it (the routing hot
+// path, the queue drainer) must go through the async delivery queue first
+// (see internal/service/delivery_queue.go's processJob), never call this
+// inline. Generator is forwarded to the request body completely unmodified
+// -- FE treats it as an opaque tag and must never interpret or branch on
+// its value (loom-architecture.md §4).
+func (CallbackDestinationExecutor) Execute(ctx context.Context, destination domain.Destination, fragment domain.Fragment, _ []domain.FragmentAttachment) (DeliveryResult, error) {
+	cfg, err := domain.DecodeDestinationConfig[domain.CallbackDestinationConfig](destination)
+	if err != nil {
+		return DeliveryResult{}, err
+	}
+	target := strings.TrimSpace(cfg.Target)
+	if target == "" {
+		return DeliveryResult{}, fmt.Errorf("callback destination %q missing target", destination.Name)
+	}
+	if strings.TrimSpace(cfg.Generator) == "" {
+		return DeliveryResult{}, fmt.Errorf("callback destination %q missing generator", destination.Name)
+	}
+
+	bodyJSON, err := json.Marshal(buildCallbackPayload(fragment, cfg))
+	if err != nil {
+		return DeliveryResult{}, fmt.Errorf("encode callback payload: %w", err)
+	}
+
+	timeout := 30 * time.Second
+	callCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(callCtx, http.MethodPost, target, bytes.NewReader(bodyJSON))
+	if err != nil {
+		return DeliveryResult{}, fmt.Errorf("build callback request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return DeliveryResult{}, markRetryable(fmt.Errorf("callback request failed: %w", err))
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		err := fmt.Errorf("callback request failed: status %d", resp.StatusCode)
+		if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500 {
+			return DeliveryResult{}, markRetryable(err)
+		}
+		return DeliveryResult{}, err
+	}
+	return DeliveryResult{Ref: "callback:" + target}, nil
+}
+
+// buildCallbackPayload forwards Generator unmodified alongside enough
+// fragment identity for Curator to look up what triggered the wake. FE never
+// interprets Generator's value -- it is only ever copied through.
+func buildCallbackPayload(fragment domain.Fragment, cfg domain.CallbackDestinationConfig) map[string]any {
+	return map[string]any{
+		"generator": cfg.Generator,
+		"fragment": map[string]any{
+			"id":             fragment.ID,
+			"source":         fragment.Source,
+			"source_type":    fragment.SourceType,
+			"source_id":      fragment.SourceID,
+			"title":          fragment.Title,
+			"canonical_path": fragment.CanonicalPath,
+		},
+	}
 }
 
 func (CLIDestinationExecutor) Execute(ctx context.Context, destination domain.Destination, fragment domain.Fragment, _ []domain.FragmentAttachment) (DeliveryResult, error) {

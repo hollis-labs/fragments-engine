@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -765,15 +766,17 @@ func TestRoutingService_Callback_CRUDParity(t *testing.T) {
 	}
 }
 
-// TestRoutingService_CallbackRoute_DoesNotFireEndToEnd verifies the explicit
-// scope boundary for this task: creating a route pointing at a callback
-// destination and attempting to materialize a fragment through it does NOT
-// deliver anything. Dispatch mechanics (firing the callback via the async
-// delivery queue) are deliberately out of scope here and belong to the
-// dispatch-wiring follow-up task; internal/ingest/delivery.go's
-// executeDestinationOnce has no "callback" case, so any attempt to execute a
-// callback destination directly (outside the queue drainer) must fail with
-// an "unsupported destination kind" error rather than silently succeeding.
+// TestRoutingService_CallbackRoute_DoesNotFireEndToEnd verifies that
+// materializing a fragment through a callback destination never performs
+// live network I/O against Curator's endpoint. CW-20260816-0034 wired up the
+// callback executor (internal/ingest/delivery.go's executeDestinationOnce
+// now has a "callback" case) and dispatch happens exclusively through the
+// async delivery queue during routing (RouteStage.Run / ApplyRouteByEntity)
+// -- MaterializeFragmentToDestination is a synchronous, result-returning
+// admin action with no queued/pending result shape, so it deliberately
+// rejects callback destinations up front rather than either attempting a
+// synchronous callback (which the architecture forbids) or silently
+// redefining "materialize" into a queue operation.
 func TestRoutingService_CallbackRoute_DoesNotFireEndToEnd(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "fragments.db")
 	st, err := store.Open(dbPath)
@@ -828,10 +831,10 @@ func TestRoutingService_CallbackRoute_DoesNotFireEndToEnd(t *testing.T) {
 
 	result, err := svc.MaterializeFragmentToDestination(context.Background(), fragment.ID, dest.Name)
 	if err == nil {
-		t.Fatalf("expected materialize through callback destination to fail (dispatch wiring is a separate task), got result=%+v", result)
+		t.Fatalf("expected materialize through callback destination to be rejected (materialize is unsupported for callback), got result=%+v", result)
 	}
-	if !strings.Contains(err.Error(), "unsupported destination kind") {
-		t.Fatalf("expected unsupported-kind error proving no delivery executor runs for callback yet, got: %v", err)
+	if !strings.Contains(err.Error(), "never fire synchronously") {
+		t.Fatalf("expected callback-materialize-unsupported error, got: %v", err)
 	}
 	if result.WrittenPath != "" {
 		t.Fatalf("expected no written path for callback destination, got %+v", result)
@@ -842,9 +845,173 @@ func TestRoutingService_CallbackRoute_DoesNotFireEndToEnd(t *testing.T) {
 		t.Fatalf("list route log: %v", err)
 	}
 	if len(logs) != 1 {
-		t.Fatalf("expected exactly one route log entry recording the failed attempt, got %d: %+v", len(logs), logs)
+		t.Fatalf("expected exactly one route log entry recording the rejected attempt, got %d: %+v", len(logs), logs)
 	}
-	if !strings.Contains(logs[0].Reason, "materialize_destination_error") {
-		t.Fatalf("expected materialize_destination_error log entry, got %+v", logs[0])
+	if !strings.Contains(logs[0].Reason, "materialize_unsupported_callback") {
+		t.Fatalf("expected materialize_unsupported_callback log entry, got %+v", logs[0])
+	}
+}
+
+// TestRoutingService_ApplyRouteByEntity_CallbackDestination_NeverFiresSynchronously
+// covers CW-20260816-0034's acceptance criterion for the second mandatory
+// call site: the manual apply-route-by-entity path must also enqueue a
+// delivery_jobs row and return promptly for callback destinations, with no
+// synchronous HTTP call in that call stack. Target is pointed at a listener
+// that accepts but never responds, so a regression back to
+// try-then-fall-back-to-queue would make this test hang/time out.
+func TestRoutingService_ApplyRouteByEntity_CallbackDestination_NeverFiresSynchronously(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "fragments.db")
+	st, err := store.Open(dbPath)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+
+	fragmentRepo := repository.NewFragmentRepository(st.DB)
+	entityRepo := repository.NewEntityRepository(st.DB)
+	attachmentRepo := repository.NewAttachmentRepository(st.DB)
+	routingRepo := repository.NewRoutingRepository(st.DB)
+	inboxRepo := repository.NewInboxRepository(st.DB)
+
+	queueSvc, err := NewDeliveryQueueService(st.DB, routingRepo, fragmentRepo, entityRepo, inboxRepo, testDeliveryConfig(), testQueueConfig())
+	if err != nil {
+		t.Fatalf("new delivery queue: %v", err)
+	}
+	queueSvc.SetAttachmentRepository(attachmentRepo)
+
+	svc := NewRoutingService(routingRepo, fragmentRepo, entityRepo, inboxRepo, config.DeliveryConfig{}, config.QueueConfig{})
+	svc.SetDeliveryQueue(queueSvc)
+	svc.SetAttachmentRepository(attachmentRepo)
+
+	target := newHangingCallbackTarget(t)
+	dest, err := svc.AddDestination(context.Background(), domain.Destination{
+		Name:       "curator-wake",
+		Kind:       "callback",
+		ConfigJSON: fmt.Sprintf(`{"target":%q,"generator":"wiki_page"}`, target),
+	})
+	if err != nil {
+		t.Fatalf("add callback destination: %v", err)
+	}
+	route, err := svc.AddRoute(context.Background(), domain.Route{
+		Name:          "callback-apply-route",
+		DestinationID: dest.ID,
+	})
+	if err != nil {
+		t.Fatalf("add route: %v", err)
+	}
+
+	fragment, err := repository.BuildFragment(domain.PipelineFragment{
+		Source:        "claude",
+		SourceType:    "chat",
+		SourceID:      "session-callback-apply",
+		Title:         "Claude session: callback apply-route",
+		Content:       "This fragment must route through the async queue via manual apply, never a live call.",
+		CreatedAt:     time.Date(2026, 8, 16, 11, 0, 0, 0, time.UTC),
+		CanonicalPath: "fragments/chats/claude/2026-08-16/session-callback-apply",
+	}, "claude-default", time.Date(2026, 8, 16, 11, 5, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("build fragment: %v", err)
+	}
+	if _, err := fragmentRepo.Upsert(context.Background(), fragment); err != nil {
+		t.Fatalf("upsert fragment: %v", err)
+	}
+	if err := entityRepo.ReplaceFragmentEntities(context.Background(), fragment.ID, []domain.FragmentEntity{
+		{Kind: "topic", Value: "roadmap", Source: "test", Confidence: 1.0},
+	}); err != nil {
+		t.Fatalf("replace fragment entities: %v", err)
+	}
+	if err := inboxRepo.Stage(context.Background(), fragment.ID, "awaiting routing", time.Now().UTC()); err != nil {
+		t.Fatalf("stage inbox: %v", err)
+	}
+
+	done := make(chan struct {
+		result domain.RouteApplyResult
+		err    error
+	}, 1)
+	start := time.Now()
+	go func() {
+		result, err := svc.ApplyRouteByEntity(context.Background(), route.ID, "topic", "roadmap", 10)
+		done <- struct {
+			result domain.RouteApplyResult
+			err    error
+		}{result, err}
+	}()
+
+	var result domain.RouteApplyResult
+	select {
+	case out := <-done:
+		elapsed := time.Since(start)
+		if out.err != nil {
+			t.Fatalf("ApplyRouteByEntity returned error: %v", out.err)
+		}
+		if elapsed > 2*time.Second {
+			t.Fatalf("ApplyRouteByEntity took %s to return -- looks like it attempted a synchronous callback call", elapsed)
+		}
+		result = out.result
+	case <-time.After(2 * time.Second):
+		t.Fatal("ApplyRouteByEntity did not return within 2s -- looks like it attempted a synchronous HTTP call against the hanging callback target")
+	}
+
+	if result.MatchedCount != 1 {
+		t.Fatalf("expected 1 matched item, got %+v", result)
+	}
+	if len(result.Items) != 1 || result.Items[0].Status != "queued" {
+		t.Fatalf("expected item queued (not routed/failed), got %+v", result.Items)
+	}
+	if result.RoutedCount != 0 {
+		t.Fatalf("expected 0 routed count (delivery is only queued, not completed), got %+v", result)
+	}
+	if result.FailedCount != 0 {
+		t.Fatalf("expected 0 failed count, got %+v", result)
+	}
+
+	stats, err := queueSvc.Stats(context.Background())
+	if err != nil {
+		t.Fatalf("queue stats: %v", err)
+	}
+	if stats.Pending != 1 {
+		t.Fatalf("expected exactly 1 pending delivery_jobs row, got %+v", stats)
+	}
+
+	var jobCount int
+	if err := st.DB.QueryRowContext(context.Background(),
+		`SELECT COUNT(*) FROM delivery_jobs WHERE json_extract(payload, '$.destination_id') = ? AND json_extract(payload, '$.fragment_id') = ?`,
+		dest.ID, fragment.ID,
+	).Scan(&jobCount); err != nil {
+		t.Fatalf("count delivery_jobs rows: %v", err)
+	}
+	if jobCount != 1 {
+		t.Fatalf("expected exactly 1 delivery_jobs row for this fragment/destination, got %d", jobCount)
+	}
+
+	// The fragment must still be sitting in the inbox awaiting the queue
+	// drainer -- ApplyRouteByEntity must not have removed it, since delivery
+	// hasn't actually happened yet.
+	inboxItems, err := inboxRepo.List(context.Background(), 10)
+	if err != nil {
+		t.Fatalf("list inbox: %v", err)
+	}
+	found := false
+	for _, item := range inboxItems {
+		if item.FragmentID == fragment.ID {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected fragment to remain staged in inbox pending async delivery, got %+v", inboxItems)
+	}
+
+	logs, err := svc.ListRouteLog(context.Background(), fragment.ID)
+	if err != nil {
+		t.Fatalf("list route log: %v", err)
+	}
+	if len(logs) != 1 {
+		t.Fatalf("expected exactly one route log entry, got %d: %+v", len(logs), logs)
+	}
+	if logs[0].Decision != "inbox" {
+		t.Fatalf("expected inbox decision pending delivery, got %+v", logs[0])
+	}
+	if !strings.Contains(logs[0].Reason, "delivery_queued_by_design") {
+		t.Fatalf("expected delivery_queued_by_design reason (queued by design, not after a failed attempt), got %q", logs[0].Reason)
 	}
 }

@@ -94,6 +94,8 @@ func executeDestinationOnce(ctx context.Context, destination domain.Destination,
 		return APIDestinationExecutor{}.Execute(ctx, destination, fragment, attachments)
 	case "cli":
 		return CLIDestinationExecutor{}.Execute(ctx, destination, fragment, attachments)
+	case "callback":
+		return CallbackDestinationExecutor{}.Execute(ctx, destination, fragment, attachments)
 	default:
 		return DeliveryResult{}, fmt.Errorf("unsupported destination kind %q", destination.Kind)
 	}
@@ -118,6 +120,11 @@ func retryConfigForDestination(destination domain.Destination) domain.DeliveryRe
 		}
 	case "cli":
 		cfg, err := domain.DecodeDestinationConfig[domain.CLIDestinationConfig](destination)
+		if err == nil {
+			return withRetryDefaults(cfg.Retry, 3, 500)
+		}
+	case "callback":
+		cfg, err := domain.DecodeDestinationConfig[domain.CallbackDestinationConfig](destination)
 		if err == nil {
 			return withRetryDefaults(cfg.Retry, 3, 500)
 		}

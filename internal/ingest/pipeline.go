@@ -229,6 +229,15 @@ func (s *RouteStage) Run(ctx context.Context, stageCtx *StageContext) error {
 	}
 	routedFragment := stageCtx.Fragment
 	routedFragment.Status = domain.FragmentStatusRouted
+
+	// Callback destinations must never fire synchronously against Curator's
+	// endpoint (see domain.CallbackDestinationConfig): skip the inline
+	// attempt entirely and go straight to the async delivery queue. This is
+	// the routing hot path, so it must never block on live network I/O.
+	if destination.Kind == "callback" {
+		return s.enqueueCallbackDelivery(ctx, stageCtx, matched, destination)
+	}
+
 	delivery, err := s.executeDestination(ctx, destination, routedFragment, attachments)
 	if err != nil {
 		reason := encodeDeliveryReason("destination_error", deliveryReasonPayload{Attempts: delivery.Attempts, Error: err.Error()})
@@ -266,6 +275,44 @@ func (s *RouteStage) Run(ctx context.Context, stageCtx *StageContext) error {
 		DestinationID: matched.DestinationID,
 		Decision:      "auto_route",
 		Reason:        encodeDeliveryReason("matched_auto_route", deliveryReasonPayload{Attempts: delivery.Attempts, Ref: delivery.Ref}),
+		CreatedAt:     stageCtx.Now,
+	})
+}
+
+// enqueueCallbackDelivery handles the callback-destination branch of Run: it
+// never attempts inline delivery, only enqueues. The fragment is left as-is
+// (still awaiting routing) until the queue drainer (DeliveryQueueService.
+// processJob) actually delivers it and moves it to Routed/removes it from
+// the inbox, exactly like the queued-retry path for the other four
+// destination kinds.
+func (s *RouteStage) enqueueCallbackDelivery(ctx context.Context, stageCtx *StageContext, matched *domain.Route, destination domain.Destination) error {
+	if s.retrier == nil {
+		return s.routes.LogDecision(ctx, domain.RouteLogEntry{
+			FragmentID:    stageCtx.Fragment.ID,
+			RouteID:       matched.ID,
+			DestinationID: matched.DestinationID,
+			Decision:      "inbox",
+			Reason:        encodeDeliveryReason("callback_queue_unavailable", deliveryReasonPayload{Error: "delivery queue not configured"}),
+			CreatedAt:     stageCtx.Now,
+		})
+	}
+	retry := retryConfigForDestination(destination)
+	if queueErr := s.retrier.EnqueueDestinationRetry(ctx, stageCtx.Fragment.ID, matched.ID, matched.DestinationID, retry); queueErr != nil {
+		return s.routes.LogDecision(ctx, domain.RouteLogEntry{
+			FragmentID:    stageCtx.Fragment.ID,
+			RouteID:       matched.ID,
+			DestinationID: matched.DestinationID,
+			Decision:      "inbox",
+			Reason:        encodeDeliveryReason("callback_enqueue_error", deliveryReasonPayload{Error: queueErr.Error()}),
+			CreatedAt:     stageCtx.Now,
+		})
+	}
+	return s.routes.LogDecision(ctx, domain.RouteLogEntry{
+		FragmentID:    stageCtx.Fragment.ID,
+		RouteID:       matched.ID,
+		DestinationID: matched.DestinationID,
+		Decision:      "inbox",
+		Reason:        EncodeDeliveryQueuedByDesign(destination.Kind),
 		CreatedAt:     stageCtx.Now,
 	})
 }

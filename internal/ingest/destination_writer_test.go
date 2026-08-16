@@ -146,6 +146,100 @@ func TestMCPDestinationExecutor_NilInbox(t *testing.T) {
 	}
 }
 
+func TestCallbackDestinationExecutor_ForwardsGeneratorUnmodified(t *testing.T) {
+	var (
+		gotMethod  string
+		gotPath    string
+		gotBody    map[string]any
+		gotHeaders http.Header
+	)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotPath = r.URL.Path
+		gotHeaders = r.Header.Clone()
+		defer r.Body.Close()
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Fatalf("decode callback body: %v", err)
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer srv.Close()
+
+	destination := domain.Destination{
+		Name:       "curator-wake",
+		Kind:       "callback",
+		ConfigJSON: fmt.Sprintf(`{"target":%q,"generator":"wiki_page::do-not-interpret-me"}`, srv.URL+"/nanite/wake"),
+	}
+
+	written, err := CallbackDestinationExecutor{}.Execute(context.Background(), destination, testFragment(), nil)
+	if err != nil {
+		t.Fatalf("execute callback destination: %v", err)
+	}
+	if written.Ref != "callback:"+srv.URL+"/nanite/wake" {
+		t.Fatalf("unexpected written ref: %s", written.Ref)
+	}
+	if gotMethod != http.MethodPost {
+		t.Fatalf("expected POST, got %s", gotMethod)
+	}
+	if gotPath != "/nanite/wake" {
+		t.Fatalf("unexpected callback path: %s", gotPath)
+	}
+	if gotHeaders.Get("Content-Type") != "application/json" {
+		t.Fatalf("expected json content-type, got %q", gotHeaders.Get("Content-Type"))
+	}
+	// The generator value must be forwarded byte-for-byte, including the
+	// "::" characters that would be meaningful as a directive prefix
+	// elsewhere in FE -- proving FE never parses or branches on it here,
+	// only passes it through.
+	if gotBody["generator"] != "wiki_page::do-not-interpret-me" {
+		t.Fatalf("expected generator forwarded unmodified, got %#v", gotBody["generator"])
+	}
+	fragmentBody, _ := gotBody["fragment"].(map[string]any)
+	if fragmentBody["id"] != "fragment-123" {
+		t.Fatalf("expected fragment id in callback body, got %#v", gotBody["fragment"])
+	}
+}
+
+func TestCallbackDestinationExecutor_ServerErrorIsRetryable(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "boom", http.StatusServiceUnavailable)
+	}))
+	defer srv.Close()
+
+	destination := domain.Destination{
+		Name:       "curator-wake",
+		Kind:       "callback",
+		ConfigJSON: fmt.Sprintf(`{"target":%q,"generator":"wiki_page"}`, srv.URL),
+	}
+
+	_, err := CallbackDestinationExecutor{}.Execute(context.Background(), destination, testFragment(), nil)
+	if err == nil {
+		t.Fatal("expected error for 503 response")
+	}
+	if !isRetryable(err) {
+		t.Fatalf("expected 5xx callback failure to be marked retryable, got %v", err)
+	}
+}
+
+func TestCallbackDestinationExecutor_MissingTargetOrGenerator(t *testing.T) {
+	if _, err := (CallbackDestinationExecutor{}).Execute(context.Background(), domain.Destination{
+		Name:       "no-target",
+		Kind:       "callback",
+		ConfigJSON: `{"generator":"wiki_page"}`,
+	}, testFragment(), nil); err == nil || !strings.Contains(err.Error(), "missing target") {
+		t.Fatalf("expected missing target error, got %v", err)
+	}
+
+	if _, err := (CallbackDestinationExecutor{}).Execute(context.Background(), domain.Destination{
+		Name:       "no-generator",
+		Kind:       "callback",
+		ConfigJSON: `{"target":"https://curator.example.com/nanite/wake"}`,
+	}, testFragment(), nil); err == nil || !strings.Contains(err.Error(), "missing generator") {
+		t.Fatalf("expected missing generator error, got %v", err)
+	}
+}
+
 func TestCLIDestinationExecutor(t *testing.T) {
 	tempDir := t.TempDir()
 	capturePath := filepath.Join(tempDir, "cli-payload.json")

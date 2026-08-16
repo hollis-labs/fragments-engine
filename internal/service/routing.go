@@ -137,6 +137,25 @@ func (s *RoutingService) MaterializeFragmentToDestination(ctx context.Context, f
 		}
 	}
 
+	// Materialize is a synchronous, result-returning admin action; callback
+	// destinations must never fire synchronously against Curator's endpoint
+	// (see domain.CallbackDestinationConfig), and they have no synchronous
+	// "written path" to report anyway, so materialize is simply unsupported
+	// for them rather than being quietly redefined into a queue-and-return
+	// operation. Actual callback delivery only ever happens via the async
+	// queue during routing (RouteStage.Run / ApplyRouteByEntity).
+	if destination.Kind == "callback" {
+		err := callbackMaterializeUnsupportedError(destination.Name)
+		_ = s.repo.LogDecision(ctx, domain.RouteLogEntry{
+			FragmentID:    result.FragmentID,
+			DestinationID: destination.ID,
+			Decision:      "materialize",
+			Reason:        encodeRouteDeliveryReason("materialize_unsupported_callback", deliveryReasonPayload{Error: err.Error()}),
+			CreatedAt:     time.Now().UTC(),
+		})
+		return result, err
+	}
+
 	delivery, err := ingest.ExecuteDestinationWithRetry(ctx, destination, fragment, attachments)
 	if err != nil {
 		_ = s.repo.LogDecision(ctx, domain.RouteLogEntry{
@@ -394,6 +413,13 @@ func (s *RoutingService) MaterializeRoute(ctx context.Context, routeID string, l
 	if err != nil {
 		return result, err
 	}
+	// See the matching guard in MaterializeFragmentToDestination: materialize
+	// is a synchronous admin action and callback destinations must never
+	// fire synchronously against Curator's endpoint, so materialize is
+	// unsupported for them rather than being redefined into a queue op.
+	if destination.Kind == "callback" {
+		return result, callbackMaterializeUnsupportedError(destination.Name)
+	}
 	items, err := s.inbox.List(ctx, limit)
 	if err != nil {
 		return result, err
@@ -548,6 +574,32 @@ func (s *RoutingService) ApplyRouteByEntity(ctx context.Context, routeID, kind, 
 		}
 
 		fragment.Status = domain.FragmentStatusRouted
+
+		// Callback destinations must never fire synchronously against
+		// Curator's endpoint (see domain.CallbackDestinationConfig): skip
+		// the inline attempt entirely and enqueue directly, the same as the
+		// routing-pipeline hot path does in ingest.RouteStage.Run.
+		if destination.Kind == "callback" {
+			status, reason, queueErr := s.enqueueCallbackApply(ctx, item.FragmentID, route.ID, destination)
+			_ = s.repo.LogDecision(ctx, domain.RouteLogEntry{
+				FragmentID:    item.FragmentID,
+				RouteID:       route.ID,
+				DestinationID: destination.ID,
+				Decision:      "inbox",
+				Reason:        reason,
+				CreatedAt:     now,
+			})
+			entry.Status = status
+			if queueErr != nil {
+				entry.Error = queueErr.Error()
+			}
+			result.Items = append(result.Items, entry)
+			if status == "failed" {
+				result.FailedCount++
+			}
+			continue
+		}
+
 		delivery, err := ingest.ExecuteDestinationWithRetry(ctx, destination, fragment, attachments)
 		if err != nil {
 			reason := ingest.EncodeManualRouteError(kind, value, delivery.Attempts, err.Error())
@@ -605,6 +657,23 @@ func (s *RoutingService) ApplyRouteByEntity(ctx context.Context, routeID, kind, 
 	}
 
 	return result, nil
+}
+
+// enqueueCallbackApply enqueues a callback destination dispatch without ever
+// attempting it inline (see the "callback" branch in ApplyRouteByEntity's
+// loop above). Returns the RouteApplyItem status ("queued" or "failed") and
+// the route_log reason to record; err is non-nil only when the item should
+// be counted as failed.
+func (s *RoutingService) enqueueCallbackApply(ctx context.Context, fragmentID, routeID string, destination domain.Destination) (status string, reason string, err error) {
+	if s.delivery == nil {
+		err = fmt.Errorf("callback destination %q has no delivery queue configured", destination.Name)
+		return "failed", encodeRouteDeliveryReason("callback_queue_unavailable", deliveryReasonPayload{Error: err.Error()}), err
+	}
+	retry := destinationRetryConfig(destination, s.cfg)
+	if queueErr := s.delivery.EnqueueDestinationRetry(ctx, fragmentID, routeID, destination.ID, retry); queueErr != nil {
+		return "failed", encodeRouteDeliveryReason("callback_enqueue_error", deliveryReasonPayload{Error: queueErr.Error()}), queueErr
+	}
+	return "queued", ingest.EncodeDeliveryQueuedByDesign(destination.Kind), nil
 }
 
 func routeMatchesPreview(route domain.Route, fragment domain.Fragment, entities []domain.FragmentEntity) bool {
@@ -1026,6 +1095,16 @@ func destinationProvider(item domain.Destination) string {
 		// §4's config shape doesn't include one) - fall through to item.Kind.
 	}
 	return item.Kind
+}
+
+// callbackMaterializeUnsupportedError builds the shared error returned by
+// MaterializeFragmentToDestination and MaterializeRoute when asked to
+// materialize a callback destination. Callback delivery is always
+// dispatched asynchronously (see domain.CallbackDestinationConfig), and
+// materialize has no queued/pending result shape to report through, so
+// synchronous materialize is not offered for callback destinations at all.
+func callbackMaterializeUnsupportedError(destinationName string) error {
+	return fmt.Errorf("destination %q: callback destinations never fire synchronously, so materialize is not supported for them; callback delivery is always dispatched via the async queue during routing", destinationName)
 }
 
 func (s *RoutingService) findDestinationByName(ctx context.Context, destinationName string) (domain.Destination, error) {

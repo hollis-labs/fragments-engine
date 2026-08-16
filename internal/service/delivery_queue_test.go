@@ -3,6 +3,9 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"net"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -127,6 +130,225 @@ func TestDeliveryQueueService_DrainSuccess(t *testing.T) {
 	}
 	if len(logs) == 0 || logs[len(logs)-1].Decision != "queued_route" {
 		t.Fatalf("expected queued_route log entry, got %+v", logs)
+	}
+}
+
+// TestDeliveryQueueService_Drain_CallbackSuccess covers CW-20260816-0034's
+// acceptance criterion for the background drainer: it must pop and execute
+// a queued "callback" job exactly like the other four destination kinds --
+// forwarding CallbackDestinationConfig.Generator unmodified in the request
+// body, and updating fragment status/route_log on success the same way.
+func TestDeliveryQueueService_Drain_CallbackSuccess(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "fragments.db")
+	st, err := store.Open(dbPath)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+
+	fragmentRepo := repository.NewFragmentRepository(st.DB)
+	routingRepo := repository.NewRoutingRepository(st.DB)
+	inboxRepo := repository.NewInboxRepository(st.DB)
+	queueSvc, err := NewDeliveryQueueService(st.DB, routingRepo, fragmentRepo, repository.NewEntityRepository(st.DB), inboxRepo, testDeliveryConfig(), testQueueConfig())
+	if err != nil {
+		t.Fatalf("new delivery queue: %v", err)
+	}
+
+	var (
+		gotMethod    string
+		gotGenerator any
+	)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		var body map[string]any
+		defer r.Body.Close()
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decode callback body: %v", err)
+		}
+		gotGenerator = body["generator"]
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	dest, err := routingRepo.AddDestination(context.Background(), domain.Destination{
+		Name:       "curator-wake",
+		Kind:       "callback",
+		ConfigJSON: `{"target":"` + srv.URL + `","generator":"wiki_page::do-not-interpret-me"}`,
+	})
+	if err != nil {
+		t.Fatalf("add callback destination: %v", err)
+	}
+	route, err := routingRepo.AddRoute(context.Background(), domain.Route{
+		Name:          "callback-route",
+		DestinationID: dest.ID,
+	})
+	if err != nil {
+		t.Fatalf("add route: %v", err)
+	}
+	fragment, err := repository.BuildFragment(domain.PipelineFragment{
+		Source:        "claude",
+		SourceType:    "chat",
+		SourceID:      "session-callback-drain",
+		Title:         "Claude session: callback drain",
+		Content:       "Drained via the background queue.",
+		CreatedAt:     time.Date(2026, 4, 26, 13, 0, 0, 0, time.UTC),
+		CanonicalPath: "fragments/chats/claude/2026-04-26/session-callback-drain",
+	}, "claude-test", time.Date(2026, 4, 27, 13, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("build fragment: %v", err)
+	}
+	if _, err := fragmentRepo.Upsert(context.Background(), fragment); err != nil {
+		t.Fatalf("upsert fragment: %v", err)
+	}
+	if err := inboxRepo.Stage(context.Background(), fragment.ID, "awaiting routing", time.Now().UTC()); err != nil {
+		t.Fatalf("stage inbox: %v", err)
+	}
+	if err := queueSvc.EnqueueDestinationRetry(context.Background(), fragment.ID, route.ID, dest.ID, domain.DeliveryRetryConfig{MaxAttempts: 3, BackoffMS: 1}); err != nil {
+		t.Fatalf("enqueue delivery retry: %v", err)
+	}
+
+	stats, err := queueSvc.Stats(context.Background())
+	if err != nil {
+		t.Fatalf("queue stats: %v", err)
+	}
+	if stats.Pending != 1 || stats.Failed != 0 {
+		t.Fatalf("unexpected initial queue stats: %+v", stats)
+	}
+
+	processed, err := queueSvc.Drain(context.Background(), 10)
+	if err != nil {
+		t.Fatalf("drain queue: %v", err)
+	}
+	if processed != 1 {
+		t.Fatalf("expected 1 processed job, got %d", processed)
+	}
+
+	if gotMethod != http.MethodPost {
+		t.Fatalf("expected callback POST, got %q", gotMethod)
+	}
+	if gotGenerator != "wiki_page::do-not-interpret-me" {
+		t.Fatalf("expected generator forwarded unmodified by the drainer, got %#v", gotGenerator)
+	}
+
+	stats, err = queueSvc.Stats(context.Background())
+	if err != nil {
+		t.Fatalf("queue stats after drain: %v", err)
+	}
+	if stats.Pending != 0 || stats.Failed != 0 {
+		t.Fatalf("unexpected queue stats after drain: %+v", stats)
+	}
+
+	stored, err := fragmentRepo.GetByID(context.Background(), fragment.ID)
+	if err != nil {
+		t.Fatalf("get fragment: %v", err)
+	}
+	if stored.Status != domain.FragmentStatusRouted {
+		t.Fatalf("expected routed status after callback drain, got %s", stored.Status)
+	}
+	inboxItems, err := inboxRepo.List(context.Background(), 10)
+	if err != nil {
+		t.Fatalf("list inbox: %v", err)
+	}
+	if len(inboxItems) != 0 {
+		t.Fatalf("expected empty inbox after callback drain, got %d items", len(inboxItems))
+	}
+	logs, err := routingRepo.ListRouteLog(context.Background(), fragment.ID)
+	if err != nil {
+		t.Fatalf("list route log: %v", err)
+	}
+	if len(logs) == 0 || logs[len(logs)-1].Decision != "queued_route" {
+		t.Fatalf("expected queued_route log entry after callback drain, got %+v", logs)
+	}
+}
+
+// TestDeliveryQueueService_Drain_CallbackDeadLetter covers the failure side
+// of the same acceptance criterion: callback jobs that exhaust their
+// attempts land in delivery_failed_jobs exactly like the other four kinds --
+// this is the same shared processJob/retry/dead-letter mechanism, so this
+// test only needs to confirm "callback" actually participates in it, not
+// re-verify the retry/backoff/dead-letter logic itself.
+func TestDeliveryQueueService_Drain_CallbackDeadLetter(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "fragments.db")
+	st, err := store.Open(dbPath)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+
+	fragmentRepo := repository.NewFragmentRepository(st.DB)
+	routingRepo := repository.NewRoutingRepository(st.DB)
+	inboxRepo := repository.NewInboxRepository(st.DB)
+	queueSvc, err := NewDeliveryQueueService(st.DB, routingRepo, fragmentRepo, repository.NewEntityRepository(st.DB), inboxRepo, testDeliveryConfig(), testQueueConfig())
+	if err != nil {
+		t.Fatalf("new delivery queue: %v", err)
+	}
+
+	// A closed listener refuses the connection immediately, which the
+	// callback executor treats as a non-retryable transport error at the
+	// HTTP-client layer -- combined with max_attempts:1, this reliably lands
+	// the job in delivery_failed_jobs on the very first drain.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	refusingTarget := "http://" + ln.Addr().String()
+	if err := ln.Close(); err != nil {
+		t.Fatalf("close listener: %v", err)
+	}
+
+	dest, err := routingRepo.AddDestination(context.Background(), domain.Destination{
+		Name:       "bad-callback",
+		Kind:       "callback",
+		ConfigJSON: `{"target":"` + refusingTarget + `","generator":"wiki_page","retry":{"max_attempts":1,"backoff_ms":0}}`,
+	})
+	if err != nil {
+		t.Fatalf("add destination: %v", err)
+	}
+	route, err := routingRepo.AddRoute(context.Background(), domain.Route{
+		Name:          "bad-callback-route",
+		DestinationID: dest.ID,
+	})
+	if err != nil {
+		t.Fatalf("add route: %v", err)
+	}
+	fragment, err := repository.BuildFragment(domain.PipelineFragment{
+		Source:        "claude",
+		SourceType:    "chat",
+		SourceID:      "session-callback-dead-letter",
+		Title:         "Claude session: callback dead letter",
+		Content:       "This callback destination refuses connections.",
+		CreatedAt:     time.Date(2026, 4, 26, 14, 0, 0, 0, time.UTC),
+		CanonicalPath: "fragments/chats/claude/2026-04-26/session-callback-dead-letter",
+	}, "claude-test", time.Date(2026, 4, 27, 14, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("build fragment: %v", err)
+	}
+	if _, err := fragmentRepo.Upsert(context.Background(), fragment); err != nil {
+		t.Fatalf("upsert fragment: %v", err)
+	}
+	if err := inboxRepo.Stage(context.Background(), fragment.ID, "awaiting routing", time.Now().UTC()); err != nil {
+		t.Fatalf("stage inbox: %v", err)
+	}
+	if err := queueSvc.EnqueueDestinationRetry(context.Background(), fragment.ID, route.ID, dest.ID, domain.DeliveryRetryConfig{MaxAttempts: 1}); err != nil {
+		t.Fatalf("enqueue retry: %v", err)
+	}
+
+	if _, err := queueSvc.Drain(context.Background(), 10); err != nil {
+		t.Fatalf("drain queue: %v", err)
+	}
+	stats, err := queueSvc.Stats(context.Background())
+	if err != nil {
+		t.Fatalf("queue stats: %v", err)
+	}
+	if stats.Pending != 0 || stats.Failed != 1 {
+		t.Fatalf("unexpected callback dead-letter stats: %+v", stats)
+	}
+	logs, err := routingRepo.ListRouteLog(context.Background(), fragment.ID)
+	if err != nil {
+		t.Fatalf("list route log: %v", err)
+	}
+	if len(logs) == 0 || !strings.Contains(logs[len(logs)-1].Reason, "queued_delivery_dead_letter") {
+		t.Fatalf("expected callback dead-letter route log, got %+v", logs)
 	}
 }
 
