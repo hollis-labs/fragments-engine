@@ -53,11 +53,7 @@ func buildProvider(backend string, cfg config.LinkContentConfig) Provider {
 	case "local":
 		return NewLocalProvider(cfg.Local)
 	case "firecrawl":
-		// TODO(follow-up task): implement the firecrawl-backed Provider and construct it
-		// here from cfg.Firecrawl. Left unreachable until that backend exists so
-		// NewProvider's fallback-wrapping seam is exercised without changing this
-		// function's shape.
-		return nil
+		return NewFirecrawlProvider(cfg.Firecrawl)
 	default:
 		return nil
 	}

@@ -192,16 +192,20 @@ func TestNewProvider_NoneOrEmptyBackendReturnsNil(t *testing.T) {
 	}
 }
 
-func TestNewProvider_FirecrawlNotYetImplementedFallsBackToNilFallback(t *testing.T) {
-	// Firecrawl backend is a follow-up task; buildProvider("firecrawl", ...) is
-	// currently unreachable/nil, so configuring it as fallback should not wrap the
-	// primary local provider (fallback == nil).
+func TestNewProvider_LocalWithFirecrawlFallbackWrapsProvider(t *testing.T) {
 	provider := NewProvider(config.LinkContentConfig{Backend: "local", FallbackBackend: "firecrawl"})
 	if provider == nil {
 		t.Fatalf("expected non-nil provider")
 	}
-	if _, ok := provider.(*fallbackProvider); ok {
-		t.Fatalf("did not expect fallback wrapping while firecrawl backend is unimplemented")
+	wrapped, ok := provider.(*fallbackProvider)
+	if !ok {
+		t.Fatalf("expected fallback-wrapped provider, got %T", provider)
+	}
+	if wrapped.primary.Backend() != "local" {
+		t.Fatalf("unexpected primary backend: %q", wrapped.primary.Backend())
+	}
+	if wrapped.fallback.Backend() != "firecrawl" {
+		t.Fatalf("unexpected fallback backend: %q", wrapped.fallback.Backend())
 	}
 	if provider.Backend() != "local" {
 		t.Fatalf("unexpected backend: %q", provider.Backend())
