@@ -40,6 +40,16 @@ type ManualIntakeEnricher struct {
 	githubToken   string
 	pinterestBase string
 	linkProvider  linkcontent.Provider
+	// linkFallback is a SEPARATE, fallback-wrapped linkcontent.Provider (built
+	// via linkcontent.NewProvider(cfg.LinkContent), primary="local",
+	// fallback="firecrawl") reserved for the async inbox-reviewer retry path.
+	// Unlike linkProvider above -- which is local-only and used synchronously
+	// during intake -- this instance is allowed to retry through Firecrawl.
+	// It is wired in by internal/app/app.go via SetLinkContentProvider and,
+	// as of this field's introduction, is not yet read by EnrichIntake,
+	// ReviewURL, or anything else; a later task consumes it from the
+	// reviewer's async retry logic.
+	linkFallback linkcontent.Provider
 }
 
 type ManualEnrichment struct {
@@ -91,6 +101,20 @@ func (e *ManualIntakeEnricher) SetLinkProvider(provider linkcontent.Provider) {
 		return
 	}
 	e.linkProvider = provider
+}
+
+// SetLinkContentProvider wires the fallback-capable linkcontent.Provider
+// (linkFallback) used by the async inbox-reviewer retry path -- NOT the
+// synchronous EnrichIntake/ReviewURL flow, which continues to use the
+// local-only linkProvider set via SetLinkProvider above. Callers (currently
+// internal/app/app.go) build this with linkcontent.NewProvider(cfg.LinkContent)
+// so it may retry a configured Firecrawl backend when the primary (local)
+// backend errors or reports Content.Blocked.
+func (e *ManualIntakeEnricher) SetLinkContentProvider(provider linkcontent.Provider) {
+	if e == nil {
+		return
+	}
+	e.linkFallback = provider
 }
 
 // EnrichIntake derives a ManualEnrichment for the given fragment content. The

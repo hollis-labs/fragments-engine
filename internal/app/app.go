@@ -92,6 +92,16 @@ func Open(ctx context.Context, cfg config.Config) (*App, error) {
 	// linkcontent.NewProvider(cfg.LinkContent), which retries a Firecrawl
 	// backend and is reserved for callers that can tolerate that latency.
 	manualEnricher.SetLinkProvider(linkcontent.NewLocalProvider(cfg.LinkContent.Local))
+	// Fallback-capable link-content provider for the async inbox-reviewer
+	// retry path (consumed by a later task, not read anywhere yet). Built
+	// via the full linkcontent.NewProvider(cfg.LinkContent), so when
+	// cfg.LinkContent.FallbackBackend is set to a distinct backend (e.g.
+	// "firecrawl") this wraps the primary in a retrying fallbackProvider;
+	// when it's empty/"none", NewProvider returns just the bare primary
+	// provider (e.g. local-only) rather than nil, and that's what gets
+	// wired in below -- there is deliberately no "leave it nil" special
+	// case here.
+	manualEnricher.SetLinkContentProvider(linkcontent.NewProvider(cfg.LinkContent))
 	stackExplorerClient := service.NewStackExplorerClient(cfg.Reviewer.StackExplorerAPIBase)
 	pipeline := ingest.NewPipeline(fragmentRepo, visionAnalyzer, []ingest.Stage{
 		ingest.NewAttachmentStage(attachmentRepo),
