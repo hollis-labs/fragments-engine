@@ -105,7 +105,7 @@ func TestRouteStage_CallbackDestination_NeverFiresSynchronously(t *testing.T) {
 		t.Fatalf("upsert fragment: %v", err)
 	}
 
-	stage := ingest.NewRouteStage(fragmentRepo, attachmentRepo, routingRepo, inboxRepo, queueSvc)
+	stage := ingest.NewRouteStage(fragmentRepo, attachmentRepo, routingRepo, inboxRepo, entityRepo, queueSvc)
 	stageCtx := &ingest.StageContext{
 		Fragment: fragment,
 		Outcome:  outcome,

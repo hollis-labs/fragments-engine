@@ -384,6 +384,42 @@ go run ./cmd/fragments-engine route destination-retry-set -config ./fragments.ya
 go run ./cmd/fragments-engine route destination-queue-policy-set -config ./fragments.yaml -destination-id <id> -replay-cooldown-seconds 120
 ```
 
+### 10. Provision the pilot route (nanite wiki callback)
+
+The Loom pilot's one production route (loom-architecture.md §6, §10): any
+fragment carrying a `directive` entity (tagged by `DirectiveStage` from an
+inline `::command`, CW-20260816-0012) is routed to a `callback` destination
+that wakes Curator to generate a `nanite` wiki page. FE does not decide what
+kind of wiki content it becomes -- the match is deliberately broad
+(`-match-entity-kind directive` with no `-match-entity-value`), matching any
+directive-tagged fragment; Curator does the actual classification downstream.
+
+This is not yet provisioned in any migration, seed, or config -- there is no
+live Curator wake endpoint to point at. Once Curator's real endpoint is
+known, provision the destination and route with:
+
+```bash
+go run ./cmd/fragments-engine route destination-add \
+  -config ./fragments.yaml \
+  -name nanite-wiki-callback \
+  -kind callback \
+  -config-json '{"target":"<curator-wake-url>","generator":"wiki_page"}'
+
+go run ./cmd/fragments-engine route add \
+  -config ./fragments.yaml \
+  -name nanite-wiki-route \
+  -match-entity-kind directive \
+  -destination-id <destination-id-from-previous-command> \
+  -auto-route=true
+```
+
+Replace `<curator-wake-url>` with Curator's actual Nanite durable-agent wake
+endpoint, and `<destination-id-from-previous-command>` with the ID printed by
+the `destination-add` command above. Callback destinations never fire
+synchronously (see `CallbackDestinationConfig` in
+`internal/domain/fragment.go`) -- matched fragments are always dispatched via
+the async delivery queue (Section 8), never inline during routing.
+
 ## Agent Notes
 
 - Prefer `ingest validate` before enabling a new chat-history source

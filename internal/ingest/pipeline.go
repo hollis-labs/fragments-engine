@@ -159,6 +159,7 @@ type RouteStage struct {
 	attachments *repository.AttachmentRepository
 	routes      *repository.RoutingRepository
 	inbox       *repository.InboxRepository
+	entities    *repository.EntityRepository
 	retrier     DeliveryRetrier
 }
 
@@ -166,12 +167,22 @@ type DeliveryRetrier interface {
 	EnqueueDestinationRetry(context.Context, string, string, string, domain.DeliveryRetryConfig) error
 }
 
-func NewRouteStage(fragments *repository.FragmentRepository, attachments *repository.AttachmentRepository, routes *repository.RoutingRepository, inbox *repository.InboxRepository, retrier DeliveryRetrier) *RouteStage {
+// NewRouteStage wires the entity repository in addition to extract.FromFragment
+// (see Run) so that entity kinds written directly to fragment_entities by
+// earlier stages in the same pipeline run -- e.g. DirectiveStage's
+// Kind:"directive" rows (CW-20260816-0012) -- are visible to route matching.
+// extract.FromFragment only ever produces its own fixed kind set (see
+// extract.Kinds()), and those are computed in-memory rather than read back
+// from the DB, since RecallStage (which persists them) runs after RouteStage;
+// entities is what lets RouteStage also see entities other stages have
+// already persisted by the time it runs.
+func NewRouteStage(fragments *repository.FragmentRepository, attachments *repository.AttachmentRepository, routes *repository.RoutingRepository, inbox *repository.InboxRepository, entities *repository.EntityRepository, retrier DeliveryRetrier) *RouteStage {
 	return &RouteStage{
 		fragments:   fragments,
 		attachments: attachments,
 		routes:      routes,
 		inbox:       inbox,
+		entities:    entities,
 		retrier:     retrier,
 	}
 }
@@ -191,7 +202,20 @@ func (s *RouteStage) Run(ctx context.Context, stageCtx *StageContext) error {
 	}
 
 	var matched *domain.Route
+	// fragmentEntities starts from the in-memory extract.FromFragment kinds
+	// (workspace/repo/model/tool) -- those can't be read from the DB yet
+	// because RecallStage, which persists them, runs after RouteStage -- and
+	// is extended with whatever entities earlier stages in this same run
+	// have already persisted (e.g. DirectiveStage's Kind:"directive" rows),
+	// so directive-aware routes can match on the very first ingest pass.
 	fragmentEntities := extract.FromFragment(stageCtx.Fragment)
+	if s.entities != nil {
+		persisted, err := s.entities.ListByFragment(ctx, stageCtx.Fragment.ID)
+		if err != nil {
+			return err
+		}
+		fragmentEntities = append(fragmentEntities, persisted...)
+	}
 	for i := range routes {
 		if routeMatches(routes[i], stageCtx.Fragment, fragmentEntities) {
 			matched = &routes[i]

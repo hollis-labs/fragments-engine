@@ -108,7 +108,7 @@ func Open(ctx context.Context, cfg config.Config) (*App, error) {
 		// DirectiveStage must run before RouteStage so directive tags exist
 		// in fragment_entities before routing decisions are made.
 		ingest.NewDirectiveStage(entityRepo),
-		ingest.NewRouteStage(fragmentRepo, attachmentRepo, routingRepo, inboxRepo, deliveryQueue),
+		ingest.NewRouteStage(fragmentRepo, attachmentRepo, routingRepo, inboxRepo, entityRepo, deliveryQueue),
 		ingest.NewInboxStage(inboxRepo),
 		ingest.NewRecallStage(recallIndex),
 	}, claude.Source{}, chatgpt.Source{}, urlsource.Source{}, filesystemdocs.Source{}, gitchanges.Source{})

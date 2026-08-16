@@ -45,7 +45,7 @@ func setupManualTestServices(t *testing.T) manualTestServices {
 	corpusWriter := NewPinterestCorpusWriter(corpusRoot)
 	pipeline := ingest.NewPipeline(fragmentRepo, nil, []ingest.Stage{
 		ingest.NewAttachmentStage(attachmentRepo),
-		ingest.NewRouteStage(fragmentRepo, attachmentRepo, routingRepo, inboxRepo, nil),
+		ingest.NewRouteStage(fragmentRepo, attachmentRepo, routingRepo, inboxRepo, entityRepo, nil),
 		ingest.NewInboxStage(inboxRepo),
 		ingest.NewRecallStage(recallIndex),
 	})

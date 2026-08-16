@@ -203,7 +203,7 @@ func TestPipeline_DirectiveEntitiesSurviveRecallStage(t *testing.T) {
 	stages := []Stage{
 		NewAttachmentStage(attachmentRepo),
 		NewDirectiveStage(entityRepo),
-		NewRouteStage(fragmentRepo, attachmentRepo, routingRepo, inboxRepo, nil),
+		NewRouteStage(fragmentRepo, attachmentRepo, routingRepo, inboxRepo, entityRepo, nil),
 		NewInboxStage(inboxRepo),
 		NewRecallStage(recallIndex),
 	}
