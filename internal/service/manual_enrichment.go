@@ -410,7 +410,15 @@ func (e *ManualIntakeEnricher) ReviewURL(ctx context.Context, fragment domain.Fr
 					// Record the attempt and only keep retrying on future
 					// poll cycles while under the cap; once the cap is
 					// reached, give up for good by marking the fragment
-					// "failed" instead of "pending".
+					// "failed" instead of "pending". Also record why, matching
+					// the review_error convention the GitHub/Pinterest
+					// branches above already use -- otherwise a
+					// still-pending/failed link gives no signal for why.
+					if fetchErr != nil {
+						base.Metadata["review_error"] = fetchErr.Error()
+					} else {
+						base.Metadata["review_error"] = fmt.Sprintf("%s: content still looked blocked after fallback", e.linkFallback.Backend())
+					}
 					base.Metadata["enrichment_attempts"] = attempts
 					if shouldRetryLinkEnrichment(attempts) {
 						base.Metadata["enrichment_status"] = "pending"
