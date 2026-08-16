@@ -31,6 +31,14 @@ const inboxReviewerVersion = "inbox-reviewer-v1"
 // hang POST /v1/intake indefinitely.
 const genericLinkFetchTimeout = 9 * time.Second
 
+// maxLinkEnrichmentAttempts caps how many times ReviewURL's default (generic
+// URL) branch will retry a "pending" fragment through the fallback-capable
+// linkFallback provider before giving up and marking it "failed". Without
+// this cap a permanently-blocked or permanently-dead URL would stay
+// "pending" forever, and the reviewer would call the fallback provider (and
+// bill Firecrawl) on it every poll cycle indefinitely.
+const maxLinkEnrichmentAttempts = 5
+
 type ManualIntakeEnricher struct {
 	client        *http.Client
 	vision        analyze.VisionAnalyzer
@@ -349,46 +357,67 @@ func (e *ManualIntakeEnricher) ReviewURL(ctx context.Context, fragment domain.Fr
 		// and gating on that would either skip retries that should run or
 		// re-invoke the fallback provider (and re-bill Firecrawl) on every
 		// poll cycle for links that are already done/given-up.
+		//
+		// Retries are bounded by maxLinkEnrichmentAttempts (see
+		// shouldRetryLinkEnrichment): once a pending fragment has been
+		// attempted that many times without success, enrichment_status is
+		// switched to "failed" instead of "pending" so neither this gate nor
+		// needsReReview will invoke the fallback provider on it again.
 		if e.linkFallback != nil && currentMetaValue(currentMeta, "enrichment_status") == "pending" {
-			fetched, fetchErr := e.linkFallback.Fetch(ctx, u.String())
-			if fetchErr == nil && !fetched.Blocked {
-				// Only replace the title if the fragment doesn't already have
-				// a real, user-meaningful one. base.Title is always
-				// non-empty by this point (EnrichIntake falls back to a
-				// derived-from-URL placeholder), so checking base.Title
-				// itself would never let a fetched title through. And
-				// fragment.Title alone isn't enough either: once a "pending"
-				// fragment survives one review pass, applyEnrichment
-				// persists that same derived placeholder back as
-				// fragment.Title, so on the NEXT poll cycle fragment.Title
-				// is non-empty too even though nothing real was ever set.
-				// So treat the title as "already set" only when it's
-				// non-empty AND differs from what EnrichIntake would derive
-				// fresh from the URL right now -- i.e. it's either a real
-				// user-provided title or a title a prior successful fetch
-				// already populated.
-				if strings.TrimSpace(fragment.Title) == "" || fragment.Title == deriveTitleFromURL(u) {
-					if title := strings.TrimSpace(fetched.Title); title != "" {
-						base.Title = title
+			attempts := currentMetaInt(currentMeta, "enrichment_attempts")
+			if shouldRetryLinkEnrichment(attempts) {
+				fetched, fetchErr := e.linkFallback.Fetch(ctx, u.String())
+				attempts++
+				if fetchErr == nil && !fetched.Blocked {
+					// Only replace the title if the fragment doesn't already have
+					// a real, user-meaningful one. base.Title is always
+					// non-empty by this point (EnrichIntake falls back to a
+					// derived-from-URL placeholder), so checking base.Title
+					// itself would never let a fetched title through. And
+					// fragment.Title alone isn't enough either: once a "pending"
+					// fragment survives one review pass, applyEnrichment
+					// persists that same derived placeholder back as
+					// fragment.Title, so on the NEXT poll cycle fragment.Title
+					// is non-empty too even though nothing real was ever set.
+					// So treat the title as "already set" only when it's
+					// non-empty AND differs from what EnrichIntake would derive
+					// fresh from the URL right now -- i.e. it's either a real
+					// user-provided title or a title a prior successful fetch
+					// already populated.
+					if strings.TrimSpace(fragment.Title) == "" || fragment.Title == deriveTitleFromURL(u) {
+						if title := strings.TrimSpace(fetched.Title); title != "" {
+							base.Title = title
+						}
+					}
+					if summary := strings.TrimSpace(fetched.Summary); summary != "" {
+						base.Summary = summary
+					}
+					if text := strings.TrimSpace(fetched.Text); text != "" {
+						base.Metadata["link_text"] = text
+					}
+					for key, value := range fetched.Metadata {
+						base.Metadata[key] = value
+					}
+					// Matches EnrichIntake's own generic-URL branch convention.
+					base.Metadata["enrichment_status"] = "done"
+					// Don't leave a stale attempt counter on a
+					// successfully-enriched fragment -- delete rather than
+					// zero it out so it doesn't show up as noise in stored
+					// metadata.
+					delete(base.Metadata, "enrichment_attempts")
+				} else {
+					// Fallback fetch failed or the site is still blocking us.
+					// Record the attempt and only keep retrying on future
+					// poll cycles while under the cap; once the cap is
+					// reached, give up for good by marking the fragment
+					// "failed" instead of "pending".
+					base.Metadata["enrichment_attempts"] = attempts
+					if shouldRetryLinkEnrichment(attempts) {
+						base.Metadata["enrichment_status"] = "pending"
+					} else {
+						base.Metadata["enrichment_status"] = "failed"
 					}
 				}
-				if summary := strings.TrimSpace(fetched.Summary); summary != "" {
-					base.Summary = summary
-				}
-				if text := strings.TrimSpace(fetched.Text); text != "" {
-					base.Metadata["link_text"] = text
-				}
-				for key, value := range fetched.Metadata {
-					base.Metadata[key] = value
-				}
-				// Matches EnrichIntake's own generic-URL branch convention.
-				base.Metadata["enrichment_status"] = "done"
-			} else {
-				// Fallback fetch failed or the site is still blocking us --
-				// leave enrichment_status pending so the next reviewer poll
-				// cycle tries again. No retry cap here by design; that's a
-				// follow-up task.
-				base.Metadata["enrichment_status"] = "pending"
 			}
 		}
 		return base, true, nil
@@ -787,6 +816,41 @@ func currentMetaValue(meta map[string]any, key string) string {
 		return ""
 	}
 	return strings.TrimSpace(value)
+}
+
+// currentMetaInt reads an int-valued metadata key, defaulting to 0 when the
+// key is absent or unparseable. Metadata that round-trips through JSON
+// storage (see decodeFragmentMetadata in inbox_reviewer.go) decodes numbers
+// into map[string]any as float64, not int -- but metadata built directly in
+// the same process (e.g. by a unit test, or freshly by EnrichIntake earlier
+// in this same call) may still hold a plain int. Handle both.
+func currentMetaInt(meta map[string]any, key string) int {
+	raw, ok := meta[key]
+	if !ok {
+		return 0
+	}
+	switch value := raw.(type) {
+	case int:
+		return value
+	case float64:
+		return int(value)
+	default:
+		return 0
+	}
+}
+
+// shouldRetryLinkEnrichment reports whether a pending generic-URL fragment
+// that has already been attempted `attempts` times should be retried again.
+// Boundary semantics: attempts is the count of fetches already made (0
+// before the first attempt), and this returns true while attempts is still
+// below maxLinkEnrichmentAttempts -- so attempt #5 (attempts==4 going in)
+// still runs, and only once it too fails (bringing attempts to 5) does this
+// start returning false, at which point the caller marks the fragment
+// "failed" instead of "pending". This means exactly maxLinkEnrichmentAttempts
+// real fetch attempts happen before a permanently-failing fragment is
+// retired.
+func shouldRetryLinkEnrichment(attempts int) bool {
+	return attempts < maxLinkEnrichmentAttempts
 }
 
 func firstNonEmpty(values ...string) string {
