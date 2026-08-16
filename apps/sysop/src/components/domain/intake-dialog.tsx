@@ -11,6 +11,7 @@ const SOURCE_TYPE_OPTIONS = [
   { value: 'report', label: 'Report' },
   { value: 'reference', label: 'Reference' },
   { value: 'pin', label: 'Pin' },
+  { value: 'url', label: 'URL / Link' },
 ] as const
 
 interface IntakeDialogProps {
@@ -135,7 +136,7 @@ export function IntakeDialog({ open, onClose, onCreated }: IntakeDialogProps) {
                 className={`${FIELD} min-h-32 resize-y leading-5`}
                 value={content}
                 onChange={(e) => setContent(e.target.value)}
-                placeholder="Paste or type the fragment content…"
+                placeholder="Paste or type the fragment content… (a bare URL is auto-detected as URL / Link)"
               />
             </Field>
             <Field label="Title">
