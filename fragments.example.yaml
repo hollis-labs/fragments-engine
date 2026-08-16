@@ -66,20 +66,22 @@ analysis:
       prompt: ""
 
 # Content fetch/enrichment for URLs (manual intake, inbox review, url ingest, etc).
-# backend/fallback_backend accept: "", "none", "local", "firecrawl".
-# The "firecrawl" backend is not implemented yet (follow-up task); configuring it here
-# only reserves the config shape.
-# link_content:
-#   backend: local
-#   fallback_backend: none
-#   local:
-#     request_timeout_seconds: 20
-#     max_body_mb: 5
-#     user_agent: "FragmentsEngine/0.1 (+link-content)"
-#   firecrawl:
-#     base_url: https://api.firecrawl.dev
-#     api_key_env: FIRECRAWL_API_KEY
-#     timeout_seconds: 30
+# backend/fallback_backend accept: "", "none", "local", "firecrawl". "local" fetches
+# the page directly and is used both synchronously during intake/batch ingest and as
+# the reviewer's first attempt. "firecrawl" is only ever invoked from the async
+# inbox-reviewer retry path (never synchronously during intake or batch ingest) and
+# requires api_key_env below to name an environment variable holding a real key.
+link_content:
+  backend: local
+  fallback_backend: firecrawl
+  local:
+    request_timeout_seconds: 20
+    max_body_mb: 5
+    user_agent: "FragmentsEngine/0.1 (+link-content)"
+  firecrawl:
+    base_url: https://api.firecrawl.dev
+    api_key_env: FIRECRAWL_API_KEY
+    timeout_seconds: 30
 
 ingests:
   - name: claude-default
