@@ -353,6 +353,13 @@ type IntakeResult struct {
 	FragmentID string `json:"fragment_id"`
 	Outcome    string `json:"outcome"` // "inserted" | "updated" | "skipped"
 	Status     string `json:"status"`  // "inbox" | "routed"
+	// LinkURL is set when the intake was treated as link-shaped: either
+	// req.Content was a bare URL, or the merged tag set (req.Tags plus any
+	// "#tag" tokens extracted from content) contained "link" and an
+	// http(s) URL was found somewhere in the content. It surfaces the
+	// extracted URL for a future enrichment path that shouldn't require
+	// req.Content to be exactly the URL.
+	LinkURL string `json:"link_url,omitempty"`
 }
 
 type UpdateFragmentRequest struct {
@@ -544,9 +551,32 @@ func (s *FragmentService) Intake(ctx context.Context, req IntakeRequest) (Intake
 		title = deriveTitle(req.Content)
 	}
 
-	sourceType := strings.TrimSpace(req.SourceType)
+	// Merge caller-supplied tags with any "#tag" tokens found inline in the
+	// content. Content itself is never mutated -- hashtags stay in place.
+	mergedTags := dedupeTagValues(append(append([]string{}, req.Tags...), ExtractHashtags(req.Content)...))
+	hasLinkTag := containsTagFold(mergedTags, "link")
+
+	requestedSourceType := strings.TrimSpace(req.SourceType)
+	sourceType := requestedSourceType
 	if sourceType == "" {
 		sourceType = detectSourceType(req.Content)
+	}
+
+	// A "link" tag makes the intake link-shaped even when the URL is
+	// embedded mid-text (e.g. "check this out #link https://example.com"),
+	// not just when content is a bare URL. Surface the extracted URL for a
+	// future enrichment path, and -- only when the caller didn't force a
+	// source type, and detection didn't already land on something more
+	// specific like "youtube" -- treat it as a "url" source.
+	_, isBareURL := singleURL(req.Content)
+	var linkURL string
+	if hasLinkTag || isBareURL {
+		if url, ok := ExtractFirstURL(req.Content); ok {
+			linkURL = url
+		}
+	}
+	if hasLinkTag && linkURL != "" && requestedSourceType == "" && sourceType != "youtube" {
+		sourceType = "url"
 	}
 
 	now := time.Now().UTC()
@@ -601,10 +631,10 @@ func (s *FragmentService) Intake(ctx context.Context, req IntakeRequest) (Intake
 		return IntakeResult{}, fmt.Errorf("intake: upsert: %w", err)
 	}
 
-	manualEntities := make([]domain.FragmentEntity, 0, len(req.Tags)+len(derivedEntities))
+	manualEntities := make([]domain.FragmentEntity, 0, len(mergedTags)+len(derivedEntities))
 	// Write manual entities immediately so they exist even if the fragment later skips.
-	if len(req.Tags) > 0 || len(derivedEntities) > 0 {
-		for _, t := range req.Tags {
+	if len(mergedTags) > 0 || len(derivedEntities) > 0 {
+		for _, t := range mergedTags {
 			t = strings.TrimSpace(t)
 			if t == "" {
 				continue
@@ -633,6 +663,7 @@ func (s *FragmentService) Intake(ctx context.Context, req IntakeRequest) (Intake
 			FragmentID: fragment.ID,
 			Outcome:    "skipped",
 			Status:     status,
+			LinkURL:    linkURL,
 		}, nil
 	}
 
@@ -664,6 +695,7 @@ func (s *FragmentService) Intake(ctx context.Context, req IntakeRequest) (Intake
 		FragmentID: stageCtx.Fragment.ID,
 		Outcome:    string(outcome),
 		Status:     string(stageCtx.Fragment.Status),
+		LinkURL:    linkURL,
 	}, nil
 }
 
