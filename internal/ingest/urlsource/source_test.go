@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/hollis-labs/fragments-engine/internal/config"
+	"github.com/hollis-labs/fragments-engine/internal/domain"
 	"github.com/hollis-labs/fragments-engine/internal/extract"
 )
 
@@ -73,6 +74,9 @@ func TestSourceCollect_HTMLAndPDF(t *testing.T) {
 	if len(article.Attachments) != 1 || article.Attachments[0].ExternalURL == "" {
 		t.Fatalf("expected article reference attachment, got %+v", article.Attachments)
 	}
+	if article.Metadata["extractor"] != "linkcontent-local" {
+		t.Fatalf("expected linkcontent-local extractor metadata, got %+v", article.Metadata)
+	}
 	pdf := fragments[1]
 	if pdf.SourceType != "pdf" {
 		t.Fatalf("expected pdf source type, got %s", pdf.SourceType)
@@ -85,6 +89,128 @@ func TestSourceCollect_HTMLAndPDF(t *testing.T) {
 	}
 	if pdf.Metadata["extractor"] != "ledongthuc/pdf" {
 		t.Fatalf("expected pdf extractor metadata, got %+v", pdf.Metadata)
+	}
+}
+
+func TestSourceCollect_ArticleCapturesOGDescriptionSummary(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write([]byte(`<!doctype html><html><head><title>Fallback Title</title>
+<meta property="og:title" content="Roadmap Planning Notes" />
+<meta property="og:description" content="A short, deliberate summary of the roadmap planning session." />
+</head><body><main><h1>Roadmap Planning Notes</h1><p>The roadmap starts with deterministic ingest and search, then expands from there.</p></main></body></html>`))
+	}))
+	defer srv.Close()
+
+	root := t.TempDir()
+	manifest := filepath.Join(root, "urls.txt")
+	if err := os.WriteFile(manifest, []byte(srv.URL+"/article\n"), 0o600); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+
+	fragments, err := Source{now: func() time.Time { return time.Date(2026, 4, 27, 18, 0, 0, 0, time.UTC) }}.Collect(context.Background(), config.IngestConfig{
+		Name:   "urls-og-test",
+		Kind:   kind,
+		Source: config.IngestSource{Root: root},
+		Routing: config.IngestRouting{
+			Namespace: "fragments/web",
+		},
+	})
+	if err != nil {
+		t.Fatalf("collect urls: %v", err)
+	}
+	if len(fragments) != 1 {
+		t.Fatalf("expected 1 fragment, got %d", len(fragments))
+	}
+	article := fragments[0]
+	if article.Title != "Roadmap Planning Notes" {
+		t.Fatalf("unexpected article title: %s", article.Title)
+	}
+	if article.Metadata["summary"] != "A short, deliberate summary of the roadmap planning session." {
+		t.Fatalf("expected og:description-derived summary metadata, got %+v", article.Metadata)
+	}
+	if article.Metadata["og:description"] == "" {
+		t.Fatalf("expected og:description metadata to be captured, got %+v", article.Metadata)
+	}
+	if article.Metadata["extractor"] != "linkcontent-local" {
+		t.Fatalf("expected linkcontent-local extractor metadata, got %+v", article.Metadata)
+	}
+}
+
+func TestSourceCollect_BlockedArticleContinuesBatch(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/blocked":
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = w.Write([]byte(`<html><body><p>Forbidden</p></body></html>`))
+		case "/ok":
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			_, _ = w.Write([]byte(`<!doctype html><html><head><title>OK Page</title></head><body><main><h1>OK</h1><p>This page fetched successfully after the blocked one in the batch.</p></main></body></html>`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	root := t.TempDir()
+	manifest := filepath.Join(root, "urls.txt")
+	if err := os.WriteFile(manifest, []byte(strings.Join([]string{
+		srv.URL + "/blocked",
+		srv.URL + "/ok",
+	}, "\n")), 0o600); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+
+	fragments, err := Source{now: func() time.Time { return time.Date(2026, 4, 27, 18, 0, 0, 0, time.UTC) }}.Collect(context.Background(), config.IngestConfig{
+		Name:   "urls-blocked-test",
+		Kind:   kind,
+		Source: config.IngestSource{Root: root},
+		Routing: config.IngestRouting{
+			Namespace: "fragments/web",
+		},
+	})
+	if err != nil {
+		t.Fatalf("expected batch to continue past a blocked url without error, got: %v", err)
+	}
+	if len(fragments) != 2 {
+		t.Fatalf("expected batch to continue past blocked url and produce 2 fragments, got %d", len(fragments))
+	}
+
+	var blocked, ok *domain.PipelineFragment
+	for i := range fragments {
+		f := &fragments[i]
+		switch {
+		case strings.Contains(f.Metadata["source_url"].(string), "/blocked"):
+			blocked = f
+		case strings.Contains(f.Metadata["source_url"].(string), "/ok"):
+			ok = f
+		}
+	}
+	if blocked == nil || ok == nil {
+		t.Fatalf("expected both blocked and ok fragments, got %+v", fragments)
+	}
+	if blocked.Metadata["enrichment_status"] != "pending" {
+		t.Fatalf("expected blocked url to have enrichment_status=pending, got %+v", blocked.Metadata)
+	}
+	if blocked.Metadata["enrichment_blocked"] != true {
+		t.Fatalf("expected blocked url to have enrichment_blocked=true, got %+v", blocked.Metadata)
+	}
+	if blocked.Metadata["extractor"] != nil {
+		t.Fatalf("did not expect extractor metadata on a pending/blocked fragment, got %+v", blocked.Metadata)
+	}
+	if !strings.Contains(blocked.Content, "pending") {
+		t.Fatalf("expected placeholder pending content, got %q", blocked.Content)
+	}
+
+	if ok.Metadata["enrichment_status"] != nil {
+		t.Fatalf("did not expect enrichment_status on a successful fragment, got %+v", ok.Metadata)
+	}
+	if ok.Title != "OK Page" {
+		t.Fatalf("unexpected ok fragment title: %s", ok.Title)
+	}
+	if !strings.Contains(ok.Content, "fetched successfully") {
+		t.Fatalf("expected ok fragment to have extracted content, got %q", ok.Content)
 	}
 }
 

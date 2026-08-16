@@ -6,7 +6,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"html"
 	"io"
 	"net/http"
 	neturl "net/url"
@@ -20,17 +19,10 @@ import (
 	"github.com/hollis-labs/fragments-engine/internal/config"
 	"github.com/hollis-labs/fragments-engine/internal/domain"
 	"github.com/hollis-labs/fragments-engine/internal/extract"
+	"github.com/hollis-labs/fragments-engine/internal/linkcontent"
 )
 
 const kind = "url_source"
-
-var (
-	titlePattern  = regexp.MustCompile(`(?is)<title[^>]*>(.*?)</title>`)
-	scriptPattern = regexp.MustCompile(`(?is)<script[^>]*>.*?</script>`)
-	stylePattern  = regexp.MustCompile(`(?is)<style[^>]*>.*?</style>`)
-	tagPattern    = regexp.MustCompile(`(?is)<[^>]+>`)
-	spacePattern  = regexp.MustCompile(`\s+`)
-)
 
 type Source struct {
 	client *http.Client
@@ -72,6 +64,15 @@ func (s Source) Collect(ctx context.Context, cfg config.IngestConfig) ([]domain.
 		now = s.now().UTC()
 	}
 
+	// Generic HTML/article fetching is delegated to the shared linkcontent.Provider (local
+	// backend only — firecrawl stays async-only and is never invoked synchronously during a
+	// batch ingest run). Built once per Collect() run, reusing this source's own tunables.
+	articleProvider := linkcontent.NewLocalProvider(config.LinkContentLocalConfig{
+		RequestTimeoutSeconds: rules.RequestTimeoutSeconds,
+		MaxBodyMB:             rules.MaxBodyMB,
+		UserAgent:             userAgent,
+	})
+
 	out := make([]domain.PipelineFragment, 0, len(entries))
 	for _, entry := range entries {
 		select {
@@ -79,7 +80,7 @@ func (s Source) Collect(ctx context.Context, cfg config.IngestConfig) ([]domain.
 			return nil, ctx.Err()
 		default:
 		}
-		item, err := collectURL(ctx, client, cfg, entry, maxBodyBytes, userAgent, now)
+		item, err := collectURL(ctx, client, articleProvider, cfg, entry, maxBodyBytes, userAgent, now)
 		if err != nil {
 			return nil, fmt.Errorf("collect url %s: %w", entry.URL, err)
 		}
@@ -278,7 +279,7 @@ func dedupeEntries(items []manifestEntry) []manifestEntry {
 	return out
 }
 
-func collectURL(ctx context.Context, client *http.Client, ingestCfg config.IngestConfig, entry manifestEntry, maxBodyBytes int64, userAgent string, now time.Time) (domain.PipelineFragment, error) {
+func collectURL(ctx context.Context, client *http.Client, articleProvider linkcontent.Provider, ingestCfg config.IngestConfig, entry manifestEntry, maxBodyBytes int64, userAgent string, now time.Time) (domain.PipelineFragment, error) {
 	if extract.IsYouTubeURL(entry.URL) {
 		return collectYouTubeURL(ctx, client, ingestCfg, entry, userAgent, now)
 	}
@@ -329,24 +330,34 @@ func collectURL(ctx context.Context, client *http.Client, ingestCfg config.Inges
 	extractorName := ""
 	switch classification {
 	case "article", "html":
-		extracted, err := extract.ExtractArticle(body, finalURL)
-		if err == nil {
-			extractorName = "go-readability"
+		// Generic HTML/article content goes through the shared linkcontent.Provider
+		// (local backend) instead of a bespoke fetch+regex-strip implementation, so
+		// title/summary/text extraction matches internal/linkcontent's behavior
+		// (including og:*/meta-description-derived summaries).
+		linkContent, fetchErr := articleProvider.Fetch(ctx, finalURL)
+		switch {
+		case fetchErr != nil:
+			meta["enrichment_status"] = "pending"
+			meta["enrichment_error"] = fetchErr.Error()
+			content = pendingEnrichmentContent(finalURL, classification, contentType, fetchErr.Error())
+		case linkContent.Blocked:
+			meta["enrichment_status"] = "pending"
+			meta["enrichment_blocked"] = true
+			content = pendingEnrichmentContent(finalURL, classification, contentType, "fetch was blocked (bot-challenge or rate-limited response)")
+		default:
+			extractorName = "linkcontent-local"
 			if title == "" {
-				title = extracted.Title
+				title = strings.TrimSpace(linkContent.Title)
 			}
-			content = extracted.Text
-			for key, value := range extracted.Metadata {
+			content = linkContent.Text
+			if strings.TrimSpace(linkContent.Summary) != "" {
+				meta["summary"] = linkContent.Summary
+			}
+			for key, value := range linkContent.Metadata {
 				if value != nil && value != "" {
 					meta[key] = value
 				}
 			}
-		}
-		if title == "" {
-			title = extractHTMLTitle(body)
-		}
-		if content == "" {
-			content = extractHTMLText(body)
 		}
 	case "markdown", "text", "json", "xml":
 		text := strings.TrimSpace(string(body))
@@ -590,25 +601,22 @@ func placeholderContent(rawURL, classification, contentType string) string {
 	return b.String()
 }
 
-func extractHTMLTitle(body []byte) string {
-	matches := titlePattern.FindSubmatch(body)
-	if len(matches) < 2 {
-		return ""
+// pendingEnrichmentContent builds placeholder body text for an article/html URL whose
+// linkcontent.Provider fetch errored or was reported Blocked. Paired with
+// meta["enrichment_status"] = "pending" so a later retry mechanism can pick it back up
+// instead of the whole batch ingest run aborting for one bad URL.
+func pendingEnrichmentContent(rawURL, classification, contentType, reason string) string {
+	var b strings.Builder
+	b.WriteString("URL: " + rawURL + "\n")
+	b.WriteString("Type: " + classification + "\n")
+	if contentType != "" {
+		b.WriteString("Content-Type: " + contentType + "\n")
 	}
-	return normalizeText(string(matches[1]))
-}
-
-func extractHTMLText(body []byte) string {
-	text := scriptPattern.ReplaceAll(body, nil)
-	text = stylePattern.ReplaceAll(text, nil)
-	text = tagPattern.ReplaceAll(text, []byte(" "))
-	return normalizeText(string(text))
-}
-
-func normalizeText(text string) string {
-	text = html.UnescapeString(text)
-	text = strings.TrimSpace(spacePattern.ReplaceAllString(text, " "))
-	return text
+	if reason != "" {
+		b.WriteString("Reason: " + reason + "\n")
+	}
+	b.WriteString("Content enrichment is pending; this URL could not be fetched or was blocked and will be retried later.\n")
+	return b.String()
 }
 
 func deriveTitleFromURL(rawURL string) string {
