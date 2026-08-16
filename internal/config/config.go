@@ -12,13 +12,14 @@ import (
 )
 
 type Config struct {
-	Database DatabaseConfig `json:"database" yaml:"database"`
-	Recall   RecallConfig   `json:"recall" yaml:"recall"`
-	Analysis AnalysisConfig `json:"analysis" yaml:"analysis"`
-	Delivery DeliveryConfig `json:"delivery" yaml:"delivery"`
-	Queue    QueueConfig    `json:"queue" yaml:"queue"`
-	Reviewer ReviewerConfig `json:"reviewer" yaml:"reviewer"`
-	Ingests  []IngestConfig `json:"ingests" yaml:"ingests"`
+	Database    DatabaseConfig    `json:"database" yaml:"database"`
+	Recall      RecallConfig      `json:"recall" yaml:"recall"`
+	Analysis    AnalysisConfig    `json:"analysis" yaml:"analysis"`
+	LinkContent LinkContentConfig `json:"link_content" yaml:"link_content"`
+	Delivery    DeliveryConfig    `json:"delivery" yaml:"delivery"`
+	Queue       QueueConfig       `json:"queue" yaml:"queue"`
+	Reviewer    ReviewerConfig    `json:"reviewer" yaml:"reviewer"`
+	Ingests     []IngestConfig    `json:"ingests" yaml:"ingests"`
 }
 
 type DatabaseConfig struct {
@@ -62,6 +63,25 @@ type AttachmentAnalysisOpenAIConfig struct {
 	Detail         string `json:"detail" yaml:"detail"`
 	TimeoutSeconds int    `json:"timeout_seconds" yaml:"timeout_seconds"`
 	Prompt         string `json:"prompt" yaml:"prompt"`
+}
+
+type LinkContentConfig struct {
+	Backend         string                     `json:"backend" yaml:"backend"`
+	FallbackBackend string                     `json:"fallback_backend" yaml:"fallback_backend"`
+	Local           LinkContentLocalConfig     `json:"local" yaml:"local"`
+	Firecrawl       LinkContentFirecrawlConfig `json:"firecrawl" yaml:"firecrawl"`
+}
+
+type LinkContentLocalConfig struct {
+	RequestTimeoutSeconds int    `json:"request_timeout_seconds" yaml:"request_timeout_seconds"`
+	MaxBodyMB             int    `json:"max_body_mb" yaml:"max_body_mb"`
+	UserAgent             string `json:"user_agent" yaml:"user_agent"`
+}
+
+type LinkContentFirecrawlConfig struct {
+	BaseURL        string `json:"base_url" yaml:"base_url"`
+	APIKeyEnv      string `json:"api_key_env" yaml:"api_key_env"`
+	TimeoutSeconds int    `json:"timeout_seconds" yaml:"timeout_seconds"`
 }
 
 type DeliveryConfig struct {
@@ -274,6 +294,16 @@ func (c *Config) Validate() error {
 	case "", "low", "high", "auto", "original":
 	default:
 		return fmt.Errorf("config: unsupported openai attachment detail %q", c.Analysis.Attachments.OpenAI.Detail)
+	}
+	switch strings.ToLower(strings.TrimSpace(c.LinkContent.Backend)) {
+	case "", "none", "local", "firecrawl":
+	default:
+		return fmt.Errorf("config: unsupported link_content backend %q", c.LinkContent.Backend)
+	}
+	switch strings.ToLower(strings.TrimSpace(c.LinkContent.FallbackBackend)) {
+	case "", "none", "local", "firecrawl":
+	default:
+		return fmt.Errorf("config: unsupported link_content fallback backend %q", c.LinkContent.FallbackBackend)
 	}
 	if len(c.Ingests) == 0 {
 		return errors.New("config: at least one ingest is required")

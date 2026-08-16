@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"html"
 	"io"
 	"mime"
 	"net/http"
@@ -13,7 +12,6 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
-	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -21,16 +19,10 @@ import (
 	"github.com/hollis-labs/fragments-engine/internal/analyze"
 	"github.com/hollis-labs/fragments-engine/internal/domain"
 	"github.com/hollis-labs/fragments-engine/internal/extract"
+	"github.com/hollis-labs/fragments-engine/internal/linkcontent"
 )
 
 const inboxReviewerVersion = "inbox-reviewer-v1"
-
-var (
-	metaTagPattern  = regexp.MustCompile(`(?is)<meta\b[^>]*>`)
-	metaAttrPattern = regexp.MustCompile(`(?is)([a-zA-Z_:][a-zA-Z0-9_:\-]*)\s*=\s*["']([^"']*)["']`)
-	titleTagPattern = regexp.MustCompile(`(?is)<title[^>]*>(.*?)</title>`)
-	spacePattern    = regexp.MustCompile(`\s+`)
-)
 
 type ManualIntakeEnricher struct {
 	client        *http.Client
@@ -330,13 +322,13 @@ func (e *ManualIntakeEnricher) fetchPinterestPin(ctx context.Context, rawURL str
 	if err != nil {
 		return PinterestFetchResult{}, err
 	}
-	meta := parseMetaTags(string(body))
-	title := firstNonEmpty(meta["og:title"], meta["twitter:title"], htmlTitle(string(body)))
+	meta := linkcontent.ParseMetaTags(string(body))
+	title := firstNonEmpty(meta["og:title"], meta["twitter:title"], linkcontent.HTMLTitle(string(body)))
 	description := firstNonEmpty(meta["og:description"], meta["description"], meta["twitter:description"])
 	imageURL := firstNonEmpty(meta["og:image"], meta["twitter:image"])
 	return PinterestFetchResult{
-		Title:       normalizeText(title),
-		Description: normalizeText(description),
+		Title:       linkcontent.NormalizeText(title),
+		Description: linkcontent.NormalizeText(description),
 		PinImageURL: strings.TrimSpace(imageURL),
 	}, nil
 }
@@ -426,7 +418,7 @@ func (e *ManualIntakeEnricher) enrichImageAttachment(ctx context.Context, item *
 	}
 	if strings.TrimSpace(out.Text) != "" {
 		item.Metadata["extracted_text_bytes"] = len(out.Text)
-		item.Metadata["extracted_text_preview"] = previewText(out.Text, 280)
+		item.Metadata["extracted_text_preview"] = linkcontent.PreviewText(out.Text, 280)
 	}
 	if out.Title != "" {
 		item.Metadata["extracted_title"] = out.Title
@@ -664,58 +656,6 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
-}
-
-func previewText(text string, limit int) string {
-	text = strings.TrimSpace(text)
-	if len(text) <= limit {
-		return text
-	}
-	if limit < 4 {
-		return text[:limit]
-	}
-	return strings.TrimSpace(text[:limit-3]) + "..."
-}
-
-func normalizeText(text string) string {
-	text = html.UnescapeString(text)
-	return strings.TrimSpace(spacePattern.ReplaceAllString(text, " "))
-}
-
-func parseMetaTags(raw string) map[string]string {
-	tags := metaTagPattern.FindAllString(raw, -1)
-	out := make(map[string]string, len(tags))
-	for _, tag := range tags {
-		attrs := metaAttrPattern.FindAllStringSubmatch(tag, -1)
-		if len(attrs) == 0 {
-			continue
-		}
-		attrMap := map[string]string{}
-		for _, attr := range attrs {
-			if len(attr) < 3 {
-				continue
-			}
-			attrMap[strings.ToLower(strings.TrimSpace(attr[1]))] = strings.TrimSpace(attr[2])
-		}
-		key := strings.ToLower(strings.TrimSpace(firstNonEmpty(attrMap["property"], attrMap["name"])))
-		if key == "" {
-			continue
-		}
-		content := strings.TrimSpace(attrMap["content"])
-		if content == "" {
-			continue
-		}
-		out[key] = content
-	}
-	return out
-}
-
-func htmlTitle(raw string) string {
-	match := titleTagPattern.FindStringSubmatch(raw)
-	if len(match) < 2 {
-		return ""
-	}
-	return normalizeText(match[1])
 }
 
 func imageFilename(rawURL, contentType, fallback string) string {
