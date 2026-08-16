@@ -27,7 +27,7 @@ func TestManualIntakeEnricherFetchesGenericURLContent(t *testing.T) {
 	defer server.Close()
 
 	enricher := NewManualIntakeEnricher(nil, t.TempDir())
-	enriched, err := enricher.EnrichIntake(context.Background(), server.URL, "", "", nil, "")
+	enriched, err := enricher.EnrichIntake(context.Background(), server.URL, "", "", nil, "", PrefetchedContent{})
 	if err != nil {
 		t.Fatalf("enrich intake: %v", err)
 	}
@@ -59,7 +59,7 @@ func TestManualIntakeEnricherGenericURLBlockedKeepsPlaceholder(t *testing.T) {
 
 	enricher := NewManualIntakeEnricher(nil, t.TempDir())
 	start := time.Now()
-	enriched, err := enricher.EnrichIntake(context.Background(), server.URL, "", "", nil, "")
+	enriched, err := enricher.EnrichIntake(context.Background(), server.URL, "", "", nil, "", PrefetchedContent{})
 	elapsed := time.Since(start)
 	if err != nil {
 		t.Fatalf("enrich intake: %v", err)
@@ -92,7 +92,7 @@ func TestManualIntakeEnricherGenericURLRespectsBoundedTimeout(t *testing.T) {
 	enricher.SetLinkProvider(linkcontent.NewLocalProvider(config.LinkContentLocalConfig{RequestTimeoutSeconds: 1}))
 
 	start := time.Now()
-	enriched, err := enricher.EnrichIntake(context.Background(), server.URL, "", "", nil, "")
+	enriched, err := enricher.EnrichIntake(context.Background(), server.URL, "", "", nil, "", PrefetchedContent{})
 	elapsed := time.Since(start)
 	if err != nil {
 		t.Fatalf("enrich intake: %v", err)
@@ -120,7 +120,7 @@ func TestManualIntakeEnricherGenericURLKeepsUserSuppliedTitle(t *testing.T) {
 	defer server.Close()
 
 	enricher := NewManualIntakeEnricher(nil, t.TempDir())
-	enriched, err := enricher.EnrichIntake(context.Background(), server.URL, "My Own Title", "", nil, "")
+	enriched, err := enricher.EnrichIntake(context.Background(), server.URL, "My Own Title", "", nil, "", PrefetchedContent{})
 	if err != nil {
 		t.Fatalf("enrich intake: %v", err)
 	}

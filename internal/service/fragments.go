@@ -346,6 +346,24 @@ type IntakeRequest struct {
 	Title      string   // optional; derived from content if blank
 	SourceType string   // optional hint: "url", "youtube", "code", "markdown", "text"
 	Tags       []string // optional tag entities written as kind="tag"
+
+	// SourceURL, Description, and Selection support intake of content a
+	// caller already fetched/extracted client-side (the web clipper browser
+	// extension being the first such caller). When SourceURL is non-empty,
+	// Content is treated as final and complete -- Intake never fetches
+	// SourceURL itself. See PrefetchedContent for the exact field semantics.
+
+	// SourceURL is the origin URL, when Content was captured/extracted
+	// client-side rather than being the raw content to fetch.
+	SourceURL string
+	// Description is the page's own meta-description, if the caller
+	// captured one. Takes precedence over the auto-derived first-200-chars
+	// summary when present.
+	Description string
+	// Selection is arbitrary user-highlighted text captured alongside the
+	// main content, stored as its own distinct metadata field
+	// (metadata["selection"]), never merged into Content.
+	Selection string
 }
 
 // IntakeResult is returned after a successful intake.
@@ -562,6 +580,18 @@ func (s *FragmentService) Intake(ctx context.Context, req IntakeRequest) (Intake
 		sourceType = detectSourceType(req.Content)
 	}
 
+	sourceURL := strings.TrimSpace(req.SourceURL)
+	if sourceURL != "" && requestedSourceType == "" {
+		// Pre-fetched intake (source_url + already-extracted content):
+		// detectSourceType above ran against the extracted article body, not
+		// a URL, so it would otherwise misclassify this as "markdown"/"text".
+		// Reset to the same "url"/"article" placeholder EnrichIntake's
+		// generic-URL branch already treats as "let the branch decide" (see
+		// the normalizedType clearing at the top of EnrichIntake) so its
+		// dedicated source_url branch picks the final source_type.
+		sourceType = "url"
+	}
+
 	// A "link" tag makes the intake link-shaped even when the URL is
 	// embedded mid-text (e.g. "check this out #link https://example.com"),
 	// not just when content is a bare URL. Surface the extracted URL for a
@@ -589,7 +619,11 @@ func (s *FragmentService) Intake(ctx context.Context, req IntakeRequest) (Intake
 		derivedEntities []domain.FragmentEntity
 	)
 	if s.enricher != nil {
-		enriched, err = s.enricher.EnrichIntake(ctx, req.Content, title, sourceType, req.Tags, linkURL)
+		enriched, err = s.enricher.EnrichIntake(ctx, req.Content, title, sourceType, req.Tags, linkURL, PrefetchedContent{
+			SourceURL:   sourceURL,
+			Description: req.Description,
+			Selection:   req.Selection,
+		})
 		if err != nil {
 			return IntakeResult{}, fmt.Errorf("intake: enrich: %w", err)
 		}
@@ -678,6 +712,24 @@ func (s *FragmentService) Intake(ctx context.Context, req IntakeRequest) (Intake
 	for _, stage := range s.pipeline.Stages() {
 		if err := stage.Run(ctx, stageCtx); err != nil {
 			return IntakeResult{}, fmt.Errorf("intake: stage %s: %w", stage.Name(), err)
+		}
+	}
+
+	// RecallStage (above) always writes its own generic, content-derived
+	// summary (see summarize() in internal/recall/sqlite.go), independent of
+	// anything EnrichIntake computed -- for reviewable manual-intake types
+	// (generic URL, GitHub, Pinterest) that placeholder is normal and
+	// expected to be superseded later by InboxReviewerService.applyEnrichment
+	// once the async reviewer visits the fragment. Pre-fetched (source_url)
+	// fragments are never visited by the reviewer -- ReviewURL only engages
+	// when fragment.Content is itself a bare URL, which pre-fetched content
+	// never is (see ManualIntakeEnricher.enrichPrefetchedContent) -- so
+	// without this, the RecallStage placeholder would be permanent. Apply the
+	// enricher's real summary (caller's description, or a clean
+	// word-boundary content preview) directly here instead.
+	if sourceURL != "" && strings.TrimSpace(enriched.Summary) != "" {
+		if err := s.repo.UpdateIndexMetadata(ctx, stageCtx.Fragment.ID, enriched.Summary, now); err != nil {
+			return IntakeResult{}, fmt.Errorf("intake: apply prefetched summary: %w", err)
 		}
 	}
 	if len(manualEntities) > 0 {
