@@ -32,7 +32,7 @@ func (FileDestinationExecutor) Execute(_ context.Context, destination domain.Des
 	if err != nil {
 		return DeliveryResult{}, err
 	}
-	root := config.ExpandHome(cfg.Root)
+	root := config.AnchorPath(config.InstallDir, config.ExpandHome(cfg.Root))
 	if strings.TrimSpace(root) == "" {
 		return DeliveryResult{}, fmt.Errorf("file destination %q missing root", destination.Name)
 	}
@@ -534,7 +534,7 @@ func (CLIDestinationExecutor) Execute(ctx context.Context, destination domain.De
 	args := append([]string{}, cfg.Args...)
 	cmd := exec.CommandContext(callCtx, command, args...)
 	if wd := strings.TrimSpace(expandConfigValue(cfg.WorkingDir)); wd != "" {
-		cmd.Dir = wd
+		cmd.Dir = config.AnchorPath(config.InstallDir, config.ExpandHome(wd))
 	}
 	if len(cfg.Env) > 0 {
 		cmd.Env = append(os.Environ(), cfg.Env...)

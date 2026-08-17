@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hollis-labs/fragments-engine/internal/config"
 	"github.com/hollis-labs/fragments-engine/internal/domain"
 	"github.com/mark3labs/mcp-go/mcp"
 )
@@ -282,6 +283,45 @@ func TestCLIDestinationExecutor(t *testing.T) {
 	}
 	if markdown, _ := payload.Fragment["markdown"].(string); !strings.Contains(markdown, "# Claude session: roadmap-review") {
 		t.Fatalf("expected markdown payload, got %q", markdown)
+	}
+}
+
+func TestFileDestinationExecutor_AnchorsRelativeRootToInstallDir(t *testing.T) {
+	installDir := t.TempDir()
+	prev := config.InstallDir
+	config.InstallDir = installDir
+	t.Cleanup(func() { config.InstallDir = prev })
+
+	// Run from a CWD that is deliberately not installDir; a relative root
+	// must still resolve under installDir, not this working directory.
+	cwd := t.TempDir()
+	prevWd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	if err := os.Chdir(cwd); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(prevWd) })
+
+	destination := domain.Destination{
+		Name:       "corpus",
+		Kind:       "file",
+		ConfigJSON: `{"root":"./corpus"}`,
+	}
+	fragment := testFragment()
+	fragment.CanonicalPath = "fragments/manual/note/abc"
+
+	written, err := FileDestinationExecutor{}.Execute(context.Background(), destination, fragment, nil)
+	if err != nil {
+		t.Fatalf("execute file destination: %v", err)
+	}
+	want := filepath.Join(installDir, "corpus", "fragments", "manual", "note", "abc", "fragment.md")
+	if written.Ref != want {
+		t.Fatalf("relative root not anchored to install dir: got %s, want %s", written.Ref, want)
+	}
+	if _, err := os.Stat(filepath.Join(cwd, "corpus")); !os.IsNotExist(err) {
+		t.Fatalf("expected no corpus dir under CWD, got err=%v", err)
 	}
 }
 
