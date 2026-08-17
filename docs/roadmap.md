@@ -24,6 +24,10 @@ FE already has:
 - FFS file destinations and inbox-preserving materialization
 - direct sysop `Save to FFS` for notes, quotes, reports, pins, and references
 - a sysop Library page for folder-like browsing over processed fragments
+- deterministic link enrichment for manual single-URL saves (local extraction primary, async Firecrawl fallback for bot-blocked sources), triggered by a bare URL or a `#link` hashtag alongside a URL embedded in other text
+- pre-fetched-content intake for clients that already extracted a page themselves (`source_url`/`description`/`selection` on `/v1/intake`), first used by the `apps/fe-clipper` Chrome web clipper extension
+- `nil_vault` ingest reading notes directly out of Nil's per-vault SQLite databases
+- a fifth destination kind, `callback` (fire-and-forget, async-delivery-queue-only), plus `go-directives` ingest wiring, for the Loom pilot's Nanite Curator integration
 
 ## Reality Check
 
@@ -119,11 +123,13 @@ Current delivered foundation:
 - FE can now try `yt-dlp` for known non-YouTube video-page URLs when subtitles are available
 - FE still stages other images and videos as reference fragments with placeholder content
 - FE preserves canonical URL references as fragment-linked attachment records
+- manual single-URL saves now get the same deterministic extraction treatment as batch `url_source` ingest (previously a gap; resolved) — local extraction primary, async Firecrawl fallback via the inbox reviewer for bot-blocked sources, bounded retry with a documented failure reason on the fragment
+- clients that already extracted a page themselves (e.g. a browser extension) can submit pre-fetched content directly, skipping FE's own fetch entirely
 
 Observed current gap from operator usage:
 
-- manual single-URL saves still need richer domain-specific extraction beyond the GitHub/Pinterest cases
 - output bundle paths are now written for FFS materialization, but browse rows do not yet expose those output refs directly
+- the inbox reviewer's oldest-first, fixed-batch-size, no-rotation selection means a freshly-staged item can be starved indefinitely behind an existing backlog — confirmed live, filed as `CW-20260816-0063`
 
 Follow-on:
 

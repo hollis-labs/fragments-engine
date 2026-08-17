@@ -14,12 +14,16 @@ External destinations are always peers reached through explicit transports such 
 - ingest Claude Code chat history from configured directories
 - normalize sessions into canonical fragments
 - ingest saved URL manifests for articles, PDFs, videos, images, and text resources
+- ingest a single link via manual intake (bare URL, or a `#link` hashtag alongside a URL embedded in other text) with deterministic title/summary extraction and an optional async Firecrawl fallback for bot-blocked sources
+- accept pre-fetched content from a client that already extracted a page itself (the `apps/fe-clipper` Chrome extension being the first such client), skipping FE's own fetch entirely
+- ingest `note`/`scratch` items directly out of Nil's per-vault SQLite databases, converting Nil's TipTap/ProseMirror note bodies to plain text
 - persist fragment metadata, provenance, inbox state, and route history in SQLite
 - persist FE-owned attachment and URL-reference records alongside fragments
 - publish routed filesystem bundles as `.../<fragment-id>/fragment.md` with sibling `attachments/` for copied local files
 - index fragments for deterministic search inside FE
 - route fragments to external destinations, starting with `file`
 - support external destination providers for `mcp` and `api`, starting with Nil inbox and Nanite messaging
+- support a fire-and-forget `callback` destination, dispatched only through FE's existing async delivery queue, for the Loom pilot's Nanite Curator wake integration
 - support FE-owned recall through `sqlite` or embedded `vanta`
 - expose the same service operations through CLI, HTTP API, and MCP
 
@@ -86,6 +90,9 @@ delivery:
   cli:
     max_attempts: 3
     backoff_ms: 500
+  callback:
+    max_attempts: 3
+    backoff_ms: 500
 
 queue:
   auto_drain: true
@@ -105,6 +112,25 @@ reviewer:
   github_token_env: GITHUB_TOKEN
   stack_explorer_api_base: http://localhost:8081
   stack_explorer_scan: se-repo-scan
+
+# Content fetch/enrichment for URLs (manual intake, inbox review, url ingest).
+# "local" fetches the page directly and is used both synchronously during
+# intake/batch ingest and as the reviewer's first retry attempt. "firecrawl" is
+# only ever invoked from the async inbox-reviewer retry path -- never
+# synchronously during intake or batch ingest -- and requires api_key_env to
+# name an environment variable holding a real key (see "Environment variables
+# for API keys" above).
+link_content:
+  backend: local
+  fallback_backend: firecrawl
+  local:
+    request_timeout_seconds: 20
+    max_body_mb: 5
+    user_agent: "FragmentsEngine/0.1 (+link-content)"
+  firecrawl:
+    base_url: https://api.firecrawl.dev
+    api_key_env: FIRECRAWL_API_KEY
+    timeout_seconds: 30
 
 recall:
   backend: vanta
@@ -197,6 +223,16 @@ ingests:
         - "**/dist/**"
         - "**/build/**"
       emit_doc_file_fragments: false
+  - name: nil-vaults
+    kind: nil_vault
+    enabled: false
+    source:
+      root: ~/.config/nil
+    routing:
+      namespace: fragments/nil
+    rules:
+      include_vaults: []
+      exclude_vaults: []
 ```
 
 Destinations are persisted through FE itself rather than declared in the ingest YAML. Add them through CLI, API, or MCP. Real examples:
@@ -280,6 +316,7 @@ Delivery retry defaults are transport-aware:
 - `mcp`: `max_attempts=3`, `backoff_ms=500`
 - `api`: `max_attempts=3`, `backoff_ms=500`
 - `cli`: `max_attempts=3`, `backoff_ms=500`
+- `callback`: `max_attempts=3`, `backoff_ms=500`
 
 These can be changed globally with the top-level `delivery` config block and overridden per destination with a `retry` block in `config-json`.
 
@@ -346,6 +383,17 @@ For `git_changes`, FE collects recent commits from one repo root or a configured
 - can also emit changed-doc file fragments with committed file content when `emit_doc_file_fragments: true`
 - never mutates the scanned repos
 
+For `nil_vault`, FE reads `note`/`scratch` items (never `todo`) directly out of [Nil](https://github.com/hollis-labs/nil)'s per-vault SQLite databases — no running Nil process required, since Nil's own HTTP API/MCP only work while its desktop app is open. The current shape:
+
+- `source.root` points at Nil's config directory (`~/.config/nil`), which FE reads to discover configured vault paths
+- a vault whose directory no longer exists on disk is skipped with a log line, not a fatal error
+- Nil stores note bodies as TipTap/ProseMirror JSON, not markdown — FE has its own small PM-JSON → plain-text converter (`internal/ingest/nilvault/pmjson.go`)
+- wikilink targets are captured into fragment metadata (`nil_linked_item_ids`), not yet wired into FE's own relation graph
+- vault/taxonomy/section/priority/pin state all carry into fragment metadata
+- full rescan every run, relying on FE's existing content-hash dedup for idempotency
+
+Manual intake (`POST /v1/intake`) also accepts pre-fetched content from a client that already extracted a page itself — `source_url`, `description`, and `selection` fields alongside `content`. When `source_url` is present, FE never fetches the URL itself; the submitted `content` is treated as final and no `enrichment_status`/retry ever applies to it. `apps/fe-clipper` (a Chrome extension using Mozilla's Readability + Turndown to capture full-page content client-side, sidestepping bot-blocking entirely) is the first such client. See `docs/usage.md` §3d for the full request shape.
+
 For embedded Vanta recall, FE currently supports:
 
 - `embedding_provider: ollama`
@@ -358,7 +406,7 @@ For embedded Vanta recall, FE currently supports:
 
 - `init` initializes the database.
 - `ingest list|validate|preview|archive-policy-set|run` manages FE ingest definitions and execution.
-  Supported ingest kinds: `claude_code`, `chatgpt_export`, `url_source`, `filesystem_docs`, `git_changes`.
+  Supported ingest kinds: `claude_code`, `chatgpt_export`, `url_source`, `filesystem_docs`, `git_changes`, `nil_vault`.
   `ingest preview` is side-effect-free for `chatgpt_export`: it does not copy or delete source files.
 - `inbox list` shows staged fragments awaiting manual review.
 - `inbox review` runs the oldest-first reviewer once against staged inbox items.
@@ -386,6 +434,7 @@ Current destination implementations:
 - `mcp` — typed stdio MCP execution, first provider: `nil_inbox`
 - `api` — typed HTTP execution, first providers: `nanite_messaging`, `nanite_user_mailbox`
 - `cli` — typed local command execution over JSON stdin/stdout
+- `callback` — fire-and-forget HTTP wake call, dispatched only through FE's async delivery queue (never inline during routing); config carries only a `target` URL and an opaque `generator` tag FE never interprets. First/only use: waking Nanite's Curator durable agent for the Loom pilot (`docs/usage.md` §10)
 
 CLI destination note:
 

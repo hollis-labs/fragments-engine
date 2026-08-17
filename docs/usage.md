@@ -245,6 +245,62 @@ go run ./cmd/fragments-engine ingest run -config ./fragments.yaml
 
 `ingest run` executes every enabled ingest, not just this one — use `ingest preview` first to check just this source. Note `preview` still performs a real fetch of every URL in the manifest (it shares the same `Collect` path as a real run) — it just doesn't insert anything into FE's database. A blocked/failed URL within the batch does not abort the run; it lands as a placeholder fragment with `enrichment_status = "pending"` and gets picked up by the same inbox-reviewer retry cycle as the single-link path above, alongside every other blocked URL in the batch.
 
+**Pre-fetched content (browser clipper, or any client that already has the content in hand):**
+
+For callers that already fetched/extracted a page client-side — the Chrome web clipper extension ([`apps/fe-clipper`](../../fe-clipper)) being the first such caller — `/v1/intake` also accepts `source_url`, `description`, and `selection` alongside `content`:
+
+```bash
+curl -s -X POST http://127.0.0.1:8091/v1/intake \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "content": "<full page content the caller already extracted, markdown or text>",
+    "title": "<page title>",
+    "source_url": "https://example.com/some-article",
+    "description": "<page'"'"'s own meta description, if the caller captured one>",
+    "selection": "<text the user had highlighted at capture time, if any>",
+    "tags": ["link"]
+  }'
+```
+
+When `source_url` is present, FE never fetches the URL itself — the submitted `content` is treated as final. `description` takes the same precedence over a derived summary that the fetch-based path already uses; `selection` is stored separately in `metadata.selection`, never merged into `content`. No `enrichment_status`/retry applies to this path — there's nothing left to fetch, so it's never picked up by the inbox reviewer.
+
+### 3e. Nil vault ingest
+
+`nil_vault` reads `note` and `scratch` items (never `todo`) directly out of [Nil](https://github.com/hollis-labs/nil)'s per-vault SQLite databases — no Nil-side changes or running Nil process required, since Nil's HTTP API/MCP only work while its desktop app is open, but FE reads the vault files directly.
+
+`source.root` points at Nil's own config directory (`~/.config/nil` by default), which FE reads to discover configured vault paths — not at a vault directly:
+
+```yaml
+  - name: nil-vaults
+    kind: nil_vault
+    enabled: true
+    source:
+      root: ~/.config/nil
+    routing:
+      namespace: fragments/nil
+    rules:
+      include_vaults: []   # vault names/ids to include; empty = all configured vaults
+      exclude_vaults: []
+```
+
+Current deterministic behavior:
+
+- discovers every vault from Nil's `config.json`; a vault whose directory no longer exists on disk is skipped with a log line, not a fatal error
+- only `note`/`scratch` kinds are ingested; `todo` items are never included
+- Nil stores note bodies as TipTap/ProseMirror JSON, not markdown (confirmed against Nil's actual `INSERT`/`UPDATE` SQL) — FE has its own small PM-JSON → plain-text converter (`internal/ingest/nilvault/pmjson.go`), so no live Nil process or export step is needed
+- wikilink targets embedded in a note's body are captured into fragment metadata (`nil_linked_item_ids`) but not yet wired into FE's own fragment-relation graph
+- taxonomy (Nil projects/contexts/tags) and vault/section/priority/pin state all carry into fragment metadata
+- a fragment with genuinely empty note content (e.g. a title-only note with no body) is correctly skipped, same convention every other FE ingest source already follows
+- full rescan every run, relying on FE's existing content-hash dedup for idempotency — no incremental/since-last-run state to manage
+
+Example flow:
+
+```bash
+go run ./cmd/fragments-engine ingest validate -config ./fragments.yaml -name nil-vaults
+go run ./cmd/fragments-engine ingest preview -config ./fragments.yaml -name nil-vaults -limit 10
+go run ./cmd/fragments-engine ingest run -config ./fragments.yaml
+```
+
 ### 4. Inspect fragment provenance
 
 ```bash
@@ -429,5 +485,6 @@ the async delivery queue (Section 8), never inline during routing.
 - Prefer `fragment get` after `filesystem_docs` ingest to verify repo/path/frontmatter metadata and canonical paths
 - Prefer `fragment get` after `git_changes` ingest to verify commit/file metadata, especially include/exclude filtering
 - Prefer `fragment get` after single or batch link ingest to check whether `enrichment_status` landed on `done` versus `pending`/`failed` before assuming the title/summary is final
+- Prefer `fragment get` after `nil_vault` ingest to verify vault/taxonomy metadata and that note content reads as clean prose, not raw PM-JSON
 - Prefer `route preview` before broad inbox bulk actions
 - Use `fragment get` and `route destination-status` as the default debugging pair

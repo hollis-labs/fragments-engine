@@ -2,155 +2,57 @@
 
 ## Current State
 
-Fragments Engine is now operating as the local-first inbox, recall layer, and
-first-pass virtual filesystem for saved information.
+This session shipped four features end to end, each live-tested against real data (not just unit tests), plus documentation to match:
 
-Recent work moved FE beyond ingestion and triage into an FFS-backed browsing
-workflow:
+1. **Link ingest** — adding a link (bare URL, or `#link` alongside a URL embedded in other text) deterministically pulls a title/summary. Local extraction is primary; an optional Firecrawl fallback is retried asynchronously by the inbox reviewer, never synchronously on the intake/batch-ingest hot path. New `internal/linkcontent` package mirrors the existing `internal/analyze.VisionAnalyzer` primary/fallback pattern.
+2. **Loom pilot's `callback` destination** — a fifth FE destination kind, fire-and-forget, dispatched only through FE's existing async delivery queue (reused, not reinvented) for waking Nanite's Curator durable agent. `go-directives` (`::command`) parsing wired into ingest, tagging fragments with a `directive` entity; one route matches any directive-tagged fragment to the callback destination.
+3. **Nil vault ingest** (`nil_vault` kind) — reads `note`/`scratch` items directly out of Nil's per-vault SQLite databases (no running Nil process required), converting Nil's TipTap/ProseMirror note bodies to plain text via a small local converter. Live-tested against 3 real vaults: 190 notes ingested correctly, 0 todos leaked, missing vault directory skipped gracefully, dedup confirmed idempotent on a second run.
+4. **Web clipper** (`apps/fe-clipper`, a separate sibling repo) — a Chrome MV3 extension using Mozilla Readability + Turndown to capture full-page content client-side (sidesteps bot-blocking entirely, since capture happens in a real authenticated browser tab) and POSTs it to a new pre-fetched-content mode on `/v1/intake` (`source_url`/`description`/`selection` fields — FE never re-fetches when `source_url` is present). User-confirmed working in the browser.
 
-- reviewed Pinterest pins are downloaded, previewed, searchable, editable, and
-  materialized under `~/Documents/ffs/media/pins`
-- GitHub repo saves sync into Stack Explorer with tags and scan queueing
-- file destinations support `provider` and `path_template`
-- `route materialize` writes through destinations without removing fragments
-  from inbox
-- manual fragments can be saved directly to FFS from sysop using `Save to FFS`
-- `note`, `quote`, `report`, `pin`, and `reference` source types map to default
-  FFS destinations
-- sysop has a top-level `Library` page with a folder-like virtual browser over
-  processed fragments
-- the fragment modal exposes copy/open controls for paths, URLs, output refs,
-  and attachments, and now shows image previews near the top
-
-The live dev service is managed by Cerberus as `fragments-engine-dev` on
-`http://127.0.0.1:8091/sysop/`.
+The live dev service is managed by Cerberus as `fragments-engine-dev` on `http://127.0.0.1:8091/sysop/`.
 
 ## Latest Local Commits
 
-The current local `main` includes these recent commits:
+Current local `main` (already pushed to `origin/main`) includes, most recent first:
 
-- `5d1c5a8` `Refine library folder browser layout`
-- `6fb57cd` `Add library file browser for fragments`
-- `ebfd484` `Add FFS save flow for notes quotes and reports`
-- `7738167` `Refine ffs reference path naming`
-- `dfeb8f2` `Expand ffs routing and route controls`
+- `8e06288` `FE: intake support for pre-fetched content (source_url/description/selection, skip re-fetch) (#18)`
+- `c76a569` `FE: add nil ingest source (notes/scratch from Nil vaults via direct SQLite read) (#17)`
+- `653010e` `FE: route tagging fragments into the nanite wiki bundle (CW-20260816-0018)`
+- `0e93f77` `FE: dispatch callback destinations through the existing delivery queue (CW-20260816-0034)`
+- `c80c67d` `FE: wire go-directives into ingest path (CW-20260816-0012)`
+- `b8892ca` `FE: add callback destination type to routing schema (CW-20260816-0011)`
+- `36ef041` `Capture review_error on link-fallback retry failures`
+- `fd7f0c2` `docs: add real single-link and batch-from-file examples for link ingest`
+- `4b85de9` `Document env-var loading for API keys; identify launchd env gap (CW-20260816-0057)`
+- 9 more commits for the initial link-ingest epic (`CW-20260816-0025` through `0033`)
 
-At handoff time the FE worktree was clean.
+Plus this session's doc-currency pass (README.md, docs/usage.md, docs/next-session.md, docs/roadmap.md) — check `git log` for the exact commit if picking up right after handoff.
 
-## Live FFS Layout
+`apps/fe-clipper` is a separate sibling repo with its own commit history — not reflected in fragments-engine's `git log`.
 
-The chosen filesystem root is:
+## Live Config State
 
-```text
-~/Documents/ffs/
-```
+- `fragments.yaml` (gitignored runtime config) now has `link_content` (backend: local, fallback_backend: firecrawl) and a `nil-vaults` ingest entry (`kind: nil_vault`, `enabled: true`) live and enabled.
+- `FIRECRAWL_API_KEY` and `OPENAI_API_KEY` are both set in the `fragments-engine-dev` Cerberus resource's launchd `env:` block — confirmed live via `cerberus_resource_inspect`, not just assumed.
+- `reviewer.batch_size` is back to `10` (its normal value) — it was temporarily bumped to `100` during live debugging this session and reverted afterward; don't be surprised if you see that in shell history, it's not a leftover live setting.
 
-The intended namespace is:
+## Known Gaps / Deferred Work (filed in Torque, not yet picked up)
 
-```text
-docs/
-  notes/
-  quotes/
-  reports/
-  references/
-media/
-  pins/
-  images/
-  videos/
-  audio/
-artifacts/
-  exports/
-  captures/
-  source-files/
-  downloads/
-views/
-  projects/
-  topics/
-  people/
-inbox/
-  manual/
-  imports/
-```
-
-Current live destinations created in the runtime DB:
-
-- `ffs-pins`
-- `ffs-references`
-- `ffs-notes`
-- `ffs-quotes`
-- `ffs-reports`
-
-Current behavior:
-
-- `ffs-pins` uses the FFS Pinterest bundle writer
-- generic file destinations use `path_template`
-- materialization keeps fragments in inbox and marks the inbox reason with
-  `materialized to <destination>`
-- Library derives virtual folder paths from fragment type and materialization
-  state, not by scanning the filesystem
-
-## Verification From This Session
-
-Passed locally:
-
-```bash
-go test ./...
-npm --prefix apps/sysop run typecheck
-npm --prefix apps/sysop run build
-make build
-```
-
-Cerberus reload succeeded:
-
-```bash
-/Users/chrispian/go/bin/cerberus resource reload fragments-engine-dev
-```
-
-Live smoke checks passed:
-
-- `/v1/fragments/browse?limit=5` returns browse rows
-- sysop serves the updated embedded bundle
-- `Save to FFS` created a real note bundle under
-  `~/Documents/ffs/docs/notes/ffs-note-flow-smoke-test/fragment.md`
+- **`CW-20260816-0063`** (priority 1) — the inbox reviewer's oldest-first, no-rotation, fixed-batch-size selection means a freshly-staged item can be starved indefinitely behind an existing inbox backlog (confirmed live: a fragment at rank 73/73 by age was mathematically unreachable by the automatic 5-minute cycle). Needs a targeted, index-backed `enrichment_status='pending'` lookup, decoupled from the general oldest-first sweep — explicit design constraint from this session: do NOT fix this by scanning the whole inbox faster/bigger, inbox is a valid long-term resting state for most items and the fix must cost nothing proportional to inbox size for settled items.
+- **`CW-20260816-0064`** (priority 3, capture-only, not yet architected) — every service restart hits `PRAGMA journal_mode=WAL: database is locked` as multiple background workers (queue drainer, ingest worker, scheduler, inbox reviewer) race to open the DB simultaneously at startup, silently eating that worker's first pass. Needs a real design pass on read/write racing in general plus deterministic startup ordering — deliberately deferred, not scoped yet.
+- **`CW-20260816-0086`** (priority 2, issue) — route fan-out: currently one fragment can only match one route. The Loom pilot's directive-tagged-fragment route may eventually need to also route to Torque or elsewhere from the same fragment; not needed for the pilot's current scope, filed for later.
 
 ## Recommended Pickup
 
-The next session should continue from the Library/FFS product surface.
+No single obvious next thread — this session closed out several previously-open threads rather than opening one big new one. In priority order:
 
-Priority order:
-
-1. Make Library folder semantics more durable by deriving virtual paths from
-   actual FFS output refs when available, falling back to source type only when
-   not materialized.
-2. Add drill-down affordances for folder counts, breadcrumbs, and back/up
-   navigation polish.
-3. Add saved views for `docs/notes`, `docs/quotes`, `docs/reports`,
-   `docs/references`, and `media/pins`.
-4. Add bulk materialization controls from Library for filtered sets that are not
-   yet saved.
-5. Add filesystem backfill/repair tooling for FFS bundles so output paths can be
-   regenerated or cleaned without changing user metadata.
-
-## Known Gaps
-
-- Library currently presents a virtual filesystem; it does not yet read FFS dirs
-  from disk.
-- Browse rows do not yet include output refs directly; the modal gets them from
-  route log detail.
-- Folder paths are currently inferred in the sysop frontend from source type and
-  materialized state.
-- `docs/notes`, `docs/quotes`, and `docs/reports` workflows are usable, but they
-  still rely on manual source-type selection.
-- Chunk splitting/code-splitting is still a frontend follow-up; Vite reports the
-  main bundle above 500 kB.
+1. `CW-20260816-0063` (reviewer starvation) is the highest-value pickup — it's the reason a real link added via the Frag app sat unenriched for the length of this session until manually forced. Anyone relying on `#link`/inbox-reviewer retry in normal use will hit this on any inbox with a nontrivial backlog.
+2. Continue the pre-existing Library/FFS product surface work if that's still the active thread (see git history before this session's work for that context — `21cf4c2` and earlier).
+3. `CW-20260816-0064` (startup DB lock race) whenever there's appetite for an ops/reliability pass — low urgency, real annoyance.
 
 ## Operational Notes
 
-- Run the dev API against gitignored `fragments.yaml`, not
-  `fragments.example.yaml`.
-- `fragments.yaml` currently points Pinterest corpus output at
-  `~/Documents/ffs/media/pins`.
+- Run the dev API against gitignored `fragments.yaml`, not `fragments.example.yaml`.
+- `fragments.example.yaml` is a commented template and should not be used as the mutable runtime config — it was kept in sync with this session's new config blocks (`link_content`, `nil-vaults`, `callback` delivery defaults) but is not itself live anywhere.
 - The runtime DB owns destinations and routes; they are not declared in YAML.
-- `fragments.example.yaml` is a commented template and should not be used as the
-  mutable runtime config.
-
+- Cerberus resource `fragments-engine-dev` runs from the workspace directory directly (`./fragments-engine` binary built into the repo root, not a separate install path) — `cerberus_resource_deploy` rebuilds but does NOT always restart if it thinks the launchd config itself is unchanged; use `cerberus_resource_reload` explicitly after any code change to be sure the running process picked up a new binary (confirm via PID/run-count change in `cerberus_resource_inspect`, don't just trust the deploy/reload call's own success message).
