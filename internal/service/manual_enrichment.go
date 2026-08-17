@@ -70,6 +70,30 @@ type ManualEnrichment struct {
 	Attachments   []domain.PipelineAttachment
 }
 
+// PrefetchedContent carries content a caller already fetched/extracted
+// client-side (the web clipper browser extension being the first such
+// caller, see EP-20260816-0005) rather than a raw URL or freeform text for
+// the server to fetch itself. When SourceURL is non-empty, EnrichIntake
+// takes a dedicated code path: it never calls linkProvider.Fetch and never
+// runs the bare-URL/GitHub/Pinterest detection used by the rest of
+// EnrichIntake -- the submitted content is treated as final and complete.
+type PrefetchedContent struct {
+	// SourceURL is the origin page URL. Required to trigger the pre-fetched
+	// path; when empty, EnrichIntake runs its existing behavior unchanged.
+	SourceURL string
+	// Description is the page's own meta-description/og:description, when
+	// the caller captured one client-side. Takes precedence over a
+	// content-derived preview summary when non-empty, matching the exact
+	// precedence rule internal/linkcontent's local backend already uses for
+	// og:description/meta-description (see internal/linkcontent/local.go).
+	Description string
+	// Selection is arbitrary user-highlighted text captured alongside the
+	// main content. It is stored as its own distinct metadata field
+	// (metadata["selection"]) and is never merged into the fragment's
+	// Content.
+	Selection string
+}
+
 type PinterestFetchResult struct {
 	Title       string
 	Description string
@@ -128,8 +152,11 @@ func (e *ManualIntakeEnricher) SetLinkContentProvider(provider linkcontent.Provi
 // EnrichIntake derives a ManualEnrichment for the given fragment content. The
 // linkURL parameter is an explicitly-detected target URL to fall back to when
 // content isn't itself a bare URL (e.g. content has a "link" tag with the URL
-// embedded mid-text) -- pass "" when no such URL was detected.
-func (e *ManualIntakeEnricher) EnrichIntake(ctx context.Context, content, title, sourceType string, tags []string, linkURL string) (ManualEnrichment, error) {
+// embedded mid-text) -- pass "" when no such URL was detected. The prefetched
+// parameter carries caller-supplied pre-extracted content (see
+// PrefetchedContent) -- pass the zero value when content should be handled
+// by the existing bare-URL/GitHub/Pinterest/generic-URL detection below.
+func (e *ManualIntakeEnricher) EnrichIntake(ctx context.Context, content, title, sourceType string, tags []string, linkURL string, prefetched PrefetchedContent) (ManualEnrichment, error) {
 	normalizedTitle := strings.TrimSpace(title)
 	normalizedType := strings.TrimSpace(sourceType)
 	if normalizedType == "url" || normalizedType == "article" {
@@ -141,6 +168,9 @@ func (e *ManualIntakeEnricher) EnrichIntake(ctx context.Context, content, title,
 	}
 	if trimmed == "" {
 		return ManualEnrichment{}, nil
+	}
+	if sourceURL := strings.TrimSpace(prefetched.SourceURL); sourceURL != "" {
+		return e.enrichPrefetchedContent(trimmed, normalizedTitle, normalizedType, tags, sourceURL, prefetched)
 	}
 	rawURL, ok := singleURL(trimmed)
 	if !ok {
@@ -268,6 +298,84 @@ func (e *ManualIntakeEnricher) EnrichIntake(ctx context.Context, content, title,
 	}, nil
 }
 
+// enrichPrefetchedContent builds a ManualEnrichment for the source_url +
+// pre-extracted-content intake path (see PrefetchedContent). It deliberately
+// never calls e.linkProvider.Fetch -- content is treated as final and
+// complete, so there is nothing to fetch and nothing to retry later. It also
+// skips the GitHub/Pinterest/generic-URL detection above entirely: content
+// here is the caller's already-extracted page body, not a bare URL, so
+// singleURL(content) would never match it anyway.
+//
+// source_type decision: "article", not "url". This matches the
+// classification convention already used by the batch url-source ingest
+// path (classifyFetchedURL in internal/ingest/urlsource/source.go), where
+// HTML content that was successfully fetched and extracted into the
+// fragment body is classified "article" and "url" is reserved for
+// links that are bare, unclassified, or not yet fetched. Pre-fetched
+// web-clipper content always arrives as complete, already-extracted article
+// body text, so "article" is the accurate default here. A caller-supplied
+// sourceType of "url" or "article" is treated as a placeholder to be
+// (re)decided by this branch -- same convention the generic-URL branch above
+// already uses -- so it also resolves to "article"; any other explicit
+// sourceType hint (e.g. "reference") is preserved verbatim.
+func (e *ManualIntakeEnricher) enrichPrefetchedContent(content, title, normalizedType string, tags []string, sourceURL string, prefetched PrefetchedContent) (ManualEnrichment, error) {
+	u, err := normalizeURL(sourceURL)
+	if err != nil {
+		// Unlike the generic-URL branch above (which silently degrades when
+		// content merely looks URL-ish but doesn't parse), source_url here
+		// is a caller-asserted, structured field -- a bad value is a caller
+		// error. Fail loudly instead of silently proceeding with a
+		// placeholder sourceType and no URL metadata, which would produce a
+		// misclassified fragment with no indication anything went wrong.
+		return ManualEnrichment{}, fmt.Errorf("enrich prefetched content: invalid source_url %q: %w", sourceURL, err)
+	}
+	metadata := baseURLMetadata(u)
+	entities := []domain.FragmentEntity{
+		entity("domain", u.Hostname(), "manual-intake"),
+	}
+	if len(tags) > 0 {
+		metadata["input_tags"] = append([]string(nil), tags...)
+	}
+	// Provenance: lets future debugging distinguish "this fragment's content
+	// came from a live server-side fetch" (the generic-URL branch above, or
+	// ReviewURL's fallback retry) from "came pre-extracted from a client".
+	metadata["capture_method"] = "web_clipper"
+	if selection := strings.TrimSpace(prefetched.Selection); selection != "" {
+		metadata["selection"] = selection
+	}
+
+	summary := strings.TrimSpace(prefetched.Description)
+	if summary == "" {
+		summary = linkcontent.PreviewText(content, 200)
+	}
+
+	if normalizedType == "" {
+		normalizedType = "article"
+	}
+	if title == "" {
+		title = deriveTitleFromURL(u)
+	}
+
+	// Deliberately no metadata["enrichment_status"]: content is already
+	// complete at intake time, so there is nothing for a later reviewer to
+	// retry. ReviewURL gates its own generic-URL retry path on
+	// singleURL(fragment.Content), which never matches this branch's content
+	// (the already-extracted article body, not a bare URL), so this fragment
+	// is naturally skipped ("skip_unsupported") by the inbox reviewer without
+	// any changes there.
+	return ManualEnrichment{
+		Title:         title,
+		SourceType:    normalizedType,
+		CanonicalPath: path.Join("fragments", "manual", normalizedType, u.Hostname(), canonicalURLLeaf(u)),
+		Summary:       summary,
+		Metadata:      metadata,
+		Entities:      entities,
+		Attachments: []domain.PipelineAttachment{
+			urlReferenceAttachment(u.String(), normalizedType, "manual-intake"),
+		},
+	}, nil
+}
+
 func (e *ManualIntakeEnricher) ReviewURL(ctx context.Context, fragment domain.Fragment, currentMeta map[string]any) (ManualEnrichment, bool, error) {
 	rawURL, ok := singleURL(fragment.Content)
 	if !ok {
@@ -280,7 +388,7 @@ func (e *ManualIntakeEnricher) ReviewURL(ctx context.Context, fragment domain.Fr
 	// ReviewURL operates on already-stored fragments; retrying enrichment from
 	// an embedded (non-bare-URL) link is out of scope here -- pass "" and rely
 	// on singleURL(fragment.Content) alone, matching today's behavior.
-	base, err := e.EnrichIntake(ctx, fragment.Content, fragment.Title, fragment.SourceType, nil, "")
+	base, err := e.EnrichIntake(ctx, fragment.Content, fragment.Title, fragment.SourceType, nil, "", PrefetchedContent{})
 	if err != nil {
 		return ManualEnrichment{}, false, err
 	}

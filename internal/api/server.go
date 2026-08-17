@@ -2032,6 +2032,16 @@ type intakeRequest struct {
 	Title      string   `json:"title"`
 	SourceType string   `json:"source_type"`
 	Tags       []string `json:"tags"`
+
+	// SourceURL, Description, and Selection support intake of content the
+	// caller already fetched/extracted client-side (the web clipper browser
+	// extension being the first such caller, see EP-20260816-0005). When
+	// SourceURL is set, the server treats Content as final and complete and
+	// never re-fetches it -- see service.ManualIntakeEnricher.EnrichIntake's
+	// PrefetchedContent handling.
+	SourceURL   string `json:"source_url"`
+	Description string `json:"description"`
+	Selection   string `json:"selection"`
 }
 
 func (s *Server) handleIntake(w http.ResponseWriter, r *http.Request) {
@@ -2060,10 +2070,13 @@ func (s *Server) handleIntake(w http.ResponseWriter, r *http.Request) {
 	}
 	defer instance.Close()
 	result, err := instance.Fragments.Intake(r.Context(), service.IntakeRequest{
-		Content:    input.Content,
-		Title:      input.Title,
-		SourceType: input.SourceType,
-		Tags:       input.Tags,
+		Content:     input.Content,
+		Title:       input.Title,
+		SourceType:  input.SourceType,
+		Tags:        input.Tags,
+		SourceURL:   input.SourceURL,
+		Description: input.Description,
+		Selection:   input.Selection,
 	})
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
