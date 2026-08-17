@@ -286,11 +286,70 @@ func TestCLIDestinationExecutor(t *testing.T) {
 	}
 }
 
+func TestCLIDestinationExecutor_AnchorsRelativeWorkingDirToInstallDir(t *testing.T) {
+	installDir := t.TempDir()
+	prev := config.InstallDir()
+	config.SetInstallDir(installDir)
+	t.Cleanup(func() { config.SetInstallDir(prev) })
+
+	workDir := filepath.Join(installDir, "work")
+	if err := os.MkdirAll(workDir, 0o750); err != nil {
+		t.Fatalf("mkdir work dir: %v", err)
+	}
+	wantWD, err := filepath.EvalSymlinks(workDir)
+	if err != nil {
+		t.Fatalf("resolve work dir: %v", err)
+	}
+
+	// Run from a CWD that is deliberately not installDir; a relative
+	// working_dir must still resolve under installDir, not this CWD.
+	cwd := t.TempDir()
+	prevWd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	if err := os.Chdir(cwd); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(prevWd) })
+
+	capturePath := filepath.Join(installDir, "cli-payload.json")
+	cwdCapturePath := filepath.Join(installDir, "cli-cwd.txt")
+
+	destination := domain.Destination{
+		Name: "cli-export",
+		Kind: "cli",
+		ConfigJSON: fmt.Sprintf(`{
+			"command": %q,
+			"args": ["-test.run=TestHelperProcessCLIDestination", "--", %q],
+			"env": ["GO_WANT_HELPER_PROCESS=1", "CWD_CAPTURE_PATH=%s"],
+			"working_dir": "./work",
+			"provider": "corpus_cli"
+		}`, os.Args[0], capturePath, cwdCapturePath),
+	}
+
+	if _, err := (CLIDestinationExecutor{}).Execute(context.Background(), destination, testFragment(), nil); err != nil {
+		t.Fatalf("execute cli destination: %v", err)
+	}
+
+	gotWDRaw, err := os.ReadFile(cwdCapturePath)
+	if err != nil {
+		t.Fatalf("read cwd capture: %v", err)
+	}
+	gotWD, err := filepath.EvalSymlinks(strings.TrimSpace(string(gotWDRaw)))
+	if err != nil {
+		t.Fatalf("resolve captured cwd: %v", err)
+	}
+	if gotWD != wantWD {
+		t.Fatalf("relative working_dir not anchored to install dir: got %s, want %s", gotWD, wantWD)
+	}
+}
+
 func TestFileDestinationExecutor_AnchorsRelativeRootToInstallDir(t *testing.T) {
 	installDir := t.TempDir()
-	prev := config.InstallDir
-	config.InstallDir = installDir
-	t.Cleanup(func() { config.InstallDir = prev })
+	prev := config.InstallDir()
+	config.SetInstallDir(installDir)
+	t.Cleanup(func() { config.SetInstallDir(prev) })
 
 	// Run from a CWD that is deliberately not installDir; a relative root
 	// must still resolve under installDir, not this working directory.
@@ -588,6 +647,17 @@ func TestHelperProcessCLIDestination(t *testing.T) {
 	}
 	if capturePath == "" {
 		os.Exit(2)
+	}
+	if cwdCapturePath := os.Getenv("CWD_CAPTURE_PATH"); cwdCapturePath != "" {
+		wd, err := os.Getwd()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err.Error())
+			os.Exit(1)
+		}
+		if err := os.WriteFile(cwdCapturePath, []byte(wd), 0o600); err != nil {
+			fmt.Fprintln(os.Stderr, err.Error())
+			os.Exit(1)
+		}
 	}
 	raw, err := io.ReadAll(os.Stdin)
 	if err != nil {

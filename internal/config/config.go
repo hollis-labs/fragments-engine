@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"gopkg.in/yaml.v3"
 )
@@ -182,18 +183,40 @@ type NilVaultRules struct {
 	ExcludeVaults []string `json:"exclude_vaults" yaml:"exclude_vaults"`
 }
 
-// InstallDir is the absolute directory containing the most recently loaded
-// config file, set as a side effect of Load(). It is the ambient anchor for
-// relative filesystem paths that don't come from the config file itself —
-// notably per-destination "root"/"working_dir" values, which are DB-stored
-// (added via CLI/API/MCP) rather than declared in fragments.yaml, so there is
-// no config-file directory to anchor them to at the point they're decoded.
-// Same rationale as ExpandHome leaning on the ambient os.UserHomeDir()
-// instead of threading a home dir through every caller: fragments-engine
-// only ever runs against one config file per process, so a package-level
-// anchor is safe and avoids cascading a new parameter through the delivery/
-// probe call chains. Empty until the first successful Load().
-var InstallDir string
+// installDir backs InstallDir/SetInstallDir. Load() is called from
+// concurrent per-request handlers (internal/api/server.go, internal/mcp
+// tool handlers all call config.Load() inline), so the ambient anchor below
+// must be safe for concurrent read/write rather than a bare package var.
+var (
+	installDirMu sync.RWMutex
+	installDir   string
+)
+
+// InstallDir returns the absolute directory containing the most recently
+// loaded config file, set as a side effect of Load(). It is the ambient
+// anchor for relative filesystem paths that don't come from the config file
+// itself — notably per-destination "root"/"working_dir" values, which are
+// DB-stored (added via CLI/API/MCP) rather than declared in fragments.yaml,
+// so there is no config-file directory to anchor them to at the point
+// they're decoded. Same rationale as ExpandHome leaning on the ambient
+// os.UserHomeDir() instead of threading a home dir through every caller:
+// fragments-engine only ever runs against one config file per process, so a
+// package-level anchor is safe and avoids cascading a new parameter through
+// the delivery/probe call chains. Empty until the first successful Load().
+func InstallDir() string {
+	installDirMu.RLock()
+	defer installDirMu.RUnlock()
+	return installDir
+}
+
+// SetInstallDir sets the ambient anchor returned by InstallDir. Called by
+// Load() as a side effect; exported so tests can set/restore it around
+// cases that exercise the ambient-anchor path directly.
+func SetInstallDir(dir string) {
+	installDirMu.Lock()
+	defer installDirMu.Unlock()
+	installDir = dir
+}
 
 func Load(path string) (Config, error) {
 	raw, err := os.ReadFile(path)
@@ -229,7 +252,7 @@ func resolveRelativePaths(configPath string, cfg *Config) {
 	if err != nil {
 		return
 	}
-	InstallDir = dir
+	SetInstallDir(dir)
 	cfg.Database.Path = AnchorPath(dir, cfg.Database.Path)
 	cfg.Recall.Vanta.Root = AnchorPath(dir, cfg.Recall.Vanta.Root)
 	cfg.Reviewer.DownloadRoot = AnchorPath(dir, cfg.Reviewer.DownloadRoot)
