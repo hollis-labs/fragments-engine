@@ -85,7 +85,7 @@ type PrefetchedContent struct {
 	// the caller captured one client-side. Takes precedence over a
 	// content-derived preview summary when non-empty, matching the exact
 	// precedence rule internal/linkcontent's local backend already uses for
-	// og:description/meta-description (see linkcontent.local.go).
+	// og:description/meta-description (see internal/linkcontent/local.go).
 	Description string
 	// Selection is arbitrary user-highlighted text captured alongside the
 	// main content. It is stored as its own distinct metadata field
@@ -321,7 +321,13 @@ func (e *ManualIntakeEnricher) EnrichIntake(ctx context.Context, content, title,
 func (e *ManualIntakeEnricher) enrichPrefetchedContent(content, title, normalizedType string, tags []string, sourceURL string, prefetched PrefetchedContent) (ManualEnrichment, error) {
 	u, err := normalizeURL(sourceURL)
 	if err != nil {
-		return ManualEnrichment{}, nil
+		// Unlike the generic-URL branch above (which silently degrades when
+		// content merely looks URL-ish but doesn't parse), source_url here
+		// is a caller-asserted, structured field -- a bad value is a caller
+		// error. Fail loudly instead of silently proceeding with a
+		// placeholder sourceType and no URL metadata, which would produce a
+		// misclassified fragment with no indication anything went wrong.
+		return ManualEnrichment{}, fmt.Errorf("enrich prefetched content: invalid source_url %q: %w", sourceURL, err)
 	}
 	metadata := baseURLMetadata(u)
 	entities := []domain.FragmentEntity{

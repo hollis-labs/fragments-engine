@@ -214,3 +214,20 @@ func TestEnrichIntakePrefetched_EmptySourceURLUnaffected(t *testing.T) {
 		t.Fatalf("GitHub-repo branch should not call linkProvider.Fetch either, got %d call(s)", fake.fetchCalls)
 	}
 }
+
+// TestEnrichIntakePrefetched_InvalidSourceURLFailsLoudly covers a bug caught
+// in code review: source_url is a caller-asserted, structured field (unlike
+// the generic-URL branch's best-effort content sniffing), so a malformed
+// value must produce a clear error rather than silently degrading to a
+// placeholder sourceType and no URL metadata.
+func TestEnrichIntakePrefetched_InvalidSourceURLFailsLoudly(t *testing.T) {
+	enricher := NewManualIntakeEnricher(nil, t.TempDir())
+	enricher.SetLinkProvider(&countingLinkProvider{})
+
+	_, err := enricher.EnrichIntake(context.Background(), prefetchedArticleContent, "", "", nil, "", PrefetchedContent{
+		SourceURL: "ftp://example.com/unsupported-scheme",
+	})
+	if err == nil {
+		t.Fatal("expected an error for a source_url with an unsupported scheme, got nil")
+	}
+}

@@ -154,3 +154,21 @@ func TestInboxReviewer_NeverTouchesPrefetchedSourceURLFragments(t *testing.T) {
 		t.Fatalf("expected enrichment_status to never appear, even after a review pass: %s", after.Fragment.MetadataJSON)
 	}
 }
+
+// TestFragmentServiceIntake_PrefetchedSourceURL_InvalidURLRejected covers the
+// same bug fix as TestEnrichIntakePrefetched_InvalidSourceURLFailsLoudly, one
+// layer up: a malformed source_url must fail the whole Intake() call (no
+// fragment written at all), not silently produce a misclassified one.
+func TestFragmentServiceIntake_PrefetchedSourceURL_InvalidURLRejected(t *testing.T) {
+	svcs := setupManualTestServices(t)
+	defer svcs.close()
+	svcs.fragments.enricher.SetLinkProvider(&countingLinkProvider{})
+
+	_, err := svcs.fragments.Intake(context.Background(), IntakeRequest{
+		Content:   strings.Repeat("Content that would otherwise intake fine. ", 5),
+		SourceURL: "ftp://example.com/unsupported-scheme",
+	})
+	if err == nil {
+		t.Fatal("expected Intake to reject an invalid source_url, got nil error")
+	}
+}
