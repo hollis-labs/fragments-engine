@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"gopkg.in/yaml.v3"
 )
@@ -182,6 +183,41 @@ type NilVaultRules struct {
 	ExcludeVaults []string `json:"exclude_vaults" yaml:"exclude_vaults"`
 }
 
+// installDir backs InstallDir/SetInstallDir. Load() is called from
+// concurrent per-request handlers (internal/api/server.go, internal/mcp
+// tool handlers all call config.Load() inline), so the ambient anchor below
+// must be safe for concurrent read/write rather than a bare package var.
+var (
+	installDirMu sync.RWMutex
+	installDir   string
+)
+
+// InstallDir returns the absolute directory containing the most recently
+// loaded config file, set as a side effect of Load(). It is the ambient
+// anchor for relative filesystem paths that don't come from the config file
+// itself — notably per-destination "root"/"working_dir" values, which are
+// DB-stored (added via CLI/API/MCP) rather than declared in fragments.yaml,
+// so there is no config-file directory to anchor them to at the point
+// they're decoded. Same rationale as ExpandHome leaning on the ambient
+// os.UserHomeDir() instead of threading a home dir through every caller:
+// fragments-engine only ever runs against one config file per process, so a
+// package-level anchor is safe and avoids cascading a new parameter through
+// the delivery/probe call chains. Empty until the first successful Load().
+func InstallDir() string {
+	installDirMu.RLock()
+	defer installDirMu.RUnlock()
+	return installDir
+}
+
+// SetInstallDir sets the ambient anchor returned by InstallDir. Called by
+// Load() as a side effect; exported so tests can set/restore it around
+// cases that exercise the ambient-anchor path directly.
+func SetInstallDir(dir string) {
+	installDirMu.Lock()
+	defer installDirMu.Unlock()
+	installDir = dir
+}
+
 func Load(path string) (Config, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
@@ -195,7 +231,54 @@ func Load(path string) (Config, error) {
 	if err := cfg.Validate(); err != nil {
 		return Config{}, err
 	}
+	resolveRelativePaths(path, &cfg)
 	return cfg, nil
+}
+
+// resolveRelativePaths anchors filesystem paths in cfg that are relative
+// (e.g. "./data/x.db") to the config file's own directory instead of
+// leaving them to resolve against the process's working directory. A
+// process spawned by an external supervisor (e.g. an MCP client pointed at
+// this config via an absolute --config path) rarely shares a working
+// directory with the config file itself; without this, a relative path
+// silently resolves to the wrong location — for database.path, store.Open's
+// MkdirAll+migrate creates a fresh empty database there instead of erroring.
+// Every relative filesystem path sourced from this config file is anchored
+// here so no MCP tool call is CWD-dependent. It also sets the InstallDir
+// package var so the same anchor is available to destination code that
+// resolves DB-stored (not config-file) paths.
+func resolveRelativePaths(configPath string, cfg *Config) {
+	dir, err := filepath.Abs(filepath.Dir(configPath))
+	if err != nil {
+		return
+	}
+	SetInstallDir(dir)
+	cfg.Database.Path = AnchorPath(dir, cfg.Database.Path)
+	cfg.Recall.Vanta.Root = AnchorPath(dir, cfg.Recall.Vanta.Root)
+	cfg.Reviewer.DownloadRoot = AnchorPath(dir, cfg.Reviewer.DownloadRoot)
+	cfg.Reviewer.CorpusRoot = AnchorPath(dir, cfg.Reviewer.CorpusRoot)
+	for i := range cfg.Ingests {
+		cfg.Ingests[i].Source.Root = AnchorPath(dir, cfg.Ingests[i].Source.Root)
+		// archive_root (chatgpt_export rules) lives in the untyped Rules
+		// map rather than a static struct field; resolve it by key when
+		// present so it gets the same treatment as every other root.
+		if raw, ok := cfg.Ingests[i].Rules["archive_root"]; ok {
+			if s, ok := raw.(string); ok {
+				cfg.Ingests[i].Rules["archive_root"] = AnchorPath(dir, s)
+			}
+		}
+	}
+}
+
+// AnchorPath joins a relative path onto dir. Empty, ~-prefixed (handled by
+// ExpandHome), and already-absolute paths pass through unchanged. If dir is
+// empty (no config has been Load()ed yet), a relative p is returned as-is,
+// preserving the old CWD-relative behavior as a safe fallback.
+func AnchorPath(dir, p string) string {
+	if p == "" || p[0] == '~' || filepath.IsAbs(p) || dir == "" {
+		return p
+	}
+	return filepath.Join(dir, p)
 }
 
 func Save(path string, cfg Config) error {

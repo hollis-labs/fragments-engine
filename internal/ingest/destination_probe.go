@@ -45,7 +45,7 @@ func probeFileDestination(destination domain.Destination) (ProbeResult, error) {
 	if err != nil {
 		return ProbeResult{}, err
 	}
-	root := config.ExpandHome(cfg.Root)
+	root := config.AnchorPath(config.InstallDir(), config.ExpandHome(cfg.Root))
 	if strings.TrimSpace(root) == "" {
 		return ProbeResult{}, fmt.Errorf("file destination %q missing root", destination.Name)
 	}
@@ -176,6 +176,7 @@ func probeCLIDestination(destination domain.Destination) (ProbeResult, error) {
 		command = path
 	}
 	if wd := strings.TrimSpace(expandConfigValue(cfg.WorkingDir)); wd != "" {
+		wd = config.AnchorPath(config.InstallDir(), config.ExpandHome(wd))
 		info, err := os.Stat(wd)
 		if err != nil {
 			return ProbeResult{Reachable: false, Message: "working_dir_missing:" + wd}, nil

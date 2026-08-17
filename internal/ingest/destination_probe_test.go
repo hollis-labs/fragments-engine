@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/hollis-labs/fragments-engine/internal/config"
 	"github.com/hollis-labs/fragments-engine/internal/domain"
 )
 
@@ -151,6 +152,83 @@ func TestProbeDestination_CLI(t *testing.T) {
 	}
 	if !result.Reachable {
 		t.Fatalf("expected cli destination to be reachable: %+v", result)
+	}
+	if !strings.Contains(result.Message, "cli_ready:") {
+		t.Fatalf("unexpected probe message: %s", result.Message)
+	}
+}
+
+func TestProbeDestination_File_AnchorsRelativeRootToInstallDir(t *testing.T) {
+	installDir := t.TempDir()
+	prev := config.InstallDir()
+	config.SetInstallDir(installDir)
+	t.Cleanup(func() { config.SetInstallDir(prev) })
+
+	// Run from a CWD that is deliberately not installDir; a relative root
+	// must still resolve under installDir, not this working directory.
+	cwd := t.TempDir()
+	prevWd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	if err := os.Chdir(cwd); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(prevWd) })
+
+	result, err := ProbeDestination(context.Background(), domain.Destination{
+		Name:       "local-corpus",
+		Kind:       "file",
+		ConfigJSON: `{"root":"./corpus"}`,
+	})
+	if err != nil {
+		t.Fatalf("probe file destination: %v", err)
+	}
+	if !result.Reachable {
+		t.Fatalf("expected file destination to be reachable: %+v", result)
+	}
+	want := "filesystem_ready:" + filepath.Join(installDir, "corpus")
+	if result.Message != want {
+		t.Fatalf("relative root not anchored to install dir: got %s, want %s", result.Message, want)
+	}
+}
+
+func TestProbeDestination_CLI_AnchorsRelativeWorkingDirToInstallDir(t *testing.T) {
+	installDir := t.TempDir()
+	prev := config.InstallDir()
+	config.SetInstallDir(installDir)
+	t.Cleanup(func() { config.SetInstallDir(prev) })
+
+	if err := os.MkdirAll(filepath.Join(installDir, "work"), 0o750); err != nil {
+		t.Fatalf("mkdir work dir: %v", err)
+	}
+
+	// Run from a CWD that is deliberately not installDir; a relative
+	// working_dir must still resolve under installDir, not this CWD, so the
+	// probe's os.Stat(working_dir) finds the real directory.
+	cwd := t.TempDir()
+	prevWd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	if err := os.Chdir(cwd); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(prevWd) })
+
+	result, err := ProbeDestination(context.Background(), domain.Destination{
+		Name: "cli-export",
+		Kind: "cli",
+		ConfigJSON: fmt.Sprintf(`{"command":%q,"args":["-test.run=TestHelperProcessCLIDestination","--",%q],"env":["GO_WANT_HELPER_PROCESS=1"],"working_dir":"./work"}`,
+			os.Args[0],
+			filepath.Join(t.TempDir(), "capture.json"),
+		),
+	})
+	if err != nil {
+		t.Fatalf("probe cli destination: %v", err)
+	}
+	if !result.Reachable {
+		t.Fatalf("relative working_dir not anchored to install dir: %+v", result)
 	}
 	if !strings.Contains(result.Message, "cli_ready:") {
 		t.Fatalf("unexpected probe message: %s", result.Message)

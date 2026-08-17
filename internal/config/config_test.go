@@ -73,6 +73,86 @@ func TestLoadSaveRoundTrip_LinkContentAndAttachmentAnalysis(t *testing.T) {
 	}
 }
 
+func TestLoad_AnchorsRelativeDatabasePathToConfigDir(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "fragments.yaml")
+	cfg := config.Config{
+		Database: config.DatabaseConfig{Path: "./data/fragments-engine.db"},
+		Ingests: []config.IngestConfig{
+			{Name: "n", Kind: "k", Source: config.IngestSource{Root: "/tmp"}},
+		},
+	}
+	if err := config.Save(cfgPath, cfg); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+
+	reloaded, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+
+	want := filepath.Join(dir, "data", "fragments-engine.db")
+	if reloaded.Database.Path != want {
+		t.Fatalf("database.path not anchored to config dir: got %q, want %q", reloaded.Database.Path, want)
+	}
+}
+
+func TestLoad_AnchorsRelativePathsAcrossConfig(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "fragments.yaml")
+	cfg := config.Config{
+		Database: config.DatabaseConfig{Path: "./data/fragments-engine.db"},
+		Recall: config.RecallConfig{
+			Backend: "sqlite",
+			Vanta:   config.RecallVantaConfig{Root: "./data/vanta"},
+		},
+		Reviewer: config.ReviewerConfig{
+			DownloadRoot: "./data/inbox-reviewer",
+			CorpusRoot:   "~/Documents/ffs/media/pins", // ~-relative: must pass through untouched
+		},
+		Ingests: []config.IngestConfig{
+			{
+				Name:   "relative-source",
+				Kind:   "filesystem_docs",
+				Source: config.IngestSource{Root: "./corpus"},
+			},
+			{
+				Name:   "chatgpt-export",
+				Kind:   "chatgpt_export",
+				Source: config.IngestSource{Root: "/absolute/already"},
+				Rules:  map[string]any{"archive_root": "./archive/chatgpt"},
+			},
+		},
+	}
+	if err := config.Save(cfgPath, cfg); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+
+	reloaded, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+
+	if want := filepath.Join(dir, "data", "vanta"); reloaded.Recall.Vanta.Root != want {
+		t.Fatalf("recall.vanta.root not anchored: got %q, want %q", reloaded.Recall.Vanta.Root, want)
+	}
+	if want := filepath.Join(dir, "data", "inbox-reviewer"); reloaded.Reviewer.DownloadRoot != want {
+		t.Fatalf("reviewer.download_root not anchored: got %q, want %q", reloaded.Reviewer.DownloadRoot, want)
+	}
+	if want := "~/Documents/ffs/media/pins"; reloaded.Reviewer.CorpusRoot != want {
+		t.Fatalf("reviewer.corpus_root (~-relative) should pass through unchanged: got %q, want %q", reloaded.Reviewer.CorpusRoot, want)
+	}
+	if want := filepath.Join(dir, "corpus"); reloaded.Ingests[0].Source.Root != want {
+		t.Fatalf("ingest source.root not anchored: got %q, want %q", reloaded.Ingests[0].Source.Root, want)
+	}
+	if want := "/absolute/already"; reloaded.Ingests[1].Source.Root != want {
+		t.Fatalf("absolute ingest source.root should pass through unchanged: got %q, want %q", reloaded.Ingests[1].Source.Root, want)
+	}
+	if want := filepath.Join(dir, "archive", "chatgpt"); reloaded.Ingests[1].Rules["archive_root"] != want {
+		t.Fatalf("ingest rules.archive_root not anchored: got %v, want %q", reloaded.Ingests[1].Rules["archive_root"], want)
+	}
+}
+
 func TestValidate_LinkContentBackend(t *testing.T) {
 	base := func() config.Config {
 		return config.Config{
