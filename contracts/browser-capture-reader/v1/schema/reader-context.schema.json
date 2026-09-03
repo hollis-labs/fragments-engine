@@ -1,0 +1,130 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.hollis-labs.dev/fragments-engine/browser-capture-reader/v1/reader-context.schema.json",
+  "title": "ReaderContext",
+  "description": "Revision-pinned references supplied to an external agent/session system. This contract contains content provenance, not conversation messages.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "fragment_id",
+    "fragment_revision_id",
+    "readable_content",
+    "attachments",
+    "derived_observation_ids",
+    "provenance",
+    "sensitivity_policy"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "fe.reader.context.v1"
+    },
+    "fragment_id": {
+      "$ref": "common.schema.json#/$defs/Identifier"
+    },
+    "fragment_revision_id": {
+      "$ref": "common.schema.json#/$defs/Identifier"
+    },
+    "readable_content": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["kind", "reference_id", "content_href"],
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": ["normalized_document", "sanitized_article", "transcript", "OCR", "derived_observation"]
+          },
+          "reference_id": {
+            "$ref": "common.schema.json#/$defs/Identifier"
+          },
+          "content_href": {
+            "type": "string",
+            "pattern": "^/v1/"
+          },
+          "digest": {
+            "$ref": "common.schema.json#/$defs/Digest"
+          }
+        }
+      }
+    },
+    "attachments": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["attachment_id", "media_asset_id", "asset_variant_ids", "digests"],
+        "properties": {
+          "attachment_id": {
+            "$ref": "common.schema.json#/$defs/Identifier"
+          },
+          "media_asset_id": {
+            "$ref": "common.schema.json#/$defs/Identifier"
+          },
+          "asset_variant_ids": {
+            "type": "array",
+            "items": {"$ref": "common.schema.json#/$defs/Identifier"},
+            "uniqueItems": true
+          },
+          "digests": {
+            "type": "array",
+            "items": {"$ref": "common.schema.json#/$defs/Digest"},
+            "uniqueItems": true
+          }
+        }
+      }
+    },
+    "derived_observation_ids": {
+      "type": "array",
+      "items": {"$ref": "common.schema.json#/$defs/Identifier"},
+      "uniqueItems": true
+    },
+    "selection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["text"],
+      "properties": {
+        "text": {
+          "type": "string",
+          "minLength": 1
+        },
+        "selector": {
+          "$ref": "common.schema.json#/$defs/TextQuoteSelector"
+        }
+      }
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source_observation_ids", "capture_ids"],
+      "properties": {
+        "source_observation_ids": {
+          "type": "array",
+          "items": {"$ref": "common.schema.json#/$defs/Identifier"},
+          "uniqueItems": true
+        },
+        "capture_ids": {
+          "type": "array",
+          "items": {"$ref": "common.schema.json#/$defs/Identifier"},
+          "uniqueItems": true
+        }
+      }
+    },
+    "sensitivity_policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["policy_id", "labels"],
+      "properties": {
+        "policy_id": {
+          "$ref": "common.schema.json#/$defs/Identifier"
+        },
+        "labels": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1},
+          "uniqueItems": true
+        }
+      }
+    }
+  }
+}

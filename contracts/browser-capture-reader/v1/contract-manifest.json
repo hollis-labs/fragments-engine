@@ -1,0 +1,22 @@
+{
+  "contract_set": "fe.browser-capture-reader.v1",
+  "json_schema_dialect": "https://json-schema.org/draft/2020-12/schema",
+  "openapi": "openapi.json",
+  "schemas": {
+    "capture": "schema/capture-envelope.schema.json",
+    "capture_result": "schema/capture-response.schema.json",
+    "capture_completion": "schema/capture-completion.schema.json",
+    "capture_status": "schema/capture-status.schema.json",
+    "reader_item": "schema/reader-item.schema.json",
+    "reader_list": "schema/reader-list.schema.json",
+    "reader_command": "schema/reader-command.schema.json",
+    "reader_context": "schema/reader-context.schema.json",
+    "conversation_ref": "schema/conversation-ref.schema.json",
+    "playback": "schema/playback.schema.json",
+    "reading_state": "schema/reading-state.schema.json",
+    "api_problem": "schema/error.schema.json",
+    "capabilities": "schema/capabilities.schema.json",
+    "media_definitions": "schema/media.schema.json",
+    "common_definitions": "schema/common.schema.json"
+  }
+}

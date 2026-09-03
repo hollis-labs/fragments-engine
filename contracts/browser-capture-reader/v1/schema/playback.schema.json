@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.hollis-labs.dev/fragments-engine/browser-capture-reader/v1/playback.schema.json",
+  "title": "PlaybackSpec",
+  "description": "Closed, server-validated playback instructions. Provider HTML is never accepted.",
+  "oneOf": [
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "provider", "provider_item_id"],
+      "properties": {
+        "kind": {
+          "const": "provider_embed"
+        },
+        "provider": {
+          "type": "string",
+          "enum": ["youtube"]
+        },
+        "provider_item_id": {
+          "$ref": "common.schema.json#/$defs/Identifier"
+        },
+        "start_seconds": {
+          "type": "number",
+          "minimum": 0
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "asset_variant_id", "mime_type"],
+      "properties": {
+        "kind": {
+          "const": "blob_stream"
+        },
+        "asset_variant_id": {
+          "$ref": "common.schema.json#/$defs/Identifier"
+        },
+        "mime_type": {
+          "$ref": "common.schema.json#/$defs/MIMEType"
+        },
+        "start_seconds": {
+          "type": "number",
+          "minimum": 0
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "url", "mime_type", "policy"],
+      "properties": {
+        "kind": {
+          "const": "external_stream"
+        },
+        "url": {
+          "$ref": "common.schema.json#/$defs/URL"
+        },
+        "mime_type": {
+          "$ref": "common.schema.json#/$defs/MIMEType"
+        },
+        "policy": {
+          "type": "string",
+          "enum": ["allowlisted_provider", "signed_source"]
+        },
+        "start_seconds": {
+          "type": "number",
+          "minimum": 0
+        }
+      }
+    }
+  ]
+}

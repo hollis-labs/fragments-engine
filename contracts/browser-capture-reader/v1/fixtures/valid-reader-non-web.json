@@ -1,0 +1,42 @@
+{
+  "schema_version": "fe.reader.item.v1",
+  "fragment_id": "fragment-nil-42",
+  "fragment_revision_id": "revision-nil-42-1",
+  "revision": 1,
+  "source": {
+    "source_registration_id": "source-nil-vault",
+    "provider": "nil_vault",
+    "source_item_key": "vault-entry-42",
+    "source_locator": "nil://work-notes/entry-42",
+    "segment_key": "root"
+  },
+  "renderer": "text",
+  "display": {
+    "title": {"value": "Local work note", "source": "source"},
+    "summary": {"value": "A non-web fragment remains readable without synthetic URLs.", "source": "deterministic"}
+  },
+  "article": {
+    "preview_markdown": "A non-web fragment remains readable without synthetic URLs.",
+    "full_content_available": true,
+    "full_content_href": "/v1/reader/items/fragment-nil-42/content?revision_id=revision-nil-42-1"
+  },
+  "media": [],
+  "tags": {"combined": ["local"], "attributed": [{"value": "local", "source": "user"}]},
+  "annotations": [],
+  "capture_count": 1,
+  "reading_state": {
+    "principal_id": "local-user",
+    "fragment_id": "fragment-nil-42",
+    "state": "unread",
+    "position": {"kind": "none"},
+    "revision": 0
+  },
+  "operations": {
+    "triage": {"case_ids": [], "unresolved_count": 0},
+    "routing": {"state": "none", "references": []},
+    "materialization": {"state": "none", "references": []},
+    "enrichment": [],
+    "acquisition": {"pending": 0, "available": 0, "reference_only": 0, "failed": 0}
+  },
+  "actions": []
+}

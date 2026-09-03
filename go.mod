@@ -3,6 +3,7 @@ module github.com/hollis-labs/fragments-engine
 go 1.26.1
 
 require (
+	github.com/google/jsonschema-go v0.4.2
 	github.com/hollis-labs/go-directives v0.1.0
 	github.com/hollis-labs/go-embed-contracts v0.1.1
 	github.com/hollis-labs/go-queue v0.1.0
@@ -17,7 +18,6 @@ require (
 
 require (
 	github.com/dustin/go-humanize v1.0.1 // indirect
-	github.com/google/jsonschema-go v0.4.2 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/ncruces/go-strftime v1.0.0 // indirect

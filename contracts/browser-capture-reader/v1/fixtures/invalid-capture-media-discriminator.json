@@ -1,0 +1,40 @@
+{
+  "schema_version": "fe.capture.v1",
+  "capture_id": "capture-invalid-media",
+  "captured_at": "2026-09-03T18:42:00Z",
+  "principal_id": "local-user",
+  "client": {"kind": "fe-clipper", "version": "1.0.0"},
+  "source": {
+    "submitted_url": "https://example.com/video",
+    "canonical_url": "https://example.com/video",
+    "provider": "web",
+    "source_item_key": "https://example.com/video",
+    "segment_key": "root"
+  },
+  "document": {},
+  "tags": [],
+  "annotations": [],
+  "media": [
+    {
+      "client_media_id": "media-1",
+      "kind": "video",
+      "role": "primary",
+      "position": 0,
+      "variants": [
+        {
+          "client_variant_id": "poster-1",
+          "kind": "poster",
+          "mime_type": "video/mp4",
+          "transfer_preference": "browser_preferred",
+          "requested_custody": "mirror"
+        }
+      ]
+    }
+  ],
+  "extraction": {
+    "adapter": "generic",
+    "adapter_version": "1.0.0",
+    "observed_capabilities": [],
+    "warnings": []
+  }
+}

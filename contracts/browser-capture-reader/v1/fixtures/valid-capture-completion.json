@@ -1,0 +1,19 @@
+{
+  "schema_version": "fe.capture.completion.v1",
+  "idempotency_key": "completion-capture-1",
+  "assets": [
+    {
+      "client_variant_id": "poster:maxresdefault",
+      "outcome": "uploaded",
+      "digest": {"algorithm": "sha256", "value": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+      "byte_size": 42123
+    },
+    {
+      "client_variant_id": "video:reference",
+      "outcome": "not_available",
+      "reason": "reference-only video was not transferred",
+      "retryable": false
+    }
+  ],
+  "warnings": []
+}

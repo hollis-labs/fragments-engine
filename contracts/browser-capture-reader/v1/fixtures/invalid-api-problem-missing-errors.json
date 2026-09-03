@@ -1,0 +1,6 @@
+{
+  "type": "https://fragments-engine.dev/problems/validation-failed",
+  "title": "Capture manifest is invalid",
+  "status": 400,
+  "code": "validation_failed"
+}

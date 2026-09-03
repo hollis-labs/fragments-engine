@@ -1,0 +1,168 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.hollis-labs.dev/fragments-engine/browser-capture-reader/v1/capabilities.schema.json",
+  "title": "CapabilityDiscovery",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "server_version",
+    "contracts",
+    "operations",
+    "capture",
+    "reader",
+    "providers",
+    "optional_tools"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "fe.capabilities.v1"
+    },
+    "server_version": {
+      "type": "string",
+      "minLength": 1
+    },
+    "contracts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "accepted_versions", "preferred_version", "schema_id"],
+        "properties": {
+          "name": {
+            "type": "string",
+            "enum": ["capture", "capture_result", "capture_completion", "capture_status", "reader_item", "reader_list", "reader_command", "reader_context", "conversation_ref", "api_problem", "capabilities"]
+          },
+          "accepted_versions": {
+            "type": "array",
+            "items": {"type": "string", "minLength": 1},
+            "minItems": 1,
+            "uniqueItems": true
+          },
+          "preferred_version": {
+            "type": "string",
+            "minLength": 1
+          },
+          "schema_id": {
+            "type": "string",
+            "format": "uri",
+            "pattern": "^https://schemas\\.hollis-labs\\.dev/fragments-engine/browser-capture-reader/v1/"
+          }
+        }
+      }
+    },
+    "operations": {
+      "description": "Runtime readiness. Contract support does not imply that a later-wave operation is enabled.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["capture_manifest", "asset_upload", "capture_completion", "reader_query", "reader_commands", "reader_context", "conversation_reference"],
+      "properties": {
+        "capture_manifest": {"type": "boolean"},
+        "asset_upload": {"type": "boolean"},
+        "capture_completion": {"type": "boolean"},
+        "reader_query": {"type": "boolean"},
+        "reader_commands": {"type": "boolean"},
+        "reader_context": {"type": "boolean"},
+        "conversation_reference": {"type": "boolean"}
+      }
+    },
+    "capture": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["media_kinds", "variant_kinds", "custody_modes", "transfer_preferences"],
+      "properties": {
+        "media_kinds": {
+          "type": "array",
+          "items": {"$ref": "media.schema.json#/$defs/MediaKind"},
+          "uniqueItems": true
+        },
+        "variant_kinds": {
+          "type": "array",
+          "items": {"$ref": "media.schema.json#/$defs/VariantKind"},
+          "uniqueItems": true
+        },
+        "custody_modes": {
+          "type": "array",
+          "items": {"$ref": "media.schema.json#/$defs/Custody"},
+          "uniqueItems": true
+        },
+        "transfer_preferences": {
+          "type": "array",
+          "items": {"type": "string", "enum": ["browser_preferred", "server_preferred", "reference_only"]},
+          "uniqueItems": true
+        },
+        "max_manifest_bytes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "max_asset_bytes": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "reader": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_versions", "scopes", "renderers", "playback_kinds", "commands"],
+      "properties": {
+        "schema_versions": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1},
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "scopes": {
+          "type": "array",
+          "items": {"type": "string", "enum": ["inbox", "library", "all"]},
+          "uniqueItems": true
+        },
+        "renderers": {
+          "type": "array",
+          "items": {"type": "string", "enum": ["article", "image", "gallery", "video", "audio", "document", "text", "unknown"]},
+          "uniqueItems": true
+        },
+        "playback_kinds": {
+          "type": "array",
+          "items": {"type": "string", "enum": ["provider_embed", "blob_stream", "external_stream"]},
+          "uniqueItems": true
+        },
+        "commands": {
+          "type": "array",
+          "items": {"$ref": "reader-item.schema.json#/$defs/CommandName"},
+          "uniqueItems": true
+        }
+      }
+    },
+    "providers": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["provider", "capabilities", "available"],
+        "properties": {
+          "provider": {"type": "string", "pattern": "^[a-z][a-z0-9_-]*$"},
+          "capabilities": {
+            "type": "array",
+            "items": {"$ref": "common.schema.json#/$defs/CapabilityName"},
+            "uniqueItems": true
+          },
+          "available": {"type": "boolean"}
+        }
+      }
+    },
+    "optional_tools": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "available"],
+        "properties": {
+          "name": {"type": "string", "minLength": 1},
+          "available": {"type": "boolean"},
+          "version": {"type": "string", "minLength": 1}
+        }
+      }
+    }
+  }
+}

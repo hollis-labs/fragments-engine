@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	capturecontract "github.com/hollis-labs/fragments-engine/contracts/browser-capture-reader/v1"
 	"github.com/hollis-labs/fragments-engine/internal/app"
 	"github.com/hollis-labs/fragments-engine/internal/config"
 	"github.com/hollis-labs/fragments-engine/internal/domain"
@@ -31,6 +32,7 @@ func NewServer(cfgPath string) *Server {
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", s.handleHealth)
+	mux.HandleFunc("/v1/capabilities", s.handleCapabilities)
 	mux.Handle(sysopBasePath+"/", newSysopSPAHandler())
 	mux.HandleFunc("/v1/ingests", s.handleListIngests)
 	mux.HandleFunc("/v1/ingests/get", s.handleGetIngest)
@@ -94,6 +96,15 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/config", localhostOnly(s.handleConfigGet))
 	mux.HandleFunc("/v1/config/update", localhostOnly(s.handleConfigUpdate))
 	return mux
+}
+
+func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-cache")
+	writeJSON(w, http.StatusOK, capturecontract.DefaultCapabilities("development"))
 }
 
 type routeApplyEntityRequest struct {

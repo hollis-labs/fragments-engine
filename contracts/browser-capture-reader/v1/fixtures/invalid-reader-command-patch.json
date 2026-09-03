@@ -1,0 +1,8 @@
+{
+  "schema_version": "fe.reader.command.v1",
+  "command": "patch_metadata",
+  "command_id": "command-invalid",
+  "idempotency_key": "command-invalid",
+  "expected_revision": 1,
+  "metadata": {"status": "processed"}
+}

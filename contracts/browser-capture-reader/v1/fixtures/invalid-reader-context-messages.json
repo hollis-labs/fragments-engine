@@ -1,0 +1,19 @@
+{
+  "schema_version": "fe.reader.context.v1",
+  "fragment_id": "fragment-1",
+  "fragment_revision_id": "revision-3",
+  "readable_content": [],
+  "attachments": [],
+  "derived_observation_ids": [],
+  "provenance": {
+    "source_observation_ids": [],
+    "capture_ids": []
+  },
+  "sensitivity_policy": {
+    "policy_id": "local-default",
+    "labels": []
+  },
+  "messages": [
+    {"role": "user", "content": "FE must not own this"}
+  ]
+}

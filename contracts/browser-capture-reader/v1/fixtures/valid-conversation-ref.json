@@ -1,0 +1,10 @@
+{
+  "schema_version": "fe.reader.conversation-ref.v1",
+  "fragment_id": "fragment-1",
+  "owning_application": "agent-sidecar",
+  "provider": "openai",
+  "conversation_id": "conversation-99",
+  "pinned_starting_revision_id": "revision-3",
+  "created_by_actor": "local-user",
+  "created_at": "2026-09-03T20:15:00Z"
+}

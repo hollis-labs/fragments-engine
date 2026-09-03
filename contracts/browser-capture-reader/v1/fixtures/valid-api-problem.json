@@ -1,0 +1,12 @@
+{
+  "type": "https://fragments-engine.dev/problems/validation-failed",
+  "title": "Capture manifest is invalid",
+  "status": 400,
+  "detail": "One or more fields failed validation.",
+  "code": "validation_failed",
+  "errors": [
+    {"pointer": "/media/0/variants/0/kind", "code": "enum", "message": "unsupported variant kind"}
+  ],
+  "retryable": false,
+  "request_id": "request-1"
+}

@@ -1,0 +1,71 @@
+{
+  "schema_version": "fe.capture.v1",
+  "capture_id": "01KCAPTURE0000000000000000",
+  "captured_at": "2026-09-03T18:42:00Z",
+  "principal_id": "local-user",
+  "client": {"kind": "fe-clipper", "version": "1.0.0"},
+  "source": {
+    "submitted_url": "https://www.youtube.com/watch?v=3RmtNXqnreI",
+    "canonical_url": "https://www.youtube.com/watch?v=3RmtNXqnreI",
+    "provider": "youtube",
+    "provider_item_id": "3RmtNXqnreI",
+    "source_item_key": "youtube:3RmtNXqnreI",
+    "segment_key": "root",
+    "canonicalizer": {"adapter": "youtube", "version": "1.0.0"}
+  },
+  "document": {
+    "title": "Contract fixture video",
+    "description": "A captured browser observation.",
+    "language": "en",
+    "content": {"format": "markdown", "body": "Useful page text."},
+    "extensions": {"provider.youtube": {"channel_id": "UC123"}}
+  },
+  "tags": ["contracts", "video"],
+  "annotations": [
+    {
+      "annotation_id": "01KANNOTATION00000000000000",
+      "kind": "highlight",
+      "text": "Useful page text.",
+      "selector": {"exact": "Useful page text."}
+    }
+  ],
+  "media": [
+    {
+      "client_media_id": "youtube:3RmtNXqnreI",
+      "provider_media_id": "3RmtNXqnreI",
+      "kind": "video",
+      "role": "primary",
+      "position": 0,
+      "duration_seconds": 180,
+      "default_custody": "reference",
+      "variants": [
+        {
+          "client_variant_id": "video:reference",
+          "kind": "original",
+          "source_url": "https://www.youtube.com/watch?v=3RmtNXqnreI",
+          "mime_type": "video/mp4",
+          "transfer_preference": "reference_only",
+          "requested_custody": "reference"
+        },
+        {
+          "client_variant_id": "poster:maxresdefault",
+          "kind": "poster",
+          "source_url": "https://i.ytimg.com/vi/3RmtNXqnreI/maxresdefault.jpg",
+          "mime_type": "image/jpeg",
+          "width": 1280,
+          "height": 720,
+          "transfer_preference": "browser_preferred",
+          "requested_custody": "mirror"
+        }
+      ],
+      "extensions": {"provider.youtube": {"chapters_observed": true}}
+    }
+  ],
+  "extraction": {
+    "adapter": "youtube",
+    "adapter_version": "1.0.0",
+    "observed_capabilities": ["title", "description", "body", "thumbnail_or_poster"],
+    "warnings": [],
+    "extensions": {"provider.youtube": {"player_response_seen": true}}
+  }
+}

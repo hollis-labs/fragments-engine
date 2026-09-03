@@ -1,0 +1,283 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.hollis-labs.dev/fragments-engine/browser-capture-reader/v1/reader-item.schema.json",
+  "title": "ReaderItem",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "fragment_id",
+    "fragment_revision_id",
+    "revision",
+    "source",
+    "renderer",
+    "display",
+    "article",
+    "media",
+    "tags",
+    "annotations",
+    "capture_count",
+    "reading_state",
+    "operations",
+    "actions"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "fe.reader.item.v1"
+    },
+    "fragment_id": {
+      "$ref": "common.schema.json#/$defs/Identifier"
+    },
+    "fragment_revision_id": {
+      "$ref": "common.schema.json#/$defs/Identifier"
+    },
+    "revision": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "source": {
+      "$ref": "common.schema.json#/$defs/SourceIdentity"
+    },
+    "renderer": {
+      "type": "string",
+      "enum": ["article", "image", "gallery", "video", "audio", "document", "text", "unknown"]
+    },
+    "display": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["title", "summary"],
+      "properties": {
+        "title": {
+          "$ref": "#/$defs/ResolvedText"
+        },
+        "description": {
+          "$ref": "#/$defs/ResolvedText"
+        },
+        "byline": {
+          "$ref": "#/$defs/ResolvedText"
+        },
+        "published_at": {
+          "$ref": "common.schema.json#/$defs/Timestamp"
+        },
+        "summary": {
+          "$ref": "#/$defs/ResolvedText"
+        }
+      }
+    },
+    "article": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["preview_markdown", "full_content_available"],
+      "properties": {
+        "preview_markdown": {
+          "type": "string",
+          "maxLength": 4000
+        },
+        "full_content_available": {
+          "type": "boolean"
+        },
+        "full_content_href": {
+          "type": "string",
+          "pattern": "^/v1/reader/"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "full_content_available": {"const": true}
+            },
+            "required": ["full_content_available"]
+          },
+          "then": {
+            "required": ["full_content_href"],
+            "properties": {
+              "full_content_href": {}
+            }
+          }
+        }
+      ]
+    },
+    "media": {
+      "type": "array",
+      "items": {
+        "$ref": "media.schema.json#/$defs/ReaderMediaItem"
+      }
+    },
+    "playback": {
+      "$ref": "playback.schema.json"
+    },
+    "tags": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["combined", "attributed"],
+      "properties": {
+        "combined": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1},
+          "uniqueItems": true
+        },
+        "attributed": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["value", "source"],
+            "properties": {
+              "value": {"type": "string", "minLength": 1},
+              "source": {"type": "string", "enum": ["user", "provider", "deterministic", "model"]},
+              "observation_id": {"$ref": "common.schema.json#/$defs/Identifier"}
+            }
+          }
+        }
+      }
+    },
+    "annotations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["annotation_id", "capture_id", "kind", "text", "captured_at"],
+        "properties": {
+          "annotation_id": {"$ref": "common.schema.json#/$defs/Identifier"},
+          "capture_id": {"$ref": "common.schema.json#/$defs/Identifier"},
+          "kind": {"type": "string", "enum": ["highlight", "capture_note"]},
+          "text": {"type": "string", "minLength": 1},
+          "captured_at": {"$ref": "common.schema.json#/$defs/Timestamp"},
+          "selector": {"$ref": "common.schema.json#/$defs/TextQuoteSelector"},
+          "position": {"$ref": "common.schema.json#/$defs/DocumentPosition"}
+        }
+      }
+    },
+    "curated_note": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["body_markdown", "revision", "updated_at"],
+      "properties": {
+        "body_markdown": {"type": "string"},
+        "revision": {"type": "integer", "minimum": 0},
+        "updated_at": {"$ref": "common.schema.json#/$defs/Timestamp"}
+      }
+    },
+    "capture_count": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "reading_state": {
+      "$ref": "reading-state.schema.json"
+    },
+    "operations": {
+      "$ref": "#/$defs/OperationalSummaries"
+    },
+    "actions": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/CommandCapability"
+      }
+    }
+  },
+  "$defs": {
+    "ResolvedText": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["value", "source"],
+      "properties": {
+        "value": {
+          "type": "string"
+        },
+        "source": {
+          "type": "string",
+          "enum": ["source", "user", "deterministic", "provider", "model"]
+        },
+        "observation_id": {
+          "$ref": "common.schema.json#/$defs/Identifier"
+        }
+      }
+    },
+    "CommandName": {
+      "type": "string",
+      "enum": [
+        "add_tag",
+        "remove_tag",
+        "append_capture_note",
+        "update_curated_note",
+        "set_reading_progress",
+        "mark_read",
+        "mark_unread",
+        "request_asset_acquisition",
+        "route",
+        "materialize"
+      ]
+    },
+    "CommandCapability": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["command", "input_schema", "expected_revision_required"],
+      "properties": {
+        "command": {
+          "$ref": "#/$defs/CommandName"
+        },
+        "input_schema": {
+          "type": "string",
+          "pattern": "^https://schemas\\.hollis-labs\\.dev/fragments-engine/browser-capture-reader/v1/reader-command\\.schema\\.json"
+        },
+        "expected_revision_required": {
+          "type": "boolean"
+        }
+      }
+    },
+    "OperationalSummaries": {
+      "description": "Independent state axes. No field implies another and no inbox-disposition semantics are defined here.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["triage", "routing", "materialization", "enrichment", "acquisition"],
+      "properties": {
+        "triage": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["case_ids", "unresolved_count"],
+          "properties": {
+            "case_ids": {"type": "array", "items": {"$ref": "common.schema.json#/$defs/Identifier"}},
+            "unresolved_count": {"type": "integer", "minimum": 0}
+          }
+        },
+        "routing": {
+          "$ref": "#/$defs/EffectSummary"
+        },
+        "materialization": {
+          "$ref": "#/$defs/EffectSummary"
+        },
+        "enrichment": {
+          "type": "array",
+          "items": {"$ref": "common.schema.json#/$defs/CapabilityCoverage"}
+        },
+        "acquisition": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["pending", "available", "reference_only", "failed"],
+          "properties": {
+            "pending": {"type": "integer", "minimum": 0},
+            "available": {"type": "integer", "minimum": 0},
+            "reference_only": {"type": "integer", "minimum": 0},
+            "failed": {"type": "integer", "minimum": 0}
+          }
+        }
+      }
+    },
+    "EffectSummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state", "references"],
+      "properties": {
+        "state": {
+          "type": "string",
+          "enum": ["none", "pending", "succeeded", "partial", "failed"]
+        },
+        "references": {
+          "type": "array",
+          "items": {"$ref": "common.schema.json#/$defs/Identifier"}
+        }
+      }
+    }
+  }
+}

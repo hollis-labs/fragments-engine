@@ -1,0 +1,89 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.hollis-labs.dev/fragments-engine/browser-capture-reader/v1/error.schema.json",
+  "title": "APIProblem",
+  "description": "RFC 9457-compatible problem detail with stable FE codes and optional field violations.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["type", "title", "status", "code"],
+  "properties": {
+    "type": {
+      "type": "string",
+      "format": "uri-reference",
+      "minLength": 1
+    },
+    "title": {
+      "type": "string",
+      "minLength": 1
+    },
+    "status": {
+      "type": "integer",
+      "minimum": 400,
+      "maximum": 599
+    },
+    "detail": {
+      "type": "string"
+    },
+    "instance": {
+      "type": "string",
+      "format": "uri-reference"
+    },
+    "code": {
+      "type": "string",
+      "enum": [
+        "validation_failed",
+        "unsupported_contract_version",
+        "not_found",
+        "conflict",
+        "digest_mismatch",
+        "capability_unavailable",
+        "payload_too_large",
+        "internal_error"
+      ]
+    },
+    "errors": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["pointer", "code", "message"],
+        "properties": {
+          "pointer": {
+            "type": "string",
+            "pattern": "^(/([^/~]|~[01])*)*$"
+          },
+          "code": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_.-]*$"
+          },
+          "message": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "retryable": {
+      "type": "boolean"
+    },
+    "request_id": {
+      "$ref": "common.schema.json#/$defs/Identifier"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "code": {"const": "validation_failed"}
+        },
+        "required": ["code"]
+      },
+      "then": {
+        "required": ["errors"],
+        "properties": {
+          "errors": {}
+        }
+      }
+    }
+  ]
+}

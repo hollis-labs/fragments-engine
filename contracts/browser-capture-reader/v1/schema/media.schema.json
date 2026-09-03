@@ -1,0 +1,439 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.hollis-labs.dev/fragments-engine/browser-capture-reader/v1/media.schema.json",
+  "title": "Fragments Engine Media Contracts",
+  "$defs": {
+    "MediaKind": {
+      "type": "string",
+      "enum": ["image", "video", "audio", "document", "timed_text", "other"]
+    },
+    "VariantKind": {
+      "type": "string",
+      "enum": ["original", "preview", "thumbnail", "poster", "audio", "subtitles", "transcript"]
+    },
+    "AttachmentRole": {
+      "type": "string",
+      "enum": ["primary", "gallery_item", "hero", "inline", "poster", "transcript", "other"]
+    },
+    "Custody": {
+      "type": "string",
+      "enum": ["reference", "cache", "mirror", "adopted"]
+    },
+    "AcquisitionState": {
+      "type": "string",
+      "enum": ["pending", "available", "reference_only", "failed"]
+    },
+    "CaptureAssetVariant": {
+      "description": "A client-observed representation, discriminated by kind.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["client_variant_id", "kind", "transfer_preference", "requested_custody"],
+      "properties": {
+        "client_variant_id": {
+          "$ref": "common.schema.json#/$defs/Identifier"
+        },
+        "kind": {
+          "$ref": "#/$defs/VariantKind"
+        },
+        "source_url": {
+          "$ref": "common.schema.json#/$defs/URL"
+        },
+        "source_expires_at": {
+          "$ref": "common.schema.json#/$defs/Timestamp"
+        },
+        "mime_type": {
+          "$ref": "common.schema.json#/$defs/MIMEType"
+        },
+        "width": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "height": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "duration_seconds": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "byte_size": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "digest": {
+          "$ref": "common.schema.json#/$defs/Digest"
+        },
+        "transfer_preference": {
+          "type": "string",
+          "enum": ["browser_preferred", "server_preferred", "reference_only"]
+        },
+        "requested_custody": {
+          "$ref": "#/$defs/Custody"
+        },
+        "extensions": {
+          "$ref": "common.schema.json#/$defs/ProviderExtensions"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "enum": ["thumbnail", "poster"]
+              }
+            },
+            "required": ["kind"]
+          },
+          "then": {
+            "properties": {
+              "mime_type": {
+                "type": "string",
+                "pattern": "^image/"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "enum": ["subtitles", "transcript"]
+              }
+            },
+            "required": ["kind"]
+          },
+          "then": {
+            "not": {
+              "anyOf": [
+                {"required": ["width"], "properties": {"width": {}}},
+                {"required": ["height"], "properties": {"height": {}}}
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "CaptureMediaItem": {
+      "description": "Logical media plus its revision-scoped attachment placement; kind is independent of provider.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["client_media_id", "kind", "role", "position", "variants"],
+      "properties": {
+        "client_media_id": {
+          "$ref": "common.schema.json#/$defs/Identifier"
+        },
+        "provider_media_id": {
+          "$ref": "common.schema.json#/$defs/Identifier"
+        },
+        "kind": {
+          "$ref": "#/$defs/MediaKind"
+        },
+        "role": {
+          "$ref": "#/$defs/AttachmentRole"
+        },
+        "position": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "source_locator": {
+          "type": "string",
+          "minLength": 1
+        },
+        "width": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "height": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "duration_seconds": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "page_count": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "alt_text": {
+          "type": "string"
+        },
+        "caption": {
+          "type": "string"
+        },
+        "source_context": {
+          "type": "string"
+        },
+        "default_custody": {
+          "$ref": "#/$defs/Custody"
+        },
+        "variants": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/CaptureAssetVariant"
+          },
+          "minItems": 1
+        },
+        "extensions": {
+          "$ref": "common.schema.json#/$defs/ProviderExtensions"
+        }
+      }
+    },
+    "AttachmentRef": {
+      "description": "Ordered placement of a logical asset within an immutable fragment revision, discriminated by role.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["attachment_id", "fragment_revision_id", "media_asset_id", "role", "position"],
+      "properties": {
+        "attachment_id": {
+          "$ref": "common.schema.json#/$defs/Identifier"
+        },
+        "fragment_revision_id": {
+          "$ref": "common.schema.json#/$defs/Identifier"
+        },
+        "media_asset_id": {
+          "$ref": "common.schema.json#/$defs/Identifier"
+        },
+        "role": {
+          "$ref": "#/$defs/AttachmentRole"
+        },
+        "position": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "caption": {
+          "type": "string"
+        },
+        "source_context": {
+          "type": "string"
+        }
+      }
+    },
+    "ReaderAssetVariant": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["asset_variant_id", "kind", "custody", "acquisition_state"],
+      "properties": {
+        "asset_variant_id": {
+          "$ref": "common.schema.json#/$defs/Identifier"
+        },
+        "kind": {
+          "$ref": "#/$defs/VariantKind"
+        },
+        "custody": {
+          "$ref": "#/$defs/Custody"
+        },
+        "acquisition_state": {
+          "$ref": "#/$defs/AcquisitionState"
+        },
+        "mime_type": {
+          "$ref": "common.schema.json#/$defs/MIMEType"
+        },
+        "width": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "height": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "duration_seconds": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "byte_size": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "digest": {
+          "$ref": "common.schema.json#/$defs/Digest"
+        },
+        "content_href": {
+          "type": "string",
+          "pattern": "^/v1/"
+        },
+        "source_url": {
+          "$ref": "common.schema.json#/$defs/URL"
+        },
+        "failure": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["code", "message", "retryable"],
+          "properties": {
+            "code": {
+              "type": "string",
+              "minLength": 1
+            },
+            "message": {
+              "type": "string",
+              "minLength": 1
+            },
+            "retryable": {
+              "type": "boolean"
+            }
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "acquisition_state": {"const": "available"}
+            },
+            "required": ["acquisition_state"]
+          },
+          "then": {
+            "anyOf": [
+              {"required": ["content_href"], "properties": {"content_href": {}}},
+              {"required": ["source_url"], "properties": {"source_url": {}}}
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "acquisition_state": {"const": "failed"}
+            },
+            "required": ["acquisition_state"]
+          },
+          "then": {
+            "required": ["failure"],
+            "properties": {"failure": {}}
+          }
+        }
+      ]
+    },
+    "ReaderMediaItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["attachment", "media_asset_id", "kind", "variants"],
+      "properties": {
+        "attachment": {
+          "$ref": "#/$defs/AttachmentRef"
+        },
+        "media_asset_id": {
+          "$ref": "common.schema.json#/$defs/Identifier"
+        },
+        "provider_media_id": {
+          "$ref": "common.schema.json#/$defs/Identifier"
+        },
+        "kind": {
+          "$ref": "#/$defs/MediaKind"
+        },
+        "alt_text": {
+          "type": "string"
+        },
+        "variants": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ReaderAssetVariant"
+          }
+        }
+      }
+    },
+    "AssetInstruction": {
+      "description": "Server decision for one client variant, discriminated by action.",
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["client_variant_id", "asset_variant_id", "action", "upload_href"],
+          "properties": {
+            "client_variant_id": {"$ref": "common.schema.json#/$defs/Identifier"},
+            "asset_variant_id": {"$ref": "common.schema.json#/$defs/Identifier"},
+            "action": {"const": "request_upload"},
+            "upload_href": {"type": "string", "pattern": "^/v1/captures/"},
+            "expected_digest": {"$ref": "common.schema.json#/$defs/Digest"}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["client_variant_id", "asset_variant_id", "action", "digest"],
+          "properties": {
+            "client_variant_id": {"$ref": "common.schema.json#/$defs/Identifier"},
+            "asset_variant_id": {"$ref": "common.schema.json#/$defs/Identifier"},
+            "action": {"const": "reuse_blob"},
+            "digest": {"$ref": "common.schema.json#/$defs/Digest"}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["client_variant_id", "asset_variant_id", "action"],
+          "properties": {
+            "client_variant_id": {"$ref": "common.schema.json#/$defs/Identifier"},
+            "asset_variant_id": {"$ref": "common.schema.json#/$defs/Identifier"},
+            "action": {"const": "server_acquire"}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["client_variant_id", "asset_variant_id", "action"],
+          "properties": {
+            "client_variant_id": {"$ref": "common.schema.json#/$defs/Identifier"},
+            "asset_variant_id": {"$ref": "common.schema.json#/$defs/Identifier"},
+            "action": {"const": "reference_only"}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["client_variant_id", "action", "reason"],
+          "properties": {
+            "client_variant_id": {"$ref": "common.schema.json#/$defs/Identifier"},
+            "action": {"const": "rejected"},
+            "reason": {"type": "string", "minLength": 1}
+          }
+        }
+      ]
+    },
+    "AssetOutcome": {
+      "description": "Final client contribution for one variant, discriminated by outcome.",
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["client_variant_id", "outcome", "digest", "byte_size"],
+          "properties": {
+            "client_variant_id": {"$ref": "common.schema.json#/$defs/Identifier"},
+            "outcome": {"const": "uploaded"},
+            "digest": {"$ref": "common.schema.json#/$defs/Digest"},
+            "byte_size": {"type": "integer", "minimum": 0}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["client_variant_id", "outcome"],
+          "properties": {
+            "client_variant_id": {"$ref": "common.schema.json#/$defs/Identifier"},
+            "outcome": {"const": "already_available"},
+            "digest": {"$ref": "common.schema.json#/$defs/Digest"}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["client_variant_id", "outcome", "reason"],
+          "properties": {
+            "client_variant_id": {"$ref": "common.schema.json#/$defs/Identifier"},
+            "outcome": {"enum": ["not_available", "failed"]},
+            "reason": {"type": "string", "minLength": 1},
+            "retryable": {"type": "boolean"}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["client_variant_id", "outcome"],
+          "properties": {
+            "client_variant_id": {"$ref": "common.schema.json#/$defs/Identifier"},
+            "outcome": {"const": "deferred"}
+          }
+        }
+      ]
+    }
+  }
+}
