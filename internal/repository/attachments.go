@@ -22,15 +22,66 @@ func NewAttachmentRepository(db *sql.DB) *AttachmentRepository {
 }
 
 func (r *AttachmentRepository) ReplaceFragmentAttachments(ctx context.Context, fragmentID string, attachments []domain.PipelineAttachment, now time.Time) error {
-	tx, err := r.db.BeginTx(ctx, nil)
+	tx, err := NewMediaRepository(r.db).BeginImmediate(ctx, "replace fragment attachments")
 	if err != nil {
 		return fmt.Errorf("begin attachment tx: %w", err)
 	}
 	defer tx.Rollback()
+	canonicalID, err := resolveCanonicalFragmentID(ctx, tx.Conn(), fragmentID)
+	if err != nil {
+		return fmt.Errorf("resolve attachment fragment: %w", err)
+	}
+	revisionID, err := ensureAttachmentManifestRevision(ctx, tx.Conn(), canonicalID, attachments, now)
+	if err != nil {
+		return err
+	}
+	if err := replaceFragmentRevisionAttachments(ctx, tx.Conn(), canonicalID, revisionID, attachments, now); err != nil {
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit attachment tx: %w", err)
+	}
+	return nil
+}
+
+// ReplaceFragmentRevisionAttachments is the ingest path: fragment resolution
+// already created the immutable revision from this exact ordered manifest, so
+// the stage only installs its legacy projection and immutable AttachmentRefs.
+func (r *AttachmentRepository) ReplaceFragmentRevisionAttachments(ctx context.Context, fragmentID, revisionID string, attachments []domain.PipelineAttachment, now time.Time) error {
+	tx, err := NewMediaRepository(r.db).BeginImmediate(ctx, "replace fragment revision attachments")
+	if err != nil {
+		return fmt.Errorf("begin attachment tx: %w", err)
+	}
+	defer tx.Rollback()
+	canonicalID, err := resolveCanonicalFragmentID(ctx, tx.Conn(), fragmentID)
+	if err != nil {
+		return fmt.Errorf("resolve attachment fragment: %w", err)
+	}
+	if err := replaceFragmentRevisionAttachments(ctx, tx.Conn(), canonicalID, revisionID, attachments, now); err != nil {
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit attachment tx: %w", err)
+	}
+	return nil
+}
+
+func replaceFragmentRevisionAttachments(ctx context.Context, tx MediaWriteConn, fragmentID, revisionID string, attachments []domain.PipelineAttachment, now time.Time) error {
+	var sourceRegistrationID, fragmentProvider string
+	if err := tx.QueryRowContext(ctx, `
+SELECT COALESCE(si.source_registration_id, NULLIF(f.ingest_name, ''), f.source),
+       COALESCE(si.provider, NULLIF(f.source, ''), 'legacy')
+FROM fragments f
+LEFT JOIN fragment_source_identities si ON si.fragment_id = f.id
+JOIN fragment_revisions fr ON fr.fragment_id = f.id AND fr.id = ?
+WHERE f.id = ?`, revisionID, fragmentID).Scan(&sourceRegistrationID, &fragmentProvider); err != nil {
+		return fmt.Errorf("load attachment source identity: %w", err)
+	}
 
 	if _, err := tx.ExecContext(ctx, `DELETE FROM fragment_attachments WHERE fragment_id = ?`, fragmentID); err != nil {
 		return fmt.Errorf("clear fragment attachments: %w", err)
 	}
+	manifest := make([]domain.MediaManifestItem, 0, len(attachments))
 	for _, item := range attachments {
 		normalized := normalizePipelineAttachment(item)
 		if normalized.Kind == "" {
@@ -85,9 +136,10 @@ INSERT INTO fragment_attachments (
 		); err != nil {
 			return fmt.Errorf("link fragment attachment: %w", err)
 		}
+		manifest = append(manifest, LegacyPipelineMediaItem(fragmentID, revisionID, attachmentID, normalized, len(manifest), metaJSON, sourceRegistrationID, fragmentProvider, now))
 	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit attachment tx: %w", err)
+	if _, err := UpsertMediaManifest(ctx, tx, revisionID, manifest, now); err != nil {
+		return fmt.Errorf("project attachment media manifest: %w", err)
 	}
 	return nil
 }
@@ -248,20 +300,89 @@ func metaFloat64(meta map[string]any, key string) (float64, bool) {
 }
 
 func (r *AttachmentRepository) UpdateFragmentAttachmentStoragePaths(ctx context.Context, fragmentID string, storage map[string]domain.PublishedAttachmentInfo) error {
+	tx, err := NewMediaRepository(r.db).BeginImmediate(ctx, "update attachment storage paths")
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	canonicalID, err := resolveCanonicalFragmentID(ctx, tx.Conn(), fragmentID)
+	if err != nil {
+		return fmt.Errorf("resolve attachment storage owner: %w", err)
+	}
 	for attachmentID, published := range storage {
-		if _, err := r.db.ExecContext(ctx, `
+		if _, err := tx.Conn().ExecContext(ctx, `
 UPDATE fragment_attachments
 SET storage_path = ?, preview_storage_path = ?
 WHERE fragment_id = ? AND attachment_id = ?`,
 			published.StoragePath,
 			published.PreviewStoragePath,
-			fragmentID,
+			canonicalID,
 			attachmentID,
 		); err != nil {
 			return fmt.Errorf("update fragment attachment storage path: %w", err)
 		}
+		var revisionID, assetID, mimeType, metaJSON string
+		err := tx.Conn().QueryRowContext(ctx, `
+SELECT f.current_revision_id, ar.media_asset_id, a.mime_type, fa.metadata_json
+FROM fragments f
+JOIN fragment_attachments fa ON fa.fragment_id = f.id AND fa.attachment_id = ?
+JOIN attachments a ON a.id = fa.attachment_id
+JOIN attachment_refs ar ON ar.fragment_revision_id = f.current_revision_id
+  AND ar.legacy_attachment_id = fa.attachment_id
+WHERE f.id = ?`, attachmentID, canonicalID).Scan(&revisionID, &assetID, &mimeType, &metaJSON)
+		if err != nil && err != sql.ErrNoRows {
+			return fmt.Errorf("resolve media storage projection: %w", err)
+		}
+		if err == sql.ErrNoRows {
+			continue
+		}
+		if strings.TrimSpace(published.StoragePath) != "" {
+			if _, err := tx.Conn().ExecContext(ctx, `
+UPDATE asset_variants
+SET legacy_storage_path = ?, custody = 'adopted', acquisition_state = 'available',
+    retention = 'indefinite', failure_code = '', failure_message = '',
+    failure_retryable = 0, updated_at = ?
+WHERE media_asset_id = ? AND variant_identity = ?`, published.StoragePath,
+				formatTime(time.Now().UTC()), assetID, "legacy:"+attachmentID+":original"); err != nil {
+				return fmt.Errorf("project original storage path: %w", err)
+			}
+		}
+		if strings.TrimSpace(published.PreviewStoragePath) != "" {
+			if _, err := upsertAssetVariant(ctx, tx.Conn(), domain.AssetVariant{
+				MediaAssetID: assetID, VariantIdentity: "legacy:" + attachmentID + ":preview",
+				Kind: domain.VariantPreview, SourcePath: published.PreviewStoragePath,
+				MIMEType: previewMIMEType(mimeType), Custody: domain.CustodyAdopted,
+				AcquisitionState: domain.AcquisitionAvailable,
+				Retention:        domain.RetentionIndefinite, MetadataJSON: metaJSON,
+				LegacyStoragePath: published.PreviewStoragePath,
+			}, time.Now().UTC()); err != nil {
+				return fmt.Errorf("project preview storage path: %w", err)
+			}
+			// A destination can regenerate/move its compatibility preview. This
+			// path is a mutable serving projection, not source provenance; keep
+			// the media variant in sync rather than silently serving a stale path.
+			if _, err := tx.Conn().ExecContext(ctx, `
+UPDATE asset_variants
+SET source_path = ?, legacy_storage_path = ?, custody = 'adopted',
+    acquisition_state = 'available', retention = 'indefinite', updated_at = ?
+WHERE media_asset_id = ? AND variant_identity = ?`, published.PreviewStoragePath,
+				published.PreviewStoragePath, formatTime(time.Now().UTC()), assetID,
+				"legacy:"+attachmentID+":preview"); err != nil {
+				return fmt.Errorf("refresh preview storage path: %w", err)
+			}
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit attachment storage paths: %w", err)
 	}
 	return nil
+}
+
+func previewMIMEType(original string) string {
+	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(original)), "image/") {
+		return "image/jpeg"
+	}
+	return "application/octet-stream"
 }
 
 func (r *AttachmentRepository) UpdateFragmentAttachmentMetadata(ctx context.Context, fragmentID, attachmentID string, metadata map[string]any) error {
@@ -316,4 +437,189 @@ func attachmentIdentity(in domain.PipelineAttachment) string {
 	}, "\n")
 	sum := sha256.Sum256([]byte(key))
 	return hex.EncodeToString(sum[:])
+}
+
+// ensureAttachmentManifestRevision protects revision-scoped refs when a legacy
+// caller replaces the current attachment set outside the ingest pipeline. A
+// changed ordered manifest becomes a new immutable revision; old refs remain
+// attached to the old revision.
+func ensureAttachmentManifestRevision(ctx context.Context, q MediaWriteConn, fragmentID string, attachments []domain.PipelineAttachment, now time.Time) (string, error) {
+	var current domain.FragmentRevision
+	var normalizerAdapter, normalizerVersion, observedAt string
+	err := q.QueryRowContext(ctx, `
+SELECT fr.id, fr.ordinal, fr.material_digest, fr.content_digest, f.title,
+       fr.description, f.content, fr.content_format, fr.ordered_media_digest,
+       f.metadata_json, fr.normalizer_adapter, fr.normalizer_version,
+       fr.observed_at
+FROM fragments f
+JOIN fragment_revisions fr ON fr.id = f.current_revision_id
+WHERE f.id = ?`, fragmentID).Scan(
+		&current.ID, &current.Ordinal, &current.MaterialDigest, &current.ContentDigest,
+		&current.Title, &current.Description, &current.Content, &current.ContentFormat,
+		&current.OrderedMediaDigest, &current.MetadataJSON, &normalizerAdapter,
+		&normalizerVersion, &observedAt)
+	if err != nil {
+		return "", fmt.Errorf("load current attachment revision: %w", err)
+	}
+	material := domain.NormalizeMaterial(current.Title, current.Description, current.Content, current.ContentFormat, attachments)
+	if material.OrderedMediaDigest == current.OrderedMediaDigest {
+		return current.ID, nil
+	}
+	materialDigest := material.Digest()
+	var revisionID string
+	err = q.QueryRowContext(ctx, `SELECT id FROM fragment_revisions WHERE fragment_id = ? AND material_digest = ?`, fragmentID, materialDigest).Scan(&revisionID)
+	if err != nil && err != sql.ErrNoRows {
+		return "", fmt.Errorf("find attachment manifest revision: %w", err)
+	}
+	if err == sql.ErrNoRows {
+		var ordinal int
+		if err := q.QueryRowContext(ctx, `SELECT COALESCE(MAX(ordinal), 0) + 1 FROM fragment_revisions WHERE fragment_id = ?`, fragmentID).Scan(&ordinal); err != nil {
+			return "", fmt.Errorf("allocate attachment manifest revision: %w", err)
+		}
+		revisionID = domain.DigestText(fragmentID + "\n" + materialDigest)
+		if _, err := q.ExecContext(ctx, `
+INSERT INTO fragment_revisions (
+  id, fragment_id, ordinal, material_digest, content_digest, title,
+  description, content, content_format, ordered_media_digest, metadata_json,
+  normalizer_adapter, normalizer_version, observed_at, committed_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			revisionID, fragmentID, ordinal, materialDigest,
+			domain.DigestText(material.Content), material.Title, material.Description,
+			material.Content, material.ContentFormat, material.OrderedMediaDigest,
+			current.MetadataJSON, normalizerAdapter, normalizerVersion,
+			firstNonEmptyTimestamp(observedAt, formatTime(now)), formatTime(now)); err != nil {
+			return "", fmt.Errorf("insert attachment manifest revision: %w", err)
+		}
+	}
+	if _, err := q.ExecContext(ctx, `
+UPDATE fragments SET accepted_revision_id = ?, current_revision_id = ?,
+  content_hash = ?, title = ?, content = ?, ingested_at = ? WHERE id = ?`,
+		revisionID, revisionID, domain.DigestText(material.Content), material.Title,
+		material.Content, formatTime(now), fragmentID); err != nil {
+		return "", fmt.Errorf("select attachment manifest revision: %w", err)
+	}
+	return revisionID, nil
+}
+
+// LegacyPipelineMediaItem is shared by the live compatibility dual-write and
+// Store.Open's deterministic historical projection.
+func LegacyPipelineMediaItem(fragmentID, revisionID, attachmentID string, item domain.PipelineAttachment, position int, metadataJSON, sourceRegistrationID, fragmentProvider string, now time.Time) domain.MediaManifestItem {
+	provider := strings.ToLower(strings.TrimSpace(item.Source))
+	if provider == "" || provider == "ingest" {
+		provider = strings.ToLower(strings.TrimSpace(fragmentProvider))
+	}
+	if provider == "" {
+		provider = "legacy"
+	}
+	registration := strings.TrimSpace(sourceRegistrationID)
+	if registration == "" {
+		registration = provider
+	}
+	// Legacy source_item_id is relationship provenance (often a message ID or
+	// the literal "manual-intake"), not a guaranteed provider media ID.
+	sourceMediaKey := attachmentID
+	locator := firstNonEmptyString(item.ExternalURL, item.SourcePath, item.Name, attachmentID)
+	mediaKind := legacyMediaKind(item.Kind, item.MIMEType)
+	custody := domain.CustodyReference
+	state := domain.AcquisitionReferenceOnly
+	retention := domain.RetentionExternal
+	if item.SourcePath != "" || item.StoragePath != "" {
+		custody = domain.CustodyAdopted
+		state = domain.AcquisitionAvailable
+		retention = domain.RetentionIndefinite
+	}
+	role := legacyAttachmentRole(item.Role)
+	variantKind := domain.VariantOriginal
+	if mediaKind == domain.MediaAudio {
+		variantKind = domain.VariantAudio
+	} else if mediaKind == domain.MediaTimedText {
+		variantKind = domain.VariantTranscript
+	}
+	caption := metadataText(item.Metadata, "caption")
+	sourceContext := metadataText(item.Metadata, "source_context")
+	if sourceContext == "" && item.Role != string(role) {
+		sourceContext = "legacy_role:" + item.Role
+	}
+	return domain.MediaManifestItem{
+		Asset: domain.MediaAsset{
+			SourceRegistrationID: registration, Provider: provider,
+			SourceMediaKey: sourceMediaKey, SourceLocator: locator, Kind: mediaKind,
+			AltText: metadataText(item.Metadata, "alt_text"), SourceAuthority: provider,
+			DefaultCustody: custody, MetadataJSON: metadataJSON,
+			LegacyAttachmentID: attachmentID, CreatedAt: now,
+		},
+		Variants: []domain.AssetVariant{{
+			VariantIdentity: "legacy:" + attachmentID + ":original", Kind: variantKind,
+			SourceURL: item.ExternalURL, SourcePath: item.SourcePath,
+			MIMEType: item.MIMEType, ByteSize: item.SizeBytes, Custody: custody,
+			AcquisitionState: state, Retention: retention, MetadataJSON: metadataJSON,
+			LegacyStoragePath: item.StoragePath, CreatedAt: now,
+		}},
+		Attachment: domain.AttachmentRef{
+			FragmentRevisionID: revisionID, Role: role, Position: position,
+			Caption: caption, SourceContext: sourceContext,
+			LegacyFragmentID: fragmentID, LegacyAttachmentID: attachmentID,
+			CreatedAt: now,
+		},
+	}
+}
+
+func legacyMediaKind(kind, mimeType string) domain.MediaKind {
+	kind = strings.ToLower(strings.TrimSpace(kind))
+	mimeType = strings.ToLower(strings.TrimSpace(mimeType))
+	switch {
+	case kind == "image" || strings.HasPrefix(mimeType, "image/"):
+		return domain.MediaImage
+	case kind == "video" || strings.HasPrefix(mimeType, "video/"):
+		return domain.MediaVideo
+	case kind == "audio" || strings.HasPrefix(mimeType, "audio/"):
+		return domain.MediaAudio
+	case kind == "transcript" || kind == "subtitles" || strings.Contains(mimeType, "vtt"):
+		return domain.MediaTimedText
+	case kind == "pdf" || kind == "document" || kind == "markdown" || kind == "text" ||
+		strings.HasPrefix(mimeType, "text/") || mimeType == "application/pdf":
+		return domain.MediaDocument
+	default:
+		return domain.MediaOther
+	}
+}
+
+func legacyAttachmentRole(role string) domain.AttachmentRole {
+	switch strings.ToLower(strings.TrimSpace(role)) {
+	case "primary":
+		return domain.AttachmentPrimary
+	case "gallery_item", "gallery-item", "gallery":
+		return domain.AttachmentGalleryItem
+	case "hero":
+		return domain.AttachmentHero
+	case "inline", "content":
+		return domain.AttachmentInline
+	case "poster":
+		return domain.AttachmentPoster
+	case "transcript", "subtitles":
+		return domain.AttachmentTranscript
+	default:
+		return domain.AttachmentOther
+	}
+}
+
+func firstNonEmptyString(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
+}
+
+func firstNonEmptyTimestamp(values ...string) string {
+	return firstNonEmptyString(values...)
+}
+
+func metadataText(metadata map[string]any, key string) string {
+	if metadata == nil {
+		return ""
+	}
+	value, _ := metadata[key].(string)
+	return strings.TrimSpace(value)
 }

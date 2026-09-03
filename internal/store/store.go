@@ -52,6 +52,10 @@ func Open(dbPath string) (*Store, error) {
 		_ = db.Close()
 		return nil, fmt.Errorf("backfill fragment identity: %w", err)
 	}
+	if err := s.backfillMedia(context.Background()); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("backfill media: %w", err)
+	}
 	return s, nil
 }
 
