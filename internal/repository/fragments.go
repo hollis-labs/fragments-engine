@@ -112,13 +112,6 @@ func (r *FragmentRepository) Upsert(ctx context.Context, fragment domain.Fragmen
 // this result because a migrated identity can resolve a freshly built candidate
 // to a preserved legacy primary key.
 func (r *FragmentRepository) UpsertResolved(ctx context.Context, fragment domain.Fragment) (domain.Fragment, UpsertOutcome, error) {
-	identity := fragment.SourceIdentity
-	if identity.SourceRegistrationID == "" || identity.SourceItemKey == "" || identity.SegmentKey == "" {
-		return domain.Fragment{}, "", fmt.Errorf("upsert fragment: stable source identity is incomplete")
-	}
-	if fragment.Revision.MaterialDigest == "" {
-		return domain.Fragment{}, "", fmt.Errorf("upsert fragment: material digest is required")
-	}
 	conn, err := r.db.Conn(ctx)
 	if err != nil {
 		return domain.Fragment{}, "", fmt.Errorf("acquire fragment upsert connection: %w", err)
@@ -137,6 +130,29 @@ func (r *FragmentRepository) UpsertResolved(ctx context.Context, fragment domain
 		return domain.Fragment{}, "", fmt.Errorf("begin immediate fragment upsert: %w", err)
 	}
 	defer conn.ExecContext(context.Background(), `ROLLBACK`)
+
+	resolved, outcome, err := upsertFragmentResolved(ctx, conn, fragment)
+	if err != nil {
+		return domain.Fragment{}, "", err
+	}
+	if _, err := conn.ExecContext(ctx, `COMMIT`); err != nil {
+		return domain.Fragment{}, "", fmt.Errorf("commit fragment upsert: %w", err)
+	}
+	return resolved, outcome, nil
+}
+
+// upsertFragmentResolved applies the identity/revision write using a
+// caller-owned SQLite transaction. Keeping the commit boundary outside this
+// helper lets capture acceptance compose fragment/revision resolution with the
+// attempt and additive context in one BEGIN IMMEDIATE transaction.
+func upsertFragmentResolved(ctx context.Context, conn fragmentWriteConn, fragment domain.Fragment) (domain.Fragment, UpsertOutcome, error) {
+	identity := fragment.SourceIdentity
+	if identity.SourceRegistrationID == "" || identity.SourceItemKey == "" || identity.SegmentKey == "" {
+		return domain.Fragment{}, "", fmt.Errorf("upsert fragment: stable source identity is incomplete")
+	}
+	if fragment.Revision.MaterialDigest == "" {
+		return domain.Fragment{}, "", fmt.Errorf("upsert fragment: material digest is required")
+	}
 
 	resolvedID, err := findFragmentByIdentity(ctx, conn, identity)
 	inserted := false
@@ -186,9 +202,6 @@ INSERT INTO fragments (
 		if err != nil {
 			return domain.Fragment{}, "", err
 		}
-		if _, err := conn.ExecContext(ctx, `COMMIT`); err != nil {
-			return domain.Fragment{}, "", fmt.Errorf("commit repeated fragment revision: %w", err)
-		}
 		return resolved, outcome, nil
 	}
 	if err != sql.ErrNoRows {
@@ -223,9 +236,6 @@ INSERT INTO fragment_revisions (
 	resolved, err := getFragmentByID(ctx, conn, resolvedID)
 	if err != nil {
 		return domain.Fragment{}, "", err
-	}
-	if _, err := conn.ExecContext(ctx, `COMMIT`); err != nil {
-		return domain.Fragment{}, "", fmt.Errorf("commit fragment revision: %w", err)
 	}
 	if inserted {
 		return resolved, UpsertInserted, nil
