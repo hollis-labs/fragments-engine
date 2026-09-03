@@ -371,6 +371,7 @@ func (s *DeliveryQueueService) processJob(ctx context.Context, job *queue.Queued
 	if err != nil {
 		return s.failJob(ctx, job, payload, fmt.Errorf("get fragment: %w", err))
 	}
+	payload.FragmentID = fragment.ID
 	destination, err := s.routes.GetDestination(ctx, payload.DestinationID)
 	if err != nil {
 		return s.failJob(ctx, job, payload, fmt.Errorf("get destination: %w", err))

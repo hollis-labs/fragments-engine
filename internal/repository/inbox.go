@@ -39,8 +39,11 @@ func (r *InboxRepository) List(ctx context.Context, limit int) ([]domain.InboxIt
 		limit = 50
 	}
 	rows, err := r.db.QueryContext(ctx, `
-SELECT fragment_id, reason, staged_at, route_id
-FROM inbox
+SELECT i.fragment_id, i.reason, i.staged_at, i.route_id
+FROM inbox i
+WHERE NOT EXISTS (
+  SELECT 1 FROM fragment_identity_aliases fia WHERE fia.alias_fragment_id = i.fragment_id
+)
 ORDER BY staged_at DESC
 LIMIT ?`, limit)
 	if err != nil {
@@ -118,6 +121,9 @@ SELECT i.fragment_id, i.reason, i.staged_at, i.route_id,
        ) AS preview_attachment_id
 FROM inbox i
 JOIN fragments f ON f.id = i.fragment_id
+WHERE NOT EXISTS (
+  SELECT 1 FROM fragment_identity_aliases fia WHERE fia.alias_fragment_id = i.fragment_id
+)
 ORDER BY i.staged_at DESC
 LIMIT ?`, limit)
 	if err != nil {
@@ -150,6 +156,9 @@ JOIN fragments f ON f.id = i.fragment_id
 JOIN fragment_entities fe ON fe.fragment_id = i.fragment_id
 JOIN entities e ON e.id = fe.entity_id
 WHERE e.kind = ? AND e.value = ?
+  AND NOT EXISTS (
+    SELECT 1 FROM fragment_identity_aliases fia WHERE fia.alias_fragment_id = i.fragment_id
+  )
 ORDER BY i.staged_at DESC
 LIMIT ?`, kind, value, limit)
 	if err != nil {
@@ -214,6 +223,9 @@ SELECT i.fragment_id, i.reason, i.staged_at, i.route_id,
        ) AS preview_attachment_id
 FROM inbox i
 JOIN fragments f ON f.id = i.fragment_id
+WHERE NOT EXISTS (
+  SELECT 1 FROM fragment_identity_aliases fia WHERE fia.alias_fragment_id = i.fragment_id
+)
 ORDER BY f.created_at ASC, i.staged_at ASC
 LIMIT ?`, limit)
 	if err != nil {
@@ -233,6 +245,9 @@ FROM inbox i
 JOIN fragment_entities fe ON fe.fragment_id = i.fragment_id
 JOIN entities e ON e.id = fe.entity_id
 WHERE (? = '' OR e.kind = ?)
+  AND NOT EXISTS (
+    SELECT 1 FROM fragment_identity_aliases fia WHERE fia.alias_fragment_id = i.fragment_id
+  )
 GROUP BY e.kind, e.value
 ORDER BY fragment_count DESC, e.kind, e.value
 LIMIT ?`, kind, kind, limit)
@@ -265,6 +280,9 @@ FROM inbox i
 JOIN fragment_entities fe ON fe.fragment_id = i.fragment_id
 JOIN entities e ON e.id = fe.entity_id
 WHERE e.kind = ? AND e.value = ?
+  AND NOT EXISTS (
+    SELECT 1 FROM fragment_identity_aliases fia WHERE fia.alias_fragment_id = i.fragment_id
+  )
 ORDER BY i.staged_at DESC
 LIMIT ?`, kind, value, limit)
 	if err != nil {

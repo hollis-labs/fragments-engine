@@ -129,6 +129,7 @@ func (s *RoutingService) MaterializeFragmentToDestination(ctx context.Context, f
 	if err != nil {
 		return result, err
 	}
+	result.FragmentID = fragment.ID
 	var attachments []domain.FragmentAttachment
 	if s.attachments != nil {
 		attachments, err = s.attachments.ListByFragment(ctx, result.FragmentID)
@@ -520,7 +521,11 @@ func (s *RoutingService) DeleteRoute(ctx context.Context, routeID string, force 
 }
 
 func (s *RoutingService) ListRouteLog(ctx context.Context, fragmentID string) ([]domain.RouteLogEntry, error) {
-	return s.repo.ListRouteLog(ctx, fragmentID)
+	fragment, err := s.fragments.GetByID(ctx, fragmentID)
+	if err != nil {
+		return nil, err
+	}
+	return s.repo.ListRouteLog(ctx, fragment.ID)
 }
 
 func (s *RoutingService) ApplyRouteByEntity(ctx context.Context, routeID, kind, value string, limit int) (domain.RouteApplyResult, error) {
@@ -1123,7 +1128,6 @@ func (s *RoutingService) findDestinationByName(ctx context.Context, destinationN
 	}
 	return domain.Destination{}, fmt.Errorf("destination %q not found", name)
 }
-
 
 func trimReasonPrefix(reason string, prefixes ...string) string {
 	for _, prefix := range prefixes {

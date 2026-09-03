@@ -92,6 +92,7 @@ func (s *InboxReviewerService) reviewFragment(ctx context.Context, fragmentID st
 	if err != nil {
 		return false, false, detail, err
 	}
+	fragmentID = fragment.ID
 	if fragment.Source != "manual" {
 		return false, false, reviewDetail{action: "skip_non_manual"}, nil
 	}
@@ -146,6 +147,7 @@ func (s *InboxReviewerService) syncPinterestCorpus(ctx context.Context, fragment
 	if err != nil {
 		return err
 	}
+	fragmentID = fragment.ID
 	if fragment.Source != "manual" || fragment.SourceType != "pin" {
 		return nil
 	}

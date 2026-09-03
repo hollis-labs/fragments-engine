@@ -103,7 +103,7 @@ func (p *Pipeline) RunOnce(ctx context.Context, ingestCfg config.IngestConfig) (
 		if err != nil {
 			return domain.IngestRun{}, err
 		}
-		outcome, err := p.repo.Upsert(ctx, fragment)
+		fragment, outcome, err := p.repo.UpsertResolved(ctx, fragment)
 		if err != nil {
 			return domain.IngestRun{}, err
 		}

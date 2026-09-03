@@ -28,15 +28,25 @@ type IngestRunRecord struct {
 }
 
 type PipelineFragment struct {
-	Source        string
-	SourceType    string
-	SourceID      string
-	Title         string
-	Content       string
-	CreatedAt     time.Time
-	Metadata      map[string]any
-	CanonicalPath string
-	Attachments   []PipelineAttachment
+	Source     string
+	SourceType string
+	SourceID   string
+	// SourceIdentity carries the stable, source-owned identity and provenance
+	// for this candidate. BuildFragment fills omitted fields from the legacy
+	// Source/SourceID/ingest-name contract so every existing ingest uses the
+	// same identity resolver.
+	SourceIdentity SourceIdentity
+	Title          string
+	Description    string
+	Content        string
+	ContentFormat  string
+	CreatedAt      time.Time
+	Metadata       map[string]any
+	CanonicalPath  string
+	Attachments    []PipelineAttachment
+	// Normalizer identifies the versioned material-normalization policy used
+	// before calculating an immutable FragmentRevision digest.
+	Normalizer AdapterVersion
 }
 
 type PipelineAttachment struct {

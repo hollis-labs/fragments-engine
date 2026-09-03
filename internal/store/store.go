@@ -48,6 +48,10 @@ func Open(dbPath string) (*Store, error) {
 		_ = db.Close()
 		return nil, fmt.Errorf("migrate: %w", err)
 	}
+	if err := s.backfillFragmentIdentity(context.Background()); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("backfill fragment identity: %w", err)
+	}
 	return s, nil
 }
 

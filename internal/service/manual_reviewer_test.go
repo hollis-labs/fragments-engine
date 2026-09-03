@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"database/sql"
 	"encoding/base64"
 	"encoding/json"
 	"net/http"
@@ -24,6 +25,7 @@ type manualTestServices struct {
 	reviewer   *InboxReviewerService
 	inbox      *InboxService
 	corpusRoot string
+	db         *sql.DB
 	close      func()
 }
 
@@ -54,6 +56,7 @@ func setupManualTestServices(t *testing.T) manualTestServices {
 		reviewer:   NewInboxReviewerService(fragmentRepo, entityRepo, attachmentRepo, inboxRepo, enricher, corpusWriter, nil, ""),
 		inbox:      NewInboxService(inboxRepo),
 		corpusRoot: corpusRoot,
+		db:         st.DB,
 		close: func() {
 			_ = recallIndex.Close()
 			_ = st.Close()

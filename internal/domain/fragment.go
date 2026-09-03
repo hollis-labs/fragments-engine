@@ -15,13 +15,19 @@ const (
 )
 
 type Fragment struct {
-	ID            string
-	Source        string
-	SourceType    string
-	SourceID      string
-	Title         string
-	Content       string
-	ContentHash   string
+	ID                 string
+	Source             string
+	SourceType         string
+	SourceID           string
+	SourceIdentity     SourceIdentity
+	Title              string
+	Content            string
+	ContentHash        string
+	AcceptedRevisionID string
+	CurrentRevisionID  string
+	// Revision carries the normalized candidate into the repository write.
+	// Reads expose the selected immutable current revision here as well.
+	Revision      FragmentRevision
 	CreatedAt     time.Time
 	IngestedAt    time.Time
 	Status        FragmentStatus
@@ -30,6 +36,52 @@ type Fragment struct {
 	MetadataJSON  string
 	IngestName    string
 	CanonicalPath string
+}
+
+// AdapterVersion names the implementation and version responsible for a
+// canonicalization or normalization decision. Persisting both makes stable
+// identity and revision digests reproducible across adapter upgrades.
+type AdapterVersion struct {
+	Adapter string `json:"adapter"`
+	Version string `json:"version"`
+}
+
+// SourceIdentity is the transport-independent identity relation shared by all
+// ingests. SourceRegistrationID + SourceItemKey + SegmentKey resolves exactly
+// one stable Fragment. URLs are optional because chat, git, filesystem, Nil,
+// and manual fragments have useful source-native locators instead.
+type SourceIdentity struct {
+	SourceRegistrationID string         `json:"source_registration_id"`
+	Provider             string         `json:"provider"`
+	ProviderItemID       string         `json:"provider_item_id,omitempty"`
+	SourceItemKey        string         `json:"source_item_key"`
+	SourceLocator        string         `json:"source_locator,omitempty"`
+	SegmentKey           string         `json:"segment_key"`
+	SubmittedURL         string         `json:"submitted_url,omitempty"`
+	CanonicalURL         string         `json:"canonical_url,omitempty"`
+	SourceAdapter        AdapterVersion `json:"source_adapter"`
+	Canonicalizer        AdapterVersion `json:"canonicalizer"`
+}
+
+// FragmentRevision is an immutable observation of source-owned material. User
+// state (tags, notes, routing, triage, and reading state) is deliberately absent
+// from MaterialDigest and remains attached to the stable Fragment.
+type FragmentRevision struct {
+	ID                 string         `json:"id"`
+	FragmentID         string         `json:"fragment_id"`
+	Ordinal            int            `json:"ordinal"`
+	MaterialDigest     string         `json:"material_digest"`
+	ContentDigest      string         `json:"content_digest"`
+	Title              string         `json:"title"`
+	Description        string         `json:"description,omitempty"`
+	Content            string         `json:"content"`
+	ContentFormat      string         `json:"content_format"`
+	OrderedMediaDigest string         `json:"ordered_media_digest"`
+	MetadataJSON       string         `json:"metadata_json"`
+	Normalizer         AdapterVersion `json:"normalizer"`
+	ObservedAt         time.Time      `json:"observed_at"`
+	CommittedAt        time.Time      `json:"committed_at"`
+	LegacyFragmentID   string         `json:"legacy_fragment_id,omitempty"`
 }
 
 type SearchResult struct {

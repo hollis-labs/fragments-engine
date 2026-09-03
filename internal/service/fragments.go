@@ -237,23 +237,24 @@ func (s *FragmentService) GetDetail(ctx context.Context, fragmentID string, rela
 	if err != nil {
 		return domain.FragmentDetail{}, err
 	}
-	entities, err := s.entities.ListByFragment(ctx, fragmentID)
+	canonicalID := fragment.ID
+	entities, err := s.entities.ListByFragment(ctx, canonicalID)
 	if err != nil {
 		return domain.FragmentDetail{}, err
 	}
-	attachments, err := s.attachments.ListByFragment(ctx, fragmentID)
+	attachments, err := s.attachments.ListByFragment(ctx, canonicalID)
 	if err != nil {
 		return domain.FragmentDetail{}, err
 	}
-	related, err := s.recall.Related(ctx, fragmentID, relatedLimit)
+	related, err := s.recall.Related(ctx, canonicalID, relatedLimit)
 	if err != nil {
 		return domain.FragmentDetail{}, err
 	}
-	relations, err := s.repo.ListRelations(ctx, fragmentID, relatedLimit)
+	relations, err := s.repo.ListRelations(ctx, canonicalID, relatedLimit)
 	if err != nil {
 		return domain.FragmentDetail{}, err
 	}
-	routeLog, err := s.routes.ListRouteLog(ctx, fragmentID)
+	routeLog, err := s.routes.ListRouteLog(ctx, canonicalID)
 	if err != nil {
 		return domain.FragmentDetail{}, err
 	}
@@ -278,7 +279,11 @@ func (s *FragmentService) ListBrowse(ctx context.Context, status string, limit, 
 }
 
 func (s *FragmentService) Related(ctx context.Context, fragmentID string, limit int) ([]domain.SearchResult, error) {
-	return s.recall.Related(ctx, fragmentID, limit)
+	canonicalID, err := s.repo.ResolveCanonicalFragmentID(ctx, fragmentID)
+	if err != nil {
+		return nil, err
+	}
+	return s.recall.Related(ctx, canonicalID, limit)
 }
 
 func (s *FragmentService) ListEntities(ctx context.Context, kind string, limit int) ([]repository.EntityRecord, error) {
@@ -290,11 +295,16 @@ func (s *FragmentService) FragmentsByEntity(ctx context.Context, kind, value str
 }
 
 func (s *FragmentService) ReanalyzeAttachments(ctx context.Context, fragmentID, attachmentID string) (domain.AttachmentReanalysisResult, error) {
-	result := domain.AttachmentReanalysisResult{FragmentID: fragmentID}
+	canonicalID, err := s.repo.ResolveCanonicalFragmentID(ctx, fragmentID)
+	if err != nil {
+		return domain.AttachmentReanalysisResult{}, err
+	}
+	fragmentID = canonicalID
+	result := domain.AttachmentReanalysisResult{FragmentID: canonicalID}
 	if s.vision == nil {
 		return result, fmt.Errorf("attachment vision analyzer is not configured")
 	}
-	items, err := s.attachments.ListByFragment(ctx, fragmentID)
+	items, err := s.attachments.ListByFragment(ctx, canonicalID)
 	if err != nil {
 		return result, err
 	}
@@ -402,6 +412,7 @@ func (s *FragmentService) UpdateManualFragment(ctx context.Context, req UpdateFr
 	if fragment.Source != "manual" {
 		return domain.FragmentDetail{}, fmt.Errorf("update fragment: only manual fragments are editable")
 	}
+	fragmentID = fragment.ID
 
 	meta, err := decodeEditableMetadata(fragment.MetadataJSON)
 	if err != nil {
@@ -641,6 +652,7 @@ func (s *FragmentService) Intake(ctx context.Context, req IntakeRequest) (Intake
 		SourceType:    sourceType,
 		SourceID:      sourceID,
 		Title:         title,
+		Description:   req.Description,
 		Content:       req.Content,
 		CreatedAt:     now,
 		CanonicalPath: "fragments/manual/" + sourceType + "/" + sourceID,
@@ -660,7 +672,7 @@ func (s *FragmentService) Intake(ctx context.Context, req IntakeRequest) (Intake
 		return IntakeResult{}, fmt.Errorf("intake: build fragment: %w", err)
 	}
 
-	outcome, err := s.repo.Upsert(ctx, fragment)
+	fragment, outcome, err := s.repo.UpsertResolved(ctx, fragment)
 	if err != nil {
 		return IntakeResult{}, fmt.Errorf("intake: upsert: %w", err)
 	}

@@ -202,10 +202,7 @@ func (r *EntityRepository) ListFragments(ctx context.Context, kind, value string
 	if limit <= 0 {
 		limit = 20
 	}
-	rows, err := r.db.QueryContext(ctx, `
-SELECT
-  f.id, f.source, f.source_type, f.source_id, f.title, f.content, f.content_hash,
-  f.created_at, f.ingested_at, f.status, f.summary_text, f.indexed_at, f.metadata_json, f.ingest_name, f.canonical_path,
+	query := `SELECT ` + fragmentReadColumns + `,
   (
     SELECT fa.attachment_id
     FROM fragment_attachments fa
@@ -219,9 +216,14 @@ SELECT
 FROM entities e
 JOIN fragment_entities fe ON fe.entity_id = e.id
 JOIN fragments f ON f.id = fe.fragment_id
+` + fragmentReadJoins + `
 WHERE e.kind = ? AND e.value = ?
+  AND NOT EXISTS (
+    SELECT 1 FROM fragment_identity_aliases fia WHERE fia.alias_fragment_id = f.id
+  )
 ORDER BY fe.confidence DESC, f.created_at DESC
-LIMIT ?`, kind, value, limit)
+LIMIT ?`
+	rows, err := r.db.QueryContext(ctx, query, kind, value, limit)
 	if err != nil {
 		return nil, fmt.Errorf("list fragments by entity: %w", err)
 	}
@@ -231,26 +233,16 @@ LIMIT ?`, kind, value, limit)
 	for rows.Next() {
 		var (
 			f                   domain.Fragment
-			createdAt, ingested string
-			indexedAt           string
-			status              string
+			state               fragmentScanState
 			previewAttachmentID sql.NullString
 			confidence          float64
 		)
-		if err := rows.Scan(
-			&f.ID, &f.Source, &f.SourceType, &f.SourceID, &f.Title, &f.Content, &f.ContentHash,
-			&createdAt, &ingested, &status, &f.Summary, &indexedAt, &f.MetadataJSON, &f.IngestName, &f.CanonicalPath,
-			&previewAttachmentID,
-			&confidence,
-		); err != nil {
+		destinations := state.destinations(&f)
+		destinations = append(destinations, &previewAttachmentID, &confidence)
+		if err := rows.Scan(destinations...); err != nil {
 			return nil, fmt.Errorf("scan fragment by entity: %w", err)
 		}
-		f.CreatedAt, _ = time.Parse(time.RFC3339, createdAt)
-		f.IngestedAt, _ = time.Parse(time.RFC3339, ingested)
-		if indexedAt != "" {
-			f.IndexedAt, _ = time.Parse(time.RFC3339, indexedAt)
-		}
-		f.Status = domain.FragmentStatus(status)
+		state.finish(&f)
 		item := domain.SearchResult{
 			Fragment: f,
 			Score:    confidence,
