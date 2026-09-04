@@ -53,6 +53,9 @@ type App struct {
 	ProviderMedia    *service.ProviderMediaCompletion
 	Reader           *service.ReaderService
 	ReaderResources  *service.ReaderResourceService
+	// ReaderCommands is persistence-complete in 0042, but remains without a
+	// production projector until Reader projection integration is wired.
+	ReaderCommands *service.ReaderCommandService
 }
 
 func Open(ctx context.Context, cfg config.Config) (*App, error) {
@@ -139,6 +142,7 @@ func Open(ctx context.Context, cfg config.Config) (*App, error) {
 	fragmentService := service.NewFragmentService(fragmentRepo, entityRepo, attachmentRepo, routingRepo, recallIndex, pipeline, visionAnalyzer, manualEnricher, corpusWriter)
 	fragmentService.SetLegacyCaptureService(legacyCapture)
 	scheduleRepo := repository.NewIngestScheduleRepository(st.DB)
+	assetAcquisition := service.NewAssetAcquisitionService(mediaRepo)
 	return &App{
 		store:           st,
 		recall:          recallIndex,
@@ -166,11 +170,14 @@ func Open(ctx context.Context, cfg config.Config) (*App, error) {
 		),
 		Captures:         service.NewCaptureService(captureRepo, mediaService),
 		Enrichment:       service.NewEnrichmentService(repository.NewEnrichmentRepository(st.DB), nil),
-		AssetAcquisition: service.NewAssetAcquisitionService(mediaRepo),
+		AssetAcquisition: assetAcquisition,
 		ProviderMedia:    service.NewProviderMediaCompletion(mediaRepo, mediaService),
 		Reader:           service.NewReaderService(repository.NewReaderRepository(st.DB)),
 		ReaderResources: service.NewReaderResourceService(
 			repository.NewReaderResourceRepository(st.DB), blobs, cfg.Reviewer.DownloadRoot,
+		),
+		ReaderCommands: service.NewReaderCommandService(
+			repository.NewReaderCommandRepository(st.DB), assetAcquisition, routingSvc, nil,
 		),
 	}, nil
 }

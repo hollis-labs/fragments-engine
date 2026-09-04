@@ -784,6 +784,173 @@ func TestRoutingService_MaterializeFragmentToDestination(t *testing.T) {
 	}
 }
 
+func TestRoutingService_RouteFragmentUsesSelectedRouteAndRemovesInbox(t *testing.T) {
+	root := t.TempDir()
+	cfgPath := writeIntegrationConfigForRoot(t, root)
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+
+	instance, err := app.Open(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("open app: %v", err)
+	}
+	defer instance.Close()
+
+	intake, err := instance.Fragments.Intake(context.Background(), service.IntakeRequest{
+		Content: "A focused note that should leave the inbox after explicit routing.",
+		Title:   "Explicit Reader route",
+	})
+	if err != nil {
+		t.Fatalf("intake: %v", err)
+	}
+	before, err := instance.Inbox.List(context.Background(), 10)
+	if err != nil {
+		t.Fatalf("list inbox before route: %v", err)
+	}
+	if len(before) != 1 || before[0].FragmentID != intake.FragmentID {
+		t.Fatalf("expected routed candidate in inbox, got %+v", before)
+	}
+
+	selectedRoot := filepath.Join(filepath.Dir(cfgPath), "selected-route")
+	selectedDestination, err := instance.Routing.AddDestination(context.Background(), domain.Destination{
+		Name:       "reader-selected-route",
+		Kind:       "file",
+		ConfigJSON: `{"root":"` + selectedRoot + `"}`,
+	})
+	if err != nil {
+		t.Fatalf("add selected destination: %v", err)
+	}
+	selectedRoute, err := instance.Routing.AddRoute(context.Background(), domain.Route{
+		Name:          "reader-explicit-route",
+		MatchSource:   "unrelated-source",
+		DestinationID: selectedDestination.ID,
+	})
+	if err != nil {
+		t.Fatalf("add selected route: %v", err)
+	}
+
+	result, err := instance.Routing.RouteFragment(context.Background(), intake.FragmentID, selectedRoute.ID)
+	if err != nil {
+		t.Fatalf("route fragment: %v", err)
+	}
+	if result.Status != "routed" || result.FragmentID != intake.FragmentID || result.WrittenPath == "" {
+		t.Fatalf("unexpected route result: %+v", result)
+	}
+	if rel, err := filepath.Rel(selectedRoot, result.WrittenPath); err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		t.Fatalf("expected selected route destination path under %s, got %s (rel=%q, err=%v)", selectedRoot, result.WrittenPath, rel, err)
+	}
+	if _, err := os.Stat(result.WrittenPath); err != nil {
+		t.Fatalf("stat routed file: %v", err)
+	}
+
+	detail, err := instance.Fragments.GetDetail(context.Background(), intake.FragmentID, 10)
+	if err != nil {
+		t.Fatalf("get routed fragment: %v", err)
+	}
+	if detail.Fragment.Status != domain.FragmentStatusRouted {
+		t.Fatalf("expected routed fragment state, got %s", detail.Fragment.Status)
+	}
+	after, err := instance.Inbox.List(context.Background(), 10)
+	if err != nil {
+		t.Fatalf("list inbox after route: %v", err)
+	}
+	if len(after) != 0 {
+		t.Fatalf("expected route to remove inbox item, got %+v", after)
+	}
+	logEntries, err := instance.Routing.ListRouteLog(context.Background(), intake.FragmentID)
+	if err != nil {
+		t.Fatalf("list route log: %v", err)
+	}
+	if len(logEntries) == 0 {
+		t.Fatal("expected route log entry")
+	}
+	last := logEntries[len(logEntries)-1]
+	if last.Decision != "manual_route" || last.RouteID != selectedRoute.ID || last.DestinationID != selectedDestination.ID {
+		t.Fatalf("expected selected route and destination in audit log, got %+v", last)
+	}
+}
+
+func TestRoutingService_MaterializeFragmentToDestinationIDPreservesInbox(t *testing.T) {
+	root := t.TempDir()
+	cfgPath := writeIntegrationConfigForRoot(t, root)
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+
+	instance, err := app.Open(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("open app: %v", err)
+	}
+	defer instance.Close()
+
+	intake, err := instance.Fragments.Intake(context.Background(), service.IntakeRequest{
+		Content: "A focused note that should remain visible after materialization.",
+		Title:   "Reader materialization by ID",
+	})
+	if err != nil {
+		t.Fatalf("intake: %v", err)
+	}
+	selectedRoot := filepath.Join(filepath.Dir(cfgPath), "selected-materialize")
+	selectedDestination, err := instance.Routing.AddDestination(context.Background(), domain.Destination{
+		Name:       "reader-materialize-selected",
+		Kind:       "file",
+		ConfigJSON: `{"root":"` + selectedRoot + `"}`,
+	})
+	if err != nil {
+		t.Fatalf("add selected destination: %v", err)
+	}
+	if _, err := instance.Routing.AddDestination(context.Background(), domain.Destination{
+		Name:       "reader-materialize-decoy",
+		Kind:       "file",
+		ConfigJSON: `{"root":"` + filepath.Join(filepath.Dir(cfgPath), "decoy-materialize") + `"}`,
+	}); err != nil {
+		t.Fatalf("add decoy destination: %v", err)
+	}
+
+	result, err := instance.Routing.MaterializeFragmentToDestinationID(context.Background(), intake.FragmentID, selectedDestination.ID)
+	if err != nil {
+		t.Fatalf("materialize fragment by id: %v", err)
+	}
+	if result.FragmentID != intake.FragmentID || result.DestinationID != selectedDestination.ID || result.DestinationName != selectedDestination.Name || result.WrittenPath == "" {
+		t.Fatalf("unexpected materialize result: %+v", result)
+	}
+	if rel, err := filepath.Rel(selectedRoot, result.WrittenPath); err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		t.Fatalf("expected selected destination path under %s, got %s (rel=%q, err=%v)", selectedRoot, result.WrittenPath, rel, err)
+	}
+	if _, err := os.Stat(result.WrittenPath); err != nil {
+		t.Fatalf("stat materialized file: %v", err)
+	}
+
+	detail, err := instance.Fragments.GetDetail(context.Background(), intake.FragmentID, 10)
+	if err != nil {
+		t.Fatalf("get materialized fragment: %v", err)
+	}
+	if detail.Fragment.Status != domain.FragmentStatusInbox {
+		t.Fatalf("expected materialize to preserve inbox fragment state, got %s", detail.Fragment.Status)
+	}
+	items, err := instance.Inbox.List(context.Background(), 10)
+	if err != nil {
+		t.Fatalf("list inbox: %v", err)
+	}
+	if len(items) != 1 || items[0].FragmentID != intake.FragmentID || !strings.Contains(items[0].Reason, "materialized to "+selectedDestination.Name) {
+		t.Fatalf("expected preserved inbox item with materialization marker, got %+v", items)
+	}
+	logEntries, err := instance.Routing.ListRouteLog(context.Background(), intake.FragmentID)
+	if err != nil {
+		t.Fatalf("list route log: %v", err)
+	}
+	if len(logEntries) == 0 {
+		t.Fatal("expected materialize route log entry")
+	}
+	last := logEntries[len(logEntries)-1]
+	if last.Decision != "materialize" || last.DestinationID != selectedDestination.ID || last.RouteID != "" {
+		t.Fatalf("expected ID-selected destination in materialize audit log, got %+v", last)
+	}
+}
+
 func writeIntegrationConfig(t *testing.T) string {
 	t.Helper()
 	tempDir := t.TempDir()

@@ -523,7 +523,7 @@ ON CONFLICT(
   producer, producer_version, actor_id
 ) DO NOTHING`,
 		tag.ID, tag.FragmentID, tag.Value, tag.NormalizedValue, string(tag.Source),
-		tag.ObservationID, tag.CaptureID, tag.Producer.Adapter,
+		tag.ObservationID, nullIfEmpty(tag.CaptureID), tag.Producer.Adapter,
 		tag.Producer.Version, tag.ActorID, formatTime(tag.ObservedAt),
 		formatTime(tag.CreatedAt),
 	)
