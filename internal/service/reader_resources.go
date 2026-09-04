@@ -12,6 +12,7 @@ import (
 	"mime"
 	"net/http"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 
@@ -151,7 +152,7 @@ func renderSanitizedArticle(source, format string) ([]byte, error) {
 	switch strings.ToLower(strings.TrimSpace(format)) {
 	case "", "markdown":
 		md := goldmark.New(goldmark.WithExtensions(extension.GFM))
-		if err := md.Convert([]byte(source), &rendered); err != nil {
+		if err := md.Convert([]byte(stripReaderMarkdownImages(source)), &rendered); err != nil {
 			return nil, fmt.Errorf("render reader article markdown: %w", err)
 		}
 	case "plain_text", "text":
@@ -175,6 +176,23 @@ func renderSanitizedArticle(source, format string) ([]byte, error) {
 	policy.RequireNoFollowOnLinks(true)
 	policy.RequireNoReferrerOnLinks(true)
 	return policy.SanitizeBytes(rendered.Bytes()), nil
+}
+
+var (
+	readerLinkedInlineImage = regexp.MustCompile(`(?s)\[\s*!\[[^\]]*\]\([^\n)]*\)\s*\]\([^\n)]*\)`)
+	readerInlineImage       = regexp.MustCompile(`!\[[^\]]*\]\([^\n)]*\)`)
+	readerLinkedRefImage    = regexp.MustCompile(`(?s)\[\s*!\[[^\]]*\]\[[^\]]*\]\s*\]\([^\n)]*\)`)
+	readerRefImage          = regexp.MustCompile(`!\[[^\]]*\]\[[^\]]*\]`)
+)
+
+// Reader never embeds source-owned images in article HTML. Remove their
+// Markdown forms before rendering so a multiline linked image cannot leave
+// orphan "[" and "](...)" paragraphs after the sanitizer drops <img>.
+func stripReaderMarkdownImages(source string) string {
+	withoutLinked := readerLinkedInlineImage.ReplaceAllString(source, "")
+	withoutLinked = readerLinkedRefImage.ReplaceAllString(withoutLinked, "")
+	withoutImages := readerInlineImage.ReplaceAllString(withoutLinked, "")
+	return readerRefImage.ReplaceAllString(withoutImages, "")
 }
 
 func (s *ReaderResourceService) OpenMedia(ctx context.Context, fragmentID, revisionID, variantID string) (ReaderMediaResource, error) {

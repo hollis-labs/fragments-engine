@@ -54,6 +54,30 @@ func TestReaderArticleKeepsMarkdownCanonicalAndSanitizesRenderedHTML(t *testing.
 	}
 }
 
+func TestReaderArticleStripsMarkdownImagesWithoutOrphanMarkup(t *testing.T) {
+	content := "Before\n\n[\n\n![profile picture](https://cdn.example/avatar.jpg)\n\n](https://social.example/profile)\n\n" +
+		"After [useful link](https://example.com/read) and ![diagram](https://cdn.example/diagram.png)."
+	st, fragment := readerArticleFixture(t, content)
+	defer st.Close()
+	svc := NewReaderResourceService(repository.NewReaderResourceRepository(st.DB), readerBlobStore(t), t.TempDir())
+
+	resource, err := svc.Article(context.Background(), fragment.ID, fragment.Revision.ID, ArticleHTML)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(resource.Body)
+	for _, forbidden := range []string{"<img", "cdn.example", "social.example", "<p>[</p>", "]("} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("sanitized article retained Markdown image debris %q: %s", forbidden, body)
+		}
+	}
+	if !strings.Contains(body, "<p>Before</p>") ||
+		!strings.Contains(body, `<a href="https://example.com/read"`) ||
+		!strings.Contains(body, "After") {
+		t.Fatalf("sanitized article lost readable content: %s", body)
+	}
+}
+
 func TestReaderArticleRejectsTamperedRevisionDigest(t *testing.T) {
 	st, fragment := readerArticleFixture(t, "trusted")
 	defer st.Close()
