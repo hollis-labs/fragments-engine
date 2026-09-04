@@ -3,6 +3,8 @@ import {
   acquisitionPresentation,
   boundedReaderText,
   enrichmentPresentation,
+  isReaderBodyBackedText,
+  readerPlainTextExcerpt,
   safeReaderSourceHref,
 } from './reader'
 import { readerItem } from '@/test/reader-fixture'
@@ -25,6 +27,25 @@ describe('Reader presentation boundaries', () => {
   it('bounds summaries by Unicode characters after normalizing whitespace', () => {
     expect(boundedReaderText('  one\n two  ', 20)).toBe('one two')
     expect(boundedReaderText('🙂🙂🙂🙂', 3)).toBe('🙂🙂…')
+  })
+
+  it('turns Markdown-shaped capture copy into a bounded inert excerpt without remote URLs', () => {
+    const markdown = `
+      # Join the conversation
+      [![profile picture](https://cdn.example/avatar.jpg)](https://social.example/profile)
+      Some **captured prose** with [a useful label](https://example.com/long/path),
+      a bare https://evil.example/tracker and <script>alert('no')</script>.
+    `
+
+    const excerpt = readerPlainTextExcerpt(markdown, 200)
+    expect(excerpt).toBe('Join the conversation Some captured prose with a useful label, a bare and .')
+    expect(excerpt).not.toMatch(/https?:|!\[|\]\(|<script|profile picture/i)
+  })
+
+  it('only identifies exact nonempty normalized body copies as body-backed decks', () => {
+    expect(isReaderBodyBackedText('Same\n body', ' Same body ')).toBe(true)
+    expect(isReaderBodyBackedText('An enriched summary', 'A longer captured body')).toBe(false)
+    expect(isReaderBodyBackedText('', '')).toBe(false)
   })
 
   it('keeps pending and partial enrichment/media states distinct', () => {

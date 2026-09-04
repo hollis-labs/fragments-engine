@@ -14,8 +14,9 @@ import { ReaderDetailHeader } from '@/components/reader/ReaderDetailHeader'
 import { ReaderContentRenderer } from '@/features/reader'
 import { useApi } from '@/hooks/useApi'
 import {
-  boundedReaderText,
+  isReaderBodyBackedText,
   readingStateLabel,
+  readerPlainTextExcerpt,
   safeReaderSourceHref,
   sourceHost,
   sourceLabel,
@@ -43,6 +44,10 @@ function detailErrorMessage(error: unknown): string {
 
 function isReaderListPath(value: unknown): value is string {
   return typeof value === 'string' && /^\/reader(?:\?|$)/.test(value)
+}
+
+function shortRevision(value: string): string {
+  return value.length > 16 ? `${value.slice(0, 12)}…` : value
 }
 
 export default function ReaderDetailPage({
@@ -217,57 +222,12 @@ export default function ReaderDetailPage({
           />
         </div>
       ) : (
-        <div
-          className="mx-auto flex w-full max-w-[76rem] flex-col gap-7 px-4 py-6 sm:px-6 sm:py-8"
-          data-reader-revision-pin
-          data-fragment-id={pin.fragmentId}
-          data-fragment-revision-id={pin.fragmentRevisionId}
+        <ReaderDetailBody
+          item={item}
+          pin={pin}
+          sourceHref={sourceHref}
+          renderContent={renderContent}
         >
-          <section className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_16rem] lg:items-start">
-            <div className="min-w-0">
-              <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[12px] text-text-subtle">
-                <span className="font-medium text-text-soft">{sourceLabel(item)}</span>
-                {sourceHost(item) && <span>{sourceHost(item)}</span>}
-                <span>{item.capture_count === 1 ? 'Captured once' : `Captured ${item.capture_count} times`}</span>
-                <span>Revision {item.fragment_revision_id}</span>
-              </div>
-              {item.display.byline?.value && (
-                <p className="mt-3 text-[13px] text-text-muted">By {item.display.byline.value}</p>
-              )}
-              <p className="mt-4 max-w-[70ch] text-[16px] leading-[1.65] text-text-muted">
-                {boundedReaderText(item.display.summary.value, 1200) || 'No summary is available yet.'}
-              </p>
-              {item.display.description?.value &&
-                item.display.description.value !== item.display.summary.value && (
-                  <p className="mt-3 max-w-[70ch] text-[14px] leading-[1.6] text-text-soft">
-                    {boundedReaderText(item.display.description.value, 1400)}
-                  </p>
-                )}
-              <p className="mt-3 text-[11px] text-text-subtle">
-                Title from {item.display.title.source}; summary from {item.display.summary.source}
-              </p>
-            </div>
-
-            {sourceHref && (
-              <a
-                href={sourceHref}
-                target="_blank"
-                rel="noreferrer"
-                className="inline-flex min-h-11 items-center justify-center gap-2 rounded-sm border border-border bg-panel-2/35 px-3 text-[13px] font-medium text-text-muted outline-none hover:bg-panel-hover hover:text-text focus-visible:ring-2 focus-visible:ring-ring lg:justify-start"
-              >
-                View original source
-                <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" />
-              </a>
-            )}
-          </section>
-
-          <ReaderStateSummary item={item} />
-
-          {renderContent ? (
-            renderContent(item, pin)
-          ) : (
-            <ReaderContentRenderer item={item} presentation="detail" />
-          )}
 
           {(item.tags.combined.length > 0 || item.annotations.length > 0 || item.curated_note) && (
             <section className="grid gap-7 border-t border-border-soft pt-6 lg:grid-cols-2">
@@ -289,7 +249,7 @@ export default function ReaderDetailPage({
                 <h2 className="text-[14px] font-semibold text-text">Capture context</h2>
                 {item.curated_note?.body_markdown ? (
                   <p className="mt-3 whitespace-pre-wrap text-[13px] leading-5 text-text-muted">
-                    {boundedReaderText(item.curated_note.body_markdown, 1000)}
+                    {readerPlainTextExcerpt(item.curated_note.body_markdown, 1000)}
                   </p>
                 ) : item.annotations.length > 0 ? (
                   <p className="mt-3 text-[13px] leading-5 text-text-muted">
@@ -303,8 +263,98 @@ export default function ReaderDetailPage({
               </div>
             </section>
           )}
-        </div>
+        </ReaderDetailBody>
       )}
     </DetailPageLayout>
+  )
+}
+
+function ReaderDetailBody({
+  item,
+  pin,
+  sourceHref,
+  renderContent,
+  children,
+}: {
+  item: ReaderItem
+  pin: ReaderRevisionPin
+  sourceHref?: string
+  renderContent?: ReaderDetailPageProps['renderContent']
+  children?: ReactNode
+}) {
+  const body = item.article.preview_markdown
+  const summaryIsBody = isReaderBodyBackedText(item.display.summary.value, body)
+  const description = item.display.description?.value ?? ''
+  const descriptionIsDuplicate =
+    isReaderBodyBackedText(description, body) ||
+    isReaderBodyBackedText(description, item.display.summary.value)
+  const summary = summaryIsBody ? '' : readerPlainTextExcerpt(item.display.summary.value, 1200)
+  const distinctDescription = descriptionIsDuplicate
+    ? ''
+    : readerPlainTextExcerpt(description, 1400)
+
+  return (
+    <div
+      className="mx-auto flex w-full max-w-[76rem] flex-col gap-7 px-4 py-6 sm:px-6 sm:py-8"
+      data-reader-revision-pin
+      data-fragment-id={pin.fragmentId}
+      data-fragment-revision-id={pin.fragmentRevisionId}
+    >
+      <section className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_16rem] lg:items-start">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[12px] text-text-subtle">
+            <span className="font-medium text-text-soft">{sourceLabel(item)}</span>
+            {sourceHost(item) && <span>{sourceHost(item)}</span>}
+            <span>{item.capture_count === 1 ? 'Captured once' : `Captured ${item.capture_count} times`}</span>
+            <span
+              title={`Revision ${item.fragment_revision_id}`}
+              aria-label={`Revision ${item.fragment_revision_id}`}
+            >
+              Revision {shortRevision(item.fragment_revision_id)}
+            </span>
+          </div>
+          {item.display.byline?.value && (
+            <p className="mt-3 text-[13px] text-text-muted">By {item.display.byline.value}</p>
+          )}
+          {summary && (
+            <p className="mt-4 max-w-[70ch] text-[16px] leading-[1.65] text-text-muted">
+              {summary}
+            </p>
+          )}
+          {distinctDescription && (
+            <p className="mt-3 max-w-[70ch] text-[14px] leading-[1.6] text-text-soft">
+              {distinctDescription}
+            </p>
+          )}
+          <p className="mt-3 text-[11px] text-text-subtle">
+            Title from {item.display.title.source}; summary from {item.display.summary.source}
+          </p>
+        </div>
+
+        {sourceHref && (
+          <a
+            href={sourceHref}
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex min-h-11 items-center justify-center gap-2 rounded-sm border border-border bg-panel-2/35 px-3 text-[13px] font-medium text-text-muted outline-none hover:bg-panel-hover hover:text-text focus-visible:ring-2 focus-visible:ring-ring lg:justify-start"
+          >
+            View original source
+            <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" />
+          </a>
+        )}
+      </section>
+
+      <div className="w-full" data-reader-reading-stage>
+        {renderContent ? (
+          renderContent(item, pin)
+        ) : (
+          <ReaderContentRenderer item={item} presentation="detail" />
+        )}
+      </div>
+
+      <ReaderStateSummary item={item} />
+
+      {children}
+    </div>
   )
 }

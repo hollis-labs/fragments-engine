@@ -10,7 +10,7 @@ import { availableImageVariant, readerFixture } from './fixtures'
 afterEach(cleanup)
 
 describe('ArticleRenderer', () => {
-  it('renders preview Markdown as bounded text instead of executable HTML', () => {
+  it('renders preview Markdown as bounded plain text instead of executable HTML', () => {
     const item = readerFixture({
       article: {
         preview_markdown: '<img src=x onerror="globalThis.pwned=true"><script>alert(1)</script>',
@@ -20,8 +20,9 @@ describe('ArticleRenderer', () => {
     const { container } = render(<ArticleRenderer item={item} presentation="card" />)
     expect(container.querySelector('img')).toBeNull()
     expect(container.querySelector('script')).toBeNull()
-    expect(screen.getByText(/<script>alert\(1\)<\/script>/)).toBeTruthy()
-    expect(container.querySelector('p')?.className).toContain('line-clamp-6')
+    expect(container.textContent).not.toContain('alert(1)')
+    expect(container.textContent).not.toContain('onerror')
+    expect(container.querySelector('p')?.className).toContain('line-clamp-5')
   })
 
   it('loads full content only through an empty-sandbox server article resource', () => {
@@ -56,7 +57,8 @@ describe('fallback renderers', () => {
     })
     const { container } = render(<UnknownRenderer item={item} presentation="card" />)
     expect(container.querySelector('iframe')).toBeNull()
-    expect(screen.getByText(/<iframe/)).toBeTruthy()
+    expect(screen.getByText('This item has no readable preview.')).toBeTruthy()
+    expect(container.textContent).not.toContain('evil.example')
   })
 
   it.each([

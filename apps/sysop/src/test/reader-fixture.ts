@@ -69,3 +69,65 @@ export function readerList(scope: ReaderScope, items: ReaderItem[] = [readerItem
     items,
   }
 }
+
+export const legacyMarkdownBody = `
+# Join the conversation
+
+[![profile picture](https://cdn.example/avatar.jpg)](https://social.example/profile)
+
+Some **captured prose** worth reading, followed by [a source link](https://example.com/long/path).
+`
+
+/** Mirrors legacy manual-intake rows that reference a page but captured no visual bytes. */
+export function legacyArticleItem(overrides: Partial<ReaderItem> = {}): ReaderItem {
+  const fragmentId =
+    overrides.fragment_id ?? '419415237fc49e241806969712196d36239b2da2c7ea8b0f5f7aac0ebec5e184'
+  const revisionId = overrides.fragment_revision_id ?? 'legacy-revision-reader'
+  return readerItem({
+    fragment_id: fragmentId,
+    fragment_revision_id: revisionId,
+    source: {
+      provider: 'manual_intake',
+      source_item_key: `manual:${fragmentId}`,
+      segment_key: 'root',
+      canonical_url: 'https://example.com/legacy/source',
+    },
+    display: {
+      title: { value: 'Legacy captured article', source: 'source' },
+      description: { value: legacyMarkdownBody, source: 'source' },
+      summary: { value: legacyMarkdownBody, source: 'deterministic' },
+    },
+    article: {
+      preview_markdown: legacyMarkdownBody,
+      full_content_available: true,
+      full_content_href: `/v1/reader/items/${fragmentId}/content?revision_id=${revisionId}`,
+    },
+    media: [
+      {
+        attachment: {
+          attachment_id: 'legacy-page-reference',
+          fragment_revision_id: revisionId,
+          media_asset_id: 'legacy-page-asset',
+          role: 'other',
+          position: 0,
+        },
+        media_asset_id: 'legacy-page-asset',
+        kind: 'other',
+        variants: [
+          {
+            asset_variant_id: 'legacy-page-original',
+            kind: 'original',
+            custody: 'reference',
+            acquisition_state: 'reference_only',
+            source_url: 'https://example.com/legacy/source',
+          },
+        ],
+      },
+    ],
+    operations: {
+      ...readerItem().operations,
+      acquisition: { pending: 0, available: 0, reference_only: 1, failed: 0 },
+    },
+    ...overrides,
+  })
+}

@@ -3,6 +3,7 @@ import { ChevronLeft, ChevronRight, Expand } from 'lucide-react'
 import { Button, cn } from '@hollis-labs/sysop-ui'
 
 import { readerControlClass, stopReaderNavigation } from './interaction'
+import { ReaderCardVisual } from './card-visual'
 import {
   availableVariantHref,
   imageVariants,
@@ -77,6 +78,8 @@ export function GalleryRenderer({ item, presentation, className }: ReaderRendere
   const [open, setOpen] = useState(false)
   const triggerRef = useRef<HTMLButtonElement>(null)
 
+  if (presentation === 'card') return <ReaderCardVisual item={item} className={className} />
+
   if (slots.length === 0) {
     return (
       <ResourceStatePanel
@@ -126,9 +129,7 @@ export function GalleryRenderer({ item, presentation, className }: ReaderRendere
           <button
             ref={triggerRef}
             type="button"
-            className={`${readerControlClass} group relative flex w-full items-center justify-center overflow-hidden rounded-none text-left ${
-              presentation === 'card' ? 'aspect-[4/3]' : 'min-h-72 max-h-[64vh]'
-            }`}
+            className={`${readerControlClass} group relative flex min-h-72 max-h-[64vh] w-full items-center justify-center overflow-hidden rounded-none text-left`}
             onClick={(event) => {
               stopReaderNavigation(event)
               setOpen(true)
@@ -153,7 +154,7 @@ export function GalleryRenderer({ item, presentation, className }: ReaderRendere
         ) : (
           <ResourceStatePanel
             state={currentState === 'available' ? 'unavailable' : currentState}
-            className={presentation === 'card' ? 'm-3 min-h-40' : 'm-4 min-h-56'}
+            className="m-4 min-h-56"
             label={`${currentKind} ${boundedSelected + 1} is ${stateLabel(currentState).toLowerCase()}`}
           />
         )}

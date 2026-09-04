@@ -1,14 +1,18 @@
 import { cn } from '@hollis-labs/sysop-ui'
+import { readerPlainTextExcerpt } from '@/lib/reader'
 
 import { serverResourceHref } from './media'
 import type { ReaderRendererProps } from './types'
 
-function articlePreview(item: ReaderRendererProps['item']): string {
-  return item.article.preview_markdown.trim() || item.display.summary.value.trim()
+function articlePreview(item: ReaderRendererProps['item'], limit: number): string {
+  return readerPlainTextExcerpt(
+    item.article.preview_markdown.trim() || item.display.summary.value.trim(),
+    limit,
+  )
 }
 
 export function ArticleRenderer({ item, presentation, className }: ReaderRendererProps) {
-  const preview = articlePreview(item)
+  const preview = articlePreview(item, presentation === 'card' ? 480 : 2400)
   const contentHref = item.article.full_content_available
     ? serverResourceHref(item.article.full_content_href, 'article')
     : undefined
@@ -20,7 +24,7 @@ export function ArticleRenderer({ item, presentation, className }: ReaderRendere
         data-reader-renderer="article"
         data-reader-presentation="card"
       >
-        <p className="line-clamp-6 whitespace-pre-wrap text-sm leading-6 text-text-muted">
+        <p className="line-clamp-5 text-sm leading-6 text-text-muted">
           {preview || 'No article preview was captured.'}
         </p>
         {item.article.full_content_available && (
@@ -35,11 +39,11 @@ export function ArticleRenderer({ item, presentation, className }: ReaderRendere
   if (!contentHref) {
     return (
       <section
-        className={cn('mx-auto w-full max-w-[72ch]', className)}
+        className={cn('mx-auto w-full max-w-[78ch]', className)}
         data-reader-renderer="article"
         data-reader-presentation="detail"
       >
-        <p className="whitespace-pre-wrap text-base leading-7 text-text-muted">
+        <p className="text-base leading-7 text-text-muted">
           {preview || 'No readable article content was captured.'}
         </p>
         {item.article.full_content_available && (
@@ -53,7 +57,7 @@ export function ArticleRenderer({ item, presentation, className }: ReaderRendere
 
   return (
     <section
-      className={cn('w-full', className)}
+      className={cn('mx-auto w-full max-w-[78ch]', className)}
       data-reader-renderer="article"
       data-reader-presentation="detail"
     >

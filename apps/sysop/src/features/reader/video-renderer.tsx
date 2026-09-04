@@ -3,6 +3,7 @@ import { Expand, FileText, Play } from 'lucide-react'
 import { Button, cn } from '@hollis-labs/sysop-ui'
 
 import { ArticleRenderer } from './article-renderer'
+import { ReaderCardVisual } from './card-visual'
 import { readerControlClass, stopReaderNavigation } from './interaction'
 import {
   availableVariantHref,
@@ -96,6 +97,8 @@ export function VideoRenderer({ item, presentation, className }: ReaderRendererP
   const [expanded, setExpanded] = useState(false)
   const expandRef = useRef<HTMLButtonElement>(null)
   const title = item.display.title.value || 'Untitled video'
+
+  if (presentation === 'card') return <ReaderCardVisual item={item} className={className} />
 
   return (
     <div
@@ -192,18 +195,10 @@ export function VideoRenderer({ item, presentation, className }: ReaderRendererP
         </aside>
       </div>
 
-      {presentation === 'card' ? (
-        item.article.preview_markdown.trim() && (
-          <p className="mt-4 line-clamp-3 whitespace-pre-wrap border-t border-border pt-3 text-sm leading-6 text-text-muted">
-            {item.article.preview_markdown}
-          </p>
-        )
-      ) : (
-        <div className="mt-5 border-t border-border pt-5">
-          <h3 className="mb-3 text-sm font-semibold leading-6 text-text">Captured page</h3>
-          <ArticleRenderer item={item} presentation="detail" />
-        </div>
-      )}
+      <div className="mt-5 border-t border-border pt-5">
+        <h3 className="mb-3 text-sm font-semibold leading-6 text-text">Captured page</h3>
+        <ArticleRenderer item={item} presentation="detail" />
+      </div>
 
       {embedURL && (
         <MediaDialog

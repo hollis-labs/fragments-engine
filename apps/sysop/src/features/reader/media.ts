@@ -9,6 +9,10 @@ export type ReaderResourceFamily = 'article' | 'media'
 
 export type ResourceState = AcquisitionState | 'unavailable'
 
+export function isReaderVisualRenderer(renderer: string): boolean {
+  return renderer === 'image' || renderer === 'gallery' || renderer === 'video'
+}
+
 const ENCODED_PATH_SEPARATOR = /%(?:2f|5c)/i
 const YOUTUBE_ITEM_ID = /^[A-Za-z0-9_-]{11}$/
 const ARTICLE_RESOURCE_PATH = /^\/v1\/reader\/items\/[^/]+\/content$/

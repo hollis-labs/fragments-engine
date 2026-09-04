@@ -2,11 +2,13 @@ import './reader-renderers.css'
 
 export { ArticleRenderer } from './article-renderer'
 export { AudioRenderer, DocumentRenderer, TextRenderer, UnknownRenderer } from './fallback-renderer'
+export { ReaderCardVisual } from './card-visual'
 export { GalleryRenderer } from './gallery-renderer'
 export { ImageRenderer } from './image-renderer'
 export {
   availableVariantHref,
   imageVariants,
+  isReaderVisualRenderer,
   mediaState,
   orderedMedia,
   serverResourceHref,

@@ -4,7 +4,7 @@ import { Button, EmptyState, ListPageLayout, PageHeader, Skeleton } from '@holli
 import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import { ReaderCard } from '@/components/reader/ReaderCard'
 import { ReaderActions } from '@/components/reader/ReaderActions'
-import { ReaderContentRenderer } from '@/features/reader'
+import { isReaderVisualRenderer, ReaderCardVisual } from '@/features/reader'
 import { useApi } from '@/hooks/useApi'
 import { isReaderScope, READER_SCOPES, readerScopeLabel } from '@/lib/reader'
 import type { ReaderItem, ReaderScope } from '@/lib/types'
@@ -184,7 +184,9 @@ export default function ReaderPage() {
               key={item.fragment_id}
               item={item}
               onOpen={openItem}
-              mediaSlot={<ReaderContentRenderer item={item} presentation="card" />}
+              mediaSlot={
+                isReaderVisualRenderer(item.renderer) ? <ReaderCardVisual item={item} /> : undefined
+              }
               actionSlot={
                 item.actions.length > 0 ? (
                   <ReaderActions

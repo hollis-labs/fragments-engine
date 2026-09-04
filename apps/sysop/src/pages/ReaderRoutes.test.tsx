@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { BrowserRouter, MemoryRouter, Route, Routes } from 'react-router-dom'
 import { AppShell } from '@/App'
@@ -6,7 +6,13 @@ import { ApiProvider } from '@/contexts/ApiContext'
 import { apiClient, type ApiClient } from '@/lib/api'
 import type { ReaderItemList, ReaderScope } from '@/lib/types'
 import ReaderDetailPage from './ReaderDetailPage'
-import { readerItem, readerList } from '@/test/reader-fixture'
+import { imageFixture, mixedGalleryFixture, videoFixture } from '@/features/reader/fixtures'
+import {
+  legacyArticleItem,
+  legacyMarkdownBody,
+  readerItem,
+  readerList,
+} from '@/test/reader-fixture'
 
 function clientWithReader(overrides: Partial<ApiClient> = {}): ApiClient {
   return {
@@ -261,6 +267,122 @@ describe('Reader routes', () => {
     )
 
     expect(await screen.findByRole('button', { name: 'Open Reader actions' })).not.toBeNull()
+  })
+
+  it('shows one inert excerpt and the truthful no-visual state for a legacy article card', async () => {
+    const item = legacyArticleItem()
+    const { container } = renderMemoryShell(
+      '/reader?scope=inbox',
+      clientWithReader({ fetchReaderItems: async () => readerList('inbox', [item]) }),
+    )
+
+    const card = await screen.findByRole('link', { name: 'Open Legacy captured article' })
+    expect(within(card).getAllByText(/Some captured prose/)).toHaveLength(1)
+    expect(within(card).getByText('No captured visual')).not.toBeNull()
+    expect(within(card).getByText('Source reference only')).not.toBeNull()
+    expect(card.textContent).not.toMatch(/profile picture|https?:|!\[|\]\(/i)
+    expect(container.querySelector('[data-reader-card-visual]')).toBeNull()
+  })
+
+  it('uses one bounded static authorized visual for rich image, gallery, and video cards', async () => {
+    const items = [
+      readerItem({
+        fragment_id: 'rich-image',
+        renderer: 'image',
+        display: { ...readerItem().display, title: { value: 'Rich image', source: 'source' } },
+        media: imageFixture.media,
+      }),
+      readerItem({
+        fragment_id: 'rich-gallery',
+        renderer: 'gallery',
+        display: { ...readerItem().display, title: { value: 'Rich gallery', source: 'source' } },
+        media: mixedGalleryFixture.media,
+      }),
+      readerItem({
+        fragment_id: 'rich-video',
+        renderer: 'video',
+        display: { ...readerItem().display, title: { value: 'Rich video', source: 'source' } },
+        media: videoFixture.media,
+        playback: {
+          kind: 'provider_embed',
+          provider: 'youtube',
+          provider_item_id: '3RmtNXqnreI',
+        },
+      }),
+    ]
+    const { container } = renderMemoryShell(
+      '/reader?scope=inbox',
+      clientWithReader({ fetchReaderItems: async () => readerList('inbox', items) }),
+    )
+
+    await screen.findByRole('link', { name: 'Open Rich video' })
+    for (const item of items) {
+      const card = container.querySelector(`[data-fragment-id="${item.fragment_id}"]`)
+      expect(card).not.toBeNull()
+      const mediaSlot = card!.querySelector('[data-reader-media-slot]')
+      expect(mediaSlot?.querySelectorAll('img')).toHaveLength(1)
+      expect(mediaSlot?.querySelector('[data-reader-card-visual]')?.className).toContain('max-h-40')
+      expect(mediaSlot?.querySelector('button')).toBeNull()
+      expect(mediaSlot?.querySelector('iframe')).toBeNull()
+      expect(mediaSlot?.querySelector('[role="dialog"]')).toBeNull()
+      expect(mediaSlot?.querySelector('[data-transcript-state]')).toBeNull()
+    }
+  })
+
+  it('suppresses a body-backed Markdown deck and puts the reading stage before operations', async () => {
+    const revisionId = '6a2041fe4d0ae70b29f41d6ed8338ed86fe593cbf794025a2a95ff8cf29f35b0'
+    const item = legacyArticleItem({
+      fragment_id: 'legacy-detail',
+      fragment_revision_id: revisionId,
+      display: {
+        ...legacyArticleItem().display,
+        summary: { value: legacyMarkdownBody, source: 'deterministic' },
+        description: { value: legacyMarkdownBody, source: 'source' },
+      },
+      article: {
+        preview_markdown: legacyMarkdownBody,
+        full_content_available: true,
+        full_content_href: `/v1/reader/items/legacy-detail/content?revision_id=${revisionId}`,
+      },
+    })
+    const { container } = render(
+      <ApiProvider client={clientWithReader({ fetchReaderItem: async () => item })}>
+        <MemoryRouter initialEntries={['/reader/legacy-detail']}>
+          <Routes>
+            <Route
+              path="/reader/:fragmentId"
+              element={<ReaderDetailPage renderContent={() => <div>Sanitized article body</div>} />}
+            />
+          </Routes>
+        </MemoryRouter>
+      </ApiProvider>,
+    )
+
+    await screen.findByText('Sanitized article body')
+    expect(screen.queryByText(/Some captured prose/)).toBeNull()
+    const revision = screen.getByLabelText(`Revision ${revisionId}`)
+    expect(revision.textContent).toBe('Revision 6a2041fe4d0a…')
+    expect(revision.getAttribute('title')).toBe(`Revision ${revisionId}`)
+    const readingStage = container.querySelector('[data-reader-reading-stage]')!
+    const operations = screen.getByLabelText('Fragment processing states')
+    expect(readingStage.compareDocumentPosition(operations) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0)
+  })
+
+  it('preserves a genuinely distinct enriched summary and provider description on detail', async () => {
+    const item = legacyArticleItem({
+      display: {
+        ...legacyArticleItem().display,
+        summary: { value: 'A genuinely enriched synthesis.', source: 'model' },
+        description: { value: 'A distinct provider description.', source: 'provider' },
+      },
+    })
+    renderMemoryShell(
+      `/reader/${item.fragment_id}`,
+      clientWithReader({ fetchReaderItem: async () => item }),
+    )
+
+    expect(await screen.findByText('A genuinely enriched synthesis.')).not.toBeNull()
+    expect(screen.getByText('A distinct provider description.')).not.toBeNull()
   })
 
   it('uses the real action tray by default on detail while retaining the injected seam', async () => {

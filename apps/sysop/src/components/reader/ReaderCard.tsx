@@ -5,8 +5,8 @@ import { ReaderProvenanceSpine } from './ReaderProvenanceSpine'
 import { ReaderQuickActionSeam } from './ReaderQuickActionSeam'
 import { ReaderStateSummary } from './ReaderStateSummary'
 import {
-  boundedReaderText,
   readingStateLabel,
+  readerPlainTextExcerpt,
   safeReaderSourceHref,
   sourceHost,
   sourceLabel,
@@ -36,7 +36,7 @@ export function ReaderCard({ item, onOpen, mediaSlot, actionSlot }: ReaderCardPr
   const source = sourceLabel(item)
   const host = sourceHost(item)
   const published = publishedLabel(item.display.published_at)
-  const summary = boundedReaderText(item.display.summary.value)
+  const summary = readerPlainTextExcerpt(item.display.summary.value)
   const sourceHref = safeReaderSourceHref(item)
 
   function openFromPointer(event: React.MouseEvent<HTMLElement>) {
@@ -66,7 +66,7 @@ export function ReaderCard({ item, onOpen, mediaSlot, actionSlot }: ReaderCardPr
     >
       <ReaderProvenanceSpine item={item} />
 
-      <div className="flex flex-col gap-5 lg:flex-row lg:items-start">
+      <div className="grid min-w-0 gap-5 lg:grid-cols-[minmax(0,1fr)_16rem] lg:items-start">
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[12px] leading-4 text-text-subtle">
             <span className="font-medium text-text-soft">{source}</span>
@@ -102,11 +102,13 @@ export function ReaderCard({ item, onOpen, mediaSlot, actionSlot }: ReaderCardPr
           )}
         </div>
 
-        <div className="flex shrink-0 flex-wrap items-start gap-2 lg:max-w-[17rem] lg:justify-end">
-          <div data-reader-media-slot data-reader-nav-exclude>
+        <div className="flex min-w-0 flex-col items-stretch gap-2 overflow-hidden">
+          <div className="min-w-0 overflow-hidden" data-reader-media-slot data-reader-nav-exclude>
             {mediaSlot ?? <ReaderCardMediaSeam item={item} />}
           </div>
-          <ReaderQuickActionSeam>{actionSlot}</ReaderQuickActionSeam>
+          <div className="flex justify-end">
+            <ReaderQuickActionSeam>{actionSlot}</ReaderQuickActionSeam>
+          </div>
         </div>
       </div>
 

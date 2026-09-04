@@ -11,8 +11,6 @@ afterEach(cleanup)
 describe('ReaderContentRenderer', () => {
   it.each([
     ['article', readerFixture({ renderer: 'article' }), 'article'],
-    ['image', imageFixture, 'image'],
-    ['video', videoFixture, 'video'],
     ['audio', readerFixture({ renderer: 'audio' }), 'audio'],
     ['document', readerFixture({ renderer: 'document' }), 'document'],
     ['text', readerFixture({ renderer: 'text' }), 'article'],
@@ -35,9 +33,15 @@ describe('ReaderContentRenderer', () => {
   it.each([
     ['image', imageFixture],
     ['gallery', mixedGalleryFixture],
-  ])('keeps %s cards bounded without loading the full article', (_kind, item) => {
-    render(<ReaderContentRenderer item={item} presentation="card" />)
+    ['video', videoFixture],
+  ])('keeps %s cards static and bounded without loading detail interactions', (_kind, item) => {
+    const { container } = render(<ReaderContentRenderer item={item} presentation="card" />)
+    expect(container.querySelector('[data-reader-card-visual]')).toBeTruthy()
     expect(screen.queryByTitle(`Article: ${item.display.title.value}`)).toBeNull()
+    expect(container.querySelector('button')).toBeNull()
+    expect(container.querySelector('iframe')).toBeNull()
+    expect(container.querySelector('[role="dialog"]')).toBeNull()
+    expect(container.querySelector('[data-transcript-state]')).toBeNull()
   })
 
   it('does not append an empty article section to pure media detail', () => {

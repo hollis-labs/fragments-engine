@@ -14,7 +14,7 @@ describe('ImageRenderer', () => {
     const parentNavigation = vi.fn()
     render(
       <div onClick={parentNavigation}>
-        <ImageRenderer item={imageFixture} presentation="card" />
+        <ImageRenderer item={imageFixture} presentation="detail" />
       </div>,
     )
     const trigger = screen.getByRole('button', { name: /view larger image/i })
@@ -45,7 +45,7 @@ describe('ImageRenderer', () => {
         }],
       }],
     }
-    const { container } = render(<ImageRenderer item={item} presentation="card" />)
+    const { container } = render(<ImageRenderer item={item} presentation="detail" />)
     expect(screen.getByText('Image is not available')).toBeTruthy()
     expect(container.innerHTML).not.toContain('evil.example')
   })

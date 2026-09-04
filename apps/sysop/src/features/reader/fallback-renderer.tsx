@@ -1,5 +1,6 @@
 import { FileAudio, FileQuestion, FileText } from 'lucide-react'
 import { cn } from '@hollis-labs/sysop-ui'
+import { readerPlainTextExcerpt } from '@/lib/reader'
 
 import { ArticleRenderer } from './article-renderer'
 import { readerControlClass, stopReaderNavigation } from './interaction'
@@ -86,7 +87,10 @@ export function DocumentRenderer(props: ReaderRendererProps) {
 }
 
 export function UnknownRenderer({ item, presentation, className }: ReaderRendererProps) {
-  const text = item.article.preview_markdown.trim() || item.display.summary.value.trim()
+  const text = readerPlainTextExcerpt(
+    item.article.preview_markdown.trim() || item.display.summary.value.trim(),
+    presentation === 'card' ? 480 : 2400,
+  )
   return (
     <section
       className={cn('rounded-md border border-border bg-panel-2/30 p-4', className)}
@@ -99,7 +103,7 @@ export function UnknownRenderer({ item, presentation, className }: ReaderRendere
           <h3 className="text-sm font-semibold leading-6 text-text">Readable text</h3>
           <p
             className={cn(
-              'whitespace-pre-wrap text-sm leading-6 text-text-muted',
+              'text-sm leading-6 text-text-muted',
               presentation === 'card' && 'line-clamp-5',
             )}
           >

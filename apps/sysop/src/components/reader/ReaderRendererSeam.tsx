@@ -46,6 +46,12 @@ function RendererIcon({ renderer, className }: { renderer: ReaderRenderer; class
 
 export function ReaderCardMediaSeam({ item }: { item: ReaderItem }) {
   const mediaState = acquisitionPresentation(item.operations.acquisition)
+  const legacySourceReference =
+    (item.renderer === 'article' || item.renderer === 'text' || item.renderer === 'unknown') &&
+    !item.media.some((media) => media.kind === 'image' || media.kind === 'video') &&
+    item.media.some((media) =>
+      media.variants.some((variant) => variant.acquisition_state === 'reference_only'),
+    )
   return (
     <div
       className="flex min-w-[8.5rem] items-center gap-2 rounded-sm border border-border-soft bg-panel-2/35 px-3 py-2"
@@ -55,9 +61,11 @@ export function ReaderCardMediaSeam({ item }: { item: ReaderItem }) {
       <RendererIcon renderer={item.renderer} className="h-4 w-4 shrink-0 text-text-soft" />
       <div className="min-w-0">
         <p className="text-[12px] font-medium leading-4 text-text-muted">
-          {RENDERER_LABELS[item.renderer]}
+          {legacySourceReference ? 'No captured visual' : RENDERER_LABELS[item.renderer]}
         </p>
-        <p className="truncate text-[11px] leading-4 text-text-subtle">{mediaState.value}</p>
+        <p className="truncate text-[11px] leading-4 text-text-subtle">
+          {legacySourceReference ? 'Source reference only' : mediaState.value}
+        </p>
       </div>
     </div>
   )

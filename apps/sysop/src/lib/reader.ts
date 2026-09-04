@@ -23,6 +23,39 @@ export function boundedReaderText(value: string, limit = 360): string {
   return `${runes.slice(0, Math.max(0, limit - 1)).join('').trimEnd()}…`
 }
 
+/**
+ * Turns captured Markdown-shaped copy into an inert excerpt. This deliberately
+ * keeps only readable labels: resource URLs and presentation syntax are not
+ * useful in a compact Reader card and must never become remote media requests.
+ */
+export function readerPlainTextExcerpt(value: string, limit = 360): string {
+  const plain = value
+    .replace(/<(script|style)\b[^>]*>[\s\S]*?<\/\1\s*>/gi, ' ')
+    .replace(/^\s*\[[^\]]+\]:\s*\S+.*$/gm, ' ')
+    .replace(/!\[[^\]]*\]\([^\n)]*\)/g, ' ')
+    .replace(/!\[[^\]]*\]\[[^\]]*\]/g, ' ')
+    .replace(/\[([^\]]+)\]\([^\n)]*\)/g, '$1')
+    .replace(/\[([^\]]+)\]\[[^\]]*\]/g, '$1')
+    .replace(/<https?:\/\/[^>]+>/gi, ' ')
+    .replace(/(?:https?:\/\/|www\.)[^\s<>"']+/gi, ' ')
+    .replace(/<[^>]*>/g, ' ')
+    .replace(/^\s*(?:#{1,6}|>|[-+*])\s+/gm, '')
+    .replace(/^\s*\d+[.)]\s+/gm, '')
+    .replace(/[*_~`]+/g, '')
+    .replaceAll('[', '')
+    .replaceAll(']', '')
+    .replace(/\(\s*\)/g, ' ')
+
+  return boundedReaderText(plain, limit)
+}
+
+/** Exact normalized equality is the conservative proof that a deck repeats the body. */
+export function isReaderBodyBackedText(value: string, body: string): boolean {
+  const normalizedValue = value.replace(/\s+/g, ' ').trim()
+  const normalizedBody = body.replace(/\s+/g, ' ').trim()
+  return normalizedValue !== '' && normalizedValue === normalizedBody
+}
+
 export function sourceLabel(item: ReaderItem): string {
   const provider = item.source.provider.replaceAll('_', ' ').trim()
   return provider ? provider[0].toUpperCase() + provider.slice(1) : 'Local source'

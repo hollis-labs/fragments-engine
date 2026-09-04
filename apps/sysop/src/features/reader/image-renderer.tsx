@@ -3,6 +3,7 @@ import { Expand } from 'lucide-react'
 import { cn } from '@hollis-labs/sysop-ui'
 
 import { readerControlClass, stopReaderNavigation } from './interaction'
+import { ReaderCardVisual } from './card-visual'
 import { availableVariantHref, imageVariants, mediaState } from './media'
 import { MediaDialog } from './media-dialog'
 import { ResourceStatePanel } from './resource-state'
@@ -20,6 +21,8 @@ export function ImageRenderer({ item, presentation, className }: ReaderRendererP
   const media = item.media.find((candidate) => candidate.kind === 'image')
   const [open, setOpen] = useState(false)
   const triggerRef = useRef<HTMLButtonElement>(null)
+
+  if (presentation === 'card') return <ReaderCardVisual item={item} className={className} />
 
   if (!media) {
     return (
@@ -66,10 +69,7 @@ export function ImageRenderer({ item, presentation, className }: ReaderRendererP
         aria-label={`View larger image: ${alt}`}
       >
         <span
-          className={cn(
-            'flex w-full items-center justify-center overflow-hidden',
-            presentation === 'card' ? 'aspect-[4/3]' : 'max-h-[68vh] min-h-64',
-          )}
+          className="flex max-h-[68vh] min-h-64 w-full items-center justify-center overflow-hidden"
         >
           <img
             src={previewHref}

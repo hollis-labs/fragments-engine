@@ -13,7 +13,7 @@ describe('VideoRenderer', () => {
     const parentNavigation = vi.fn()
     const { container } = render(
       <div onClick={parentNavigation}>
-        <VideoRenderer item={videoFixture} presentation="card" />
+        <VideoRenderer item={videoFixture} presentation="detail" />
       </div>,
     )
 
@@ -38,7 +38,7 @@ describe('VideoRenderer', () => {
   })
 
   it('opens a large trusted player, handles Escape, and restores expand-button focus', async () => {
-    render(<VideoRenderer item={videoFixture} presentation="card" />)
+    render(<VideoRenderer item={videoFixture} presentation="detail" />)
     const expand = screen.getByRole('button', { name: 'Expand video' })
     fireEvent.click(expand)
     const dialog = await screen.findByRole('dialog')
@@ -65,7 +65,7 @@ describe('VideoRenderer', () => {
         variants: media.variants.filter((variant) => variant.kind !== 'poster'),
       })),
     }
-    const { container } = render(<VideoRenderer item={item} presentation="card" />)
+    const { container } = render(<VideoRenderer item={item} presentation="detail" />)
     expect(screen.queryByTitle(/YouTube video/)).toBeNull()
     expect(screen.queryByRole('button', { name: 'Load trusted YouTube player' })).toBeNull()
     expect(screen.getByText('Trusted playback unavailable')).toBeTruthy()
@@ -89,7 +89,7 @@ describe('VideoRenderer', () => {
           : media,
       ),
     }
-    render(<VideoRenderer item={item} presentation="card" />)
+    render(<VideoRenderer item={item} presentation="detail" />)
     expect(screen.getByText('This representation is still being acquired.')).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Load trusted YouTube player' })).toBeTruthy()
   })
@@ -122,7 +122,7 @@ describe('VideoRenderer', () => {
         ],
       }],
     }
-    const { container } = render(<VideoRenderer item={item} presentation="card" />)
+    const { container } = render(<VideoRenderer item={item} presentation="detail" />)
 
     expect(container.querySelector('[data-transcript-state]')?.getAttribute('data-transcript-state')).toBe(expected)
     expect(screen.queryByRole('link', { name: 'Open transcript' })).toBeNull()
