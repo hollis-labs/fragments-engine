@@ -87,6 +87,38 @@ unknown fields are dropped. Playback is produced separately from a closed,
 validated spec (currently an allowlisted YouTube provider ID or an FE variant
 reference), never from provider markup.
 
+## YouTube provider completion
+
+The YouTube adapter accepts only exact allowlisted watch, short-link, Shorts,
+live, and embed URL forms. Every provider ID, source key, submitted URL,
+canonical URL, and source locator present in one request must resolve to the
+same 11-character video ID. Canonical identity is an attributed `entities`
+observation; it strengthens provider/canonical fields but retains the existing
+source item key, so it does not silently rewrite a fragment or revision identity.
+
+Execution remains capability-scoped. Title, description, tags, and entities
+each return only the claimed fact. Channel facts use `youtube_channel_id` and
+`youtube_channel`. Chapters preserve provider order as repeated
+`youtube_chapter` entities with the stable value
+`<seconds to exactly three decimals><TAB><plain-text title>`. Chapter starts
+must be finite, non-negative, millisecond-precise, strictly increasing, unique
+by time, and before a known duration. This is a typed fact list, not encoded
+JSON or a provider response blob.
+
+The logical video asset is derived from the validated YouTube provider ID even
+when the caller has not yet created it. Original video is reference-only by
+default. Posters and transcripts use independent variants and default to
+mirror custody; a failure in one capability does not invalidate another.
+`ProviderMediaCompletion` creates or resolves the asset before the variant,
+hash-verifies managed bytes through `MediaService`, and intentionally leaves
+observation publication to the enrichment claim fence.
+
+An explicit `AssetAcquisitionService.Request` records an idempotent generic
+custody request against a media asset and variant kind. It creates at most one
+deterministic target when that kind is absent and advances only valid custody
+transitions; an eventual worker uses the ordinary media lifecycle to acquire
+bytes. The YouTube adapter never downloads original video automatically.
+
 ## Legacy compatibility
 
 Migration 015 seeds only immutable legacy revision title, description, and body

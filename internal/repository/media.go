@@ -103,6 +103,40 @@ func (r *MediaRepository) UpsertManifest(ctx context.Context, revisionID string,
 	return resolved, nil
 }
 
+// UpsertAssetVariants persists a logical asset and one or more independently
+// acquired representations without inventing an AttachmentRef. Provider
+// capabilities may complete in any order, including transcript before a
+// revision-scoped media placement is available.
+func (r *MediaRepository) UpsertAssetVariants(ctx context.Context, asset domain.MediaAsset, variants []domain.AssetVariant, now time.Time) (domain.MediaAsset, []domain.AssetVariant, error) {
+	tx, err := r.BeginImmediate(ctx, "upsert media asset variants")
+	if err != nil {
+		return domain.MediaAsset{}, nil, err
+	}
+	defer tx.Rollback()
+	asset, variants, err = UpsertMediaAssetVariants(ctx, tx.Conn(), asset, variants, now)
+	if err != nil {
+		return domain.MediaAsset{}, nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return domain.MediaAsset{}, nil, fmt.Errorf("commit media asset variants: %w", err)
+	}
+	return asset, variants, nil
+}
+
+// UpsertMediaAssetVariants is the caller-transaction form used by provider and
+// capture services that need to compose media with other durable work.
+func UpsertMediaAssetVariants(ctx context.Context, q MediaWriteConn, asset domain.MediaAsset, variants []domain.AssetVariant, now time.Time) (domain.MediaAsset, []domain.AssetVariant, error) {
+	resolved, err := upsertMediaAsset(ctx, q, asset, now)
+	if err != nil {
+		return domain.MediaAsset{}, nil, err
+	}
+	resolvedVariants, err := upsertAssetVariants(ctx, q, resolved.ID, variants, now)
+	if err != nil {
+		return domain.MediaAsset{}, nil, err
+	}
+	return resolved, resolvedVariants, nil
+}
+
 // UpsertMediaManifest persists one complete ordered manifest using a
 // caller-owned transaction. Existing refs are compared, never updated or
 // deleted, because their fragment revision is immutable.

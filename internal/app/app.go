@@ -36,18 +36,20 @@ const (
 )
 
 type App struct {
-	store           *store.Store
-	recall          recall.Indexer
-	Fragments       *service.FragmentService
-	Inbox           *service.InboxService
-	Routing         *service.RoutingService
-	Queue           *service.DeliveryQueueService
-	IngestQueue     queue.Queue
-	IngestSchedules *service.IngestScheduleService
-	InboxReviewer   *service.InboxReviewerService
-	Jobs            *service.JobsService
-	Captures        *service.CaptureService
-	Enrichment      *service.EnrichmentService
+	store            *store.Store
+	recall           recall.Indexer
+	Fragments        *service.FragmentService
+	Inbox            *service.InboxService
+	Routing          *service.RoutingService
+	Queue            *service.DeliveryQueueService
+	IngestQueue      queue.Queue
+	IngestSchedules  *service.IngestScheduleService
+	InboxReviewer    *service.InboxReviewerService
+	Jobs             *service.JobsService
+	Captures         *service.CaptureService
+	Enrichment       *service.EnrichmentService
+	AssetAcquisition *service.AssetAcquisitionService
+	ProviderMedia    *service.ProviderMediaCompletion
 }
 
 func Open(ctx context.Context, cfg config.Config) (*App, error) {
@@ -72,6 +74,7 @@ func Open(ctx context.Context, cfg config.Config) (*App, error) {
 		_ = st.Close()
 		return nil, fmt.Errorf("open capture blob store: %w", err)
 	}
+	mediaService := service.NewMediaService(mediaRepo, blobs)
 	entityRepo := repository.NewEntityRepository(st.DB)
 	attachmentRepo := repository.NewAttachmentRepository(st.DB)
 	inboxRepo := repository.NewInboxRepository(st.DB)
@@ -154,8 +157,10 @@ func Open(ctx context.Context, cfg config.Config) (*App, error) {
 			fragmentRepo,
 			cfg,
 		),
-		Captures:   service.NewCaptureService(captureRepo, service.NewMediaService(mediaRepo, blobs)),
-		Enrichment: service.NewEnrichmentService(repository.NewEnrichmentRepository(st.DB), nil),
+		Captures:         service.NewCaptureService(captureRepo, mediaService),
+		Enrichment:       service.NewEnrichmentService(repository.NewEnrichmentRepository(st.DB), nil),
+		AssetAcquisition: service.NewAssetAcquisitionService(mediaRepo),
+		ProviderMedia:    service.NewProviderMediaCompletion(mediaRepo, mediaService),
 	}, nil
 }
 
