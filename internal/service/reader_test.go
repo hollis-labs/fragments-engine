@@ -65,7 +65,7 @@ func TestReaderServiceProjectsCompleteValidatedItemWithIndependentStates(t *test
 	if !containsString(item.Tags.Combined, "provider-tag") || len(item.Annotations) != 1 || item.CuratedNote == nil {
 		t.Fatalf("tags/annotations/note incomplete: tags=%+v annotations=%+v note=%+v", item.Tags, item.Annotations, item.CuratedNote)
 	}
-	if item.CaptureCount != 1 || item.ReadingState.PrincipalID != "reader-user" || item.ReadingState.State != "unread" || len(item.Actions) != 0 {
+	if item.CaptureCount != 1 || item.ReadingState.PrincipalID != "reader-user" || item.ReadingState.State != "unread" || len(item.Actions) == 0 {
 		t.Fatalf("capture/reading/actions = %d %+v %+v", item.CaptureCount, item.ReadingState, item.Actions)
 	}
 	if item.Operations.Triage.UnresolvedCount != 1 || item.Operations.Routing.State != "succeeded" ||
@@ -316,6 +316,130 @@ VALUES (?, ?, 'reader test', '2026-09-03T12:00:00Z')`, aliasID, first.FragmentID
 	}
 }
 
+func TestReaderCommandResultsHydrateProjectionAndRemainPrincipalScoped(t *testing.T) {
+	st, fragment, _ := readerCommandServiceFixture(t)
+	defer st.Close()
+	reader := NewReaderService(repository.NewReaderRepository(st.DB))
+	commands := NewReaderCommandService(repository.NewReaderCommandRepository(st.DB), nil, nil, reader)
+
+	added, err := commands.Execute(context.Background(), "reader-a", fragment.ID,
+		readerContractCommand("projection-add", "add_tag", 0, func(command *capturecontract.ReaderCommand) {
+			command.Tag = "Research"
+		}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if added.Item.Revision != 1 || !containsString(added.Item.Tags.Combined, "Research") ||
+		!containsReaderAction(added.Item.Actions, "append_capture_note") {
+		t.Fatalf("add-tag projection = %+v", added.Item)
+	}
+	marked, err := commands.Execute(context.Background(), "reader-a", fragment.ID,
+		readerContractCommand("projection-read", "mark_read", 0, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if marked.Item.Revision != 2 || marked.Item.ReadingState.State != "read" ||
+		marked.Item.ReadingState.Revision != 1 || containsReaderAction(marked.Item.Actions, "mark_read") ||
+		!containsReaderAction(marked.Item.Actions, "mark_unread") {
+		t.Fatalf("read-state projection = %+v", marked.Item)
+	}
+
+	other, err := reader.Get(context.Background(), ReaderGetRequest{FragmentID: fragment.ID, PrincipalID: "reader-b"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if other.Revision != 0 || other.ReadingState.State != "unread" || containsString(other.Tags.Combined, "Research") ||
+		len(other.Tags.Attributed) != 0 {
+		t.Fatalf("other principal observed private command state: %+v", other)
+	}
+
+	removed, err := commands.Execute(context.Background(), "reader-a", fragment.ID,
+		readerContractCommand("projection-remove", "remove_tag", 2, func(command *capturecontract.ReaderCommand) {
+			command.Tag = "Research"
+		}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if removed.Item.Revision != 3 || containsString(removed.Item.Tags.Combined, "Research") ||
+		!containsAttributedReaderTag(removed.Item.Tags.Attributed, "Research", "projection-add") {
+		t.Fatalf("tag suppression lost provenance or remained combined: %+v", removed.Item.Tags)
+	}
+
+	if _, err := st.DB.Exec(`DELETE FROM capture_attempts WHERE fragment_id = ?`, fragment.ID); err != nil {
+		t.Fatal(err)
+	}
+	withoutCapture, err := reader.Get(context.Background(), ReaderGetRequest{FragmentID: fragment.ID, PrincipalID: "reader-b"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if containsReaderAction(withoutCapture.Actions, "append_capture_note") {
+		t.Fatalf("append_capture_note advertised without a real capture attempt: %+v", withoutCapture.Actions)
+	}
+}
+
+func TestReaderProjectionMergesPrincipalEffectsByCreationOrder(t *testing.T) {
+	st, fragment, _ := readerCommandServiceFixture(t)
+	defer st.Close()
+	created := time.Date(2026, 9, 3, 20, 31, 0, 0, time.UTC)
+	insertEffect := func(commandID, command, target, state string, at time.Time) {
+		t.Helper()
+		stamp := at.Format(time.RFC3339Nano)
+		if _, err := st.DB.Exec(`INSERT INTO reader_command_receipts (
+command_id, idempotency_key, semantic_digest, principal_id, fragment_id,
+command, state, aggregate_revision, result_json, created_at, updated_at
+) VALUES (?, ?, ?, 'reader-a', ?, ?, ?, 0, '{}', ?, ?)`, commandID, "key-"+commandID,
+			strings.Repeat("a", 64), fragment.ID, command, state, stamp, stamp); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := st.DB.Exec(`INSERT INTO reader_command_effects (
+command_id, principal_id, fragment_id, kind, target_id, state, created_at, updated_at
+) VALUES (?, 'reader-a', ?, ?, ?, ?, ?, ?)`, commandID, fragment.ID, command, target, state, stamp, stamp); err != nil {
+			t.Fatal(err)
+		}
+	}
+	insertEffect("reader-route-effect", "route", "route-reader", "succeeded", created)
+	insertEffect("reader-materialize-effect", "materialize", "destination-reader", "uncertain", created)
+	later := created.Add(time.Minute).Format(time.RFC3339Nano)
+	if _, err := st.DB.Exec(`INSERT INTO route_log (
+fragment_id, route_id, destination_id, decision, reason, created_at
+) VALUES (?, 'route-reader', 'destination-reader', 'inbox', 'delivery_queued_by_design:{}', ?)`, fragment.ID, later); err != nil {
+		t.Fatal(err)
+	}
+	reader := NewReaderService(repository.NewReaderRepository(st.DB))
+	item, err := reader.Get(context.Background(), ReaderGetRequest{FragmentID: fragment.ID, PrincipalID: "reader-a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if item.Operations.Routing.State != "pending" || item.Operations.Materialization.State != "partial" {
+		t.Fatalf("merged command/route effects = %+v", item.Operations)
+	}
+	other, err := reader.Get(context.Background(), ReaderGetRequest{FragmentID: fragment.ID, PrincipalID: "reader-b"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if other.Operations.Materialization.State != "none" {
+		t.Fatalf("other principal observed command effect: %+v", other.Operations.Materialization)
+	}
+}
+
+func containsReaderAction(actions []capturecontract.CommandCapability, command string) bool {
+	for _, action := range actions {
+		if action.Command == command && action.ExpectedRevisionRequired && strings.Contains(action.InputSchema, "reader-command.schema.json#/$defs/") {
+			return true
+		}
+	}
+	return false
+}
+
+func containsAttributedReaderTag(tags []capturecontract.AttributedTag, value, observationID string) bool {
+	for _, tag := range tags {
+		if tag.Value == value && tag.Source == "user" && tag.ObservationID == observationID {
+			return true
+		}
+	}
+	return false
+}
+
 func seedReaderProjectionFacts(t *testing.T, db *sql.DB, accepted capturecontract.CaptureManifestResponse) {
 	t.Helper()
 	const now = "2026-09-03T12:00:00Z"
@@ -433,6 +557,6 @@ func (s *readerProjectionStub) List(_ context.Context, request repository.Reader
 	return s.snapshot, nil
 }
 
-func (s *readerProjectionStub) Get(context.Context, string, string) (repository.ReaderSnapshot, error) {
+func (s *readerProjectionStub) Get(context.Context, string, string, string) (repository.ReaderSnapshot, error) {
 	return repository.ReaderSnapshot{}, sql.ErrNoRows
 }

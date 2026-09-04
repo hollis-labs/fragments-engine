@@ -7,10 +7,10 @@ import {
   Skeleton,
 } from '@hollis-labs/sysop-ui'
 import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom'
-import { ReaderRendererPlaceholder } from '@/components/reader/ReaderRendererSeam'
 import { ReaderQuickActionSeam } from '@/components/reader/ReaderQuickActionSeam'
 import { ReaderStateSummary } from '@/components/reader/ReaderStateSummary'
 import { ReaderDetailHeader } from '@/components/reader/ReaderDetailHeader'
+import { ReaderContentRenderer } from '@/features/reader'
 import { useApi } from '@/hooks/useApi'
 import {
   boundedReaderText,
@@ -258,7 +258,11 @@ export default function ReaderDetailPage({
 
           <ReaderStateSummary item={item} />
 
-          {renderContent ? renderContent(item, pin) : <ReaderRendererPlaceholder item={item} />}
+          {renderContent ? (
+            renderContent(item, pin)
+          ) : (
+            <ReaderContentRenderer item={item} presentation="detail" />
+          )}
 
           {(item.tags.combined.length > 0 || item.annotations.length > 0 || item.curated_note) && (
             <section className="grid gap-7 border-t border-border-soft pt-6 lg:grid-cols-2">

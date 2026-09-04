@@ -3,6 +3,7 @@ import { BookOpen, RefreshCw } from 'lucide-react'
 import { Button, EmptyState, ListPageLayout, PageHeader, Skeleton } from '@hollis-labs/sysop-ui'
 import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import { ReaderCard } from '@/components/reader/ReaderCard'
+import { ReaderContentRenderer } from '@/features/reader'
 import { useApi } from '@/hooks/useApi'
 import { isReaderScope, READER_SCOPES, readerScopeLabel } from '@/lib/reader'
 import type { ReaderItem, ReaderScope } from '@/lib/types'
@@ -178,7 +179,12 @@ export default function ReaderPage() {
             <span>{items.length === 1 ? '1 fragment' : `${items.length} fragments`}</span>
           </div>
           {items.map((item) => (
-            <ReaderCard key={item.fragment_id} item={item} onOpen={openItem} />
+            <ReaderCard
+              key={item.fragment_id}
+              item={item}
+              onOpen={openItem}
+              mediaSlot={<ReaderContentRenderer item={item} presentation="card" />}
+            />
           ))}
           {moreError && (
             <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border-soft py-4 text-[13px] text-danger-soft">

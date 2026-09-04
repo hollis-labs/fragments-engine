@@ -41,8 +41,8 @@ func TestReaderHTTPListAndDetailReturnFrozenV1Contracts(t *testing.T) {
 	if page.Items[0].Playback == nil || page.Items[0].Playback.ProviderItemID != acceptance.ReaderItem.Playback.ProviderItemID {
 		t.Fatalf("persisted projection lost safe optimistic playback: %+v", page.Items[0].Playback)
 	}
-	if len(page.Items[0].Actions) != 0 || page.Items[0].ReadingState.State != "unread" {
-		t.Fatalf("unsupported commands/reading default = %+v %+v", page.Items[0].Actions, page.Items[0].ReadingState)
+	if len(page.Items[0].Actions) == 0 || page.Items[0].ReadingState.State != "unread" {
+		t.Fatalf("supported commands/reading default = %+v %+v", page.Items[0].Actions, page.Items[0].ReadingState)
 	}
 
 	detailPath := "/v1/reader/items/" + acceptance.FragmentID + "?revision_id=" + acceptance.FragmentRevisionID

@@ -24,10 +24,6 @@ type readerCommandExecutor interface {
 	Execute(context.Context, string, string, capturecontract.ReaderCommand) (service.ReaderCommandExecution, error)
 }
 
-// handleReaderCommand is intentionally not registered in Server.Handler until
-// the parallel Reader projection task supplies the production ReaderProjector.
-// The transport implementation is complete and exercised through the injected
-// handler seam below.
 func (s *Server) handleReaderCommand(w http.ResponseWriter, r *http.Request) {
 	fragmentID, err := readerCommandPathFragment(r.URL.EscapedPath())
 	if err != nil {

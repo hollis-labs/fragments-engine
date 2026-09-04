@@ -25,7 +25,7 @@ const readerPageSize = 50
 
 type readerProjectionRepository interface {
 	List(context.Context, repository.ReaderPageRequest) (repository.ReaderSnapshot, error)
-	Get(context.Context, string, string) (repository.ReaderSnapshot, error)
+	Get(context.Context, string, string, string) (repository.ReaderSnapshot, error)
 }
 
 type ReaderService struct {
@@ -79,7 +79,7 @@ func (s *ReaderService) List(ctx context.Context, request ReaderListRequest) (ca
 		return capturecontract.ReaderItemList{}, err
 	}
 	snapshot, err := s.repository.List(ctx, repository.ReaderPageRequest{
-		Scope: request.Scope, Cursor: cursor, Limit: readerPageSize + 1,
+		Scope: request.Scope, Cursor: cursor, Limit: readerPageSize + 1, PrincipalID: principalID,
 	})
 	if err != nil {
 		return capturecontract.ReaderItemList{}, fmt.Errorf("list reader items: %w", err)
@@ -126,7 +126,7 @@ func (s *ReaderService) Get(ctx context.Context, request ReaderGetRequest) (capt
 	if err != nil {
 		return capturecontract.ReaderItem{}, err
 	}
-	snapshot, err := s.repository.Get(ctx, request.FragmentID, request.RevisionID)
+	snapshot, err := s.repository.Get(ctx, request.FragmentID, request.RevisionID, principalID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return capturecontract.ReaderItem{}, sql.ErrNoRows
@@ -144,6 +144,13 @@ func (s *ReaderService) Get(ctx context.Context, request ReaderGetRequest) (capt
 		return capturecontract.ReaderItem{}, err
 	}
 	return item, nil
+}
+
+// ProjectReaderItem is the command service's transport-neutral projection
+// seam. Commands always return the same authoritative item shape as Reader
+// detail, scoped to the principal that issued the mutation.
+func (s *ReaderService) ProjectReaderItem(ctx context.Context, principalID, fragmentID string) (capturecontract.ReaderItem, error) {
+	return s.Get(ctx, ReaderGetRequest{FragmentID: fragmentID, PrincipalID: principalID})
 }
 
 func readerPrincipal(value string) (string, error) {
@@ -269,19 +276,23 @@ func projectReaderItem(base repository.ReaderBase, snapshot repository.ReaderSna
 	}
 	routing, materialization := projectReaderEffects(snapshot.Effects[base.FragmentID])
 	source := projectReaderSource(base.Source)
+	readingState := capturecontract.ReadingState{PrincipalID: principalID, FragmentID: base.FragmentID,
+		State: "unread", Position: capturecontract.ReadingPosition{Kind: "none"}, Revision: 0}
+	if base.ReadingState != nil {
+		readingState = projectReadingState(*base.ReadingState, principalID, base.FragmentID)
+	}
 	item := capturecontract.ReaderItem{
 		SchemaVersion: capturecontract.ReaderItemVersion, FragmentID: base.FragmentID,
-		FragmentRevisionID: revision.ID, Revision: 0, Source: source,
+		FragmentRevisionID: revision.ID, Revision: base.AggregateRevision, Source: source,
 		Renderer: renderer, Display: display, Article: article, Media: media,
 		Tags:        capturecontract.ReaderTags{Combined: combined, Attributed: attributed},
 		Annotations: annotations, CaptureCount: base.CaptureCount,
-		ReadingState: capturecontract.ReadingState{PrincipalID: principalID, FragmentID: base.FragmentID,
-			State: "unread", Position: capturecontract.ReadingPosition{Kind: "none"}, Revision: 0},
+		ReadingState: readingState,
 		Operations: capturecontract.OperationalSummaries{
 			Triage:  capturecontract.TriageSummary{CaseIDs: []string{}, UnresolvedCount: boolInt(base.InInbox)},
 			Routing: routing, Materialization: materialization, Enrichment: enrichment, Acquisition: acquisition,
 		},
-		Actions: []capturecontract.CommandCapability{},
+		Actions: readerCommandCapabilities(readingState.State, base.HasCaptureAttempt, media),
 	}
 	if base.CuratedNote != nil {
 		item.CuratedNote = &capturecontract.CuratedNote{BodyMarkdown: base.CuratedNote.BodyMarkdown,
@@ -292,6 +303,60 @@ func projectReaderItem(base repository.ReaderBase, snapshot repository.ReaderSna
 		return capturecontract.ReaderItem{}, fmt.Errorf("project reader item %q: %w", base.FragmentID, err)
 	}
 	return item, nil
+}
+
+func projectReadingState(state domain.ReadingState, principalID, fragmentID string) capturecontract.ReadingState {
+	return capturecontract.ReadingState{
+		PrincipalID: principalID,
+		FragmentID:  fragmentID,
+		State:       string(state.State),
+		Position: capturecontract.ReadingPosition{
+			Kind:            string(state.Position.Kind),
+			Progress:        state.Position.Progress,
+			BlockAnchor:     state.Position.BlockAnchor,
+			LocalOffset:     state.Position.LocalOffset,
+			ElapsedSeconds:  state.Position.ElapsedSeconds,
+			DurationSeconds: state.Position.DurationSeconds,
+			ProviderMediaID: state.Position.ProviderMediaID,
+			AttachmentID:    state.Position.AttachmentID,
+			Index:           state.Position.Index,
+			Page:            state.Position.Page,
+		},
+		LastOpenedAt: state.LastOpened,
+		CompletedAt:  state.CompletedAt,
+		Revision:     state.Revision,
+	}
+}
+
+func readerCommandCapabilities(readingStatus string, hasCapture bool, media []capturecontract.ReaderMediaItem) []capturecontract.CommandCapability {
+	schemaID, _ := capturecontract.SchemaID(capturecontract.SchemaReaderCommand)
+	definitions := []struct {
+		command    string
+		definition string
+		enabled    bool
+	}{
+		{"add_tag", "AddTag", true},
+		{"remove_tag", "RemoveTag", true},
+		{"append_capture_note", "AppendCaptureNote", hasCapture},
+		{"update_curated_note", "UpdateCuratedNote", true},
+		{"set_reading_progress", "SetReadingProgress", true},
+		{"mark_read", "MarkRead", readingStatus != "read"},
+		{"mark_unread", "MarkUnread", readingStatus != "unread"},
+		{"request_asset_acquisition", "RequestAssetAcquisition", len(media) > 0},
+		{"route", "Route", true},
+		{"materialize", "Materialize", true},
+	}
+	out := make([]capturecontract.CommandCapability, 0, len(definitions))
+	for _, definition := range definitions {
+		if !definition.enabled {
+			continue
+		}
+		out = append(out, capturecontract.CommandCapability{
+			Command: definition.command, InputSchema: schemaID + "#/$defs/" + definition.definition,
+			ExpectedRevisionRequired: true,
+		})
+	}
+	return out
 }
 
 func selectedReaderText(row repository.ReaderCoverage) (capturecontract.ResolvedText, bool) {
@@ -428,19 +493,20 @@ func readerRenderableRole(role string) bool {
 }
 
 func projectReaderTags(fragmentID, revisionID string, facts []repository.ReaderTagFact) ([]string, []capturecontract.AttributedTag) {
-	combined := make([]string, 0)
 	attributed := make([]capturecontract.AttributedTag, 0)
-	combinedSeen, attributionSeen := map[string]struct{}{}, map[string]struct{}{}
+	combinedOrder := make([]string, 0)
+	combinedValues := map[string]string{}
+	attributionSeen := map[string]struct{}{}
 	appendTag := func(value string, source domain.AttributionSource, observationID string) {
 		value = strings.TrimSpace(value)
 		if value == "" || !source.ValidTagSource() {
 			return
 		}
 		normalized := strings.ToLower(value)
-		if _, ok := combinedSeen[normalized]; !ok {
-			combinedSeen[normalized] = struct{}{}
-			combined = append(combined, value)
+		if _, seen := combinedValues[normalized]; !seen {
+			combinedOrder = append(combinedOrder, normalized)
 		}
+		combinedValues[normalized] = value
 		key := normalized + "\x00" + string(source) + "\x00" + observationID
 		if _, ok := attributionSeen[key]; ok {
 			return
@@ -451,6 +517,16 @@ func projectReaderTags(fragmentID, revisionID string, facts []repository.ReaderT
 	}
 	for _, fact := range facts {
 		if fact.FragmentID != fragmentID || (fact.FragmentRevisionID != "" && fact.FragmentRevisionID != revisionID) {
+			continue
+		}
+		if fact.OverlayAction != "" {
+			normalized := strings.ToLower(strings.TrimSpace(fact.NormalizedValue))
+			switch fact.OverlayAction {
+			case "suppress":
+				delete(combinedValues, normalized)
+			case "add":
+				appendTag(fact.Value, domain.AttributionUser, fact.ObservationID)
+			}
 			continue
 		}
 		if fact.ValueJSON == "" {
@@ -467,6 +543,19 @@ func projectReaderTags(fragmentID, revisionID string, facts []repository.ReaderT
 		for _, value := range values.Values {
 			appendTag(value, fact.Source, fact.ObservationID)
 		}
+	}
+	combined := make([]string, 0, len(combinedValues))
+	emitted := map[string]struct{}{}
+	for _, normalized := range combinedOrder {
+		value, ok := combinedValues[normalized]
+		if !ok {
+			continue
+		}
+		if _, seen := emitted[normalized]; seen {
+			continue
+		}
+		combined = append(combined, value)
+		emitted[normalized] = struct{}{}
 	}
 	return combined, attributed
 }
@@ -505,6 +594,7 @@ type effectState string
 const (
 	effectPending   effectState = "pending"
 	effectSucceeded effectState = "succeeded"
+	effectPartial   effectState = "partial"
 	effectFailed    effectState = "failed"
 )
 
@@ -518,6 +608,23 @@ func projectReaderEffects(items []repository.ReaderEffect) (capturecontract.Effe
 		}
 		if ref == "" {
 			ref = fmt.Sprintf("unreferenced-%d", index)
+		}
+		if item.CommandKind != "" {
+			state := effectPending
+			switch item.CommandState {
+			case domain.ReaderCommandSucceeded:
+				state = effectSucceeded
+			case domain.ReaderCommandFailed:
+				state = effectFailed
+			case domain.ReaderCommandUncertain:
+				state = effectPartial
+			}
+			if item.CommandKind == "materialize" {
+				materialization[ref] = state
+			} else if item.CommandKind == "route" {
+				routing[ref] = state
+			}
+			continue
 		}
 		prefix := item.Reason
 		if cut := strings.IndexByte(prefix, ':'); cut >= 0 {

@@ -91,12 +91,45 @@ func TestReaderCommandHTTPProblemsAndBodyLimit(t *testing.T) {
 	}
 }
 
-func TestReaderCommandRouteRemainsUnregisteredUntilProjectorIntegration(t *testing.T) {
+func TestReaderCommandRouteIsRegisteredAndRestrictedToLoopback(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/v1/reader/items/fragment/commands", nil)
 	response := httptest.NewRecorder()
 	NewServer("unused").Handler().ServeHTTP(response, req)
-	if response.Code != http.StatusNotFound {
-		t.Fatalf("unintegrated route status=%d", response.Code)
+	if response.Code != http.StatusForbidden {
+		t.Fatalf("remote command route status=%d", response.Code)
+	}
+}
+
+func TestReaderCommandRegisteredRouteReturnsAuthoritativeProjection(t *testing.T) {
+	server := NewServer(writeCaptureAPIConfig(t)).Handler()
+	created := serveCaptureRequest(t, server, http.MethodPost, "/v1/captures", "application/json",
+		readCaptureAPIFixture(t, "valid-capture-youtube.json"), "")
+	if created.Code != http.StatusCreated {
+		t.Fatalf("seed capture: %d %s", created.Code, created.Body.String())
+	}
+	var accepted capturecontract.CaptureManifestResponse
+	if err := json.Unmarshal(created.Body.Bytes(), &accepted); err != nil {
+		t.Fatal(err)
+	}
+	body := `{"schema_version":"fe.reader.command.v1","command":"mark_read","command_id":"registered-read","idempotency_key":"registered-read-key","expected_revision":0}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/reader/items/"+accepted.FragmentID+"/commands", strings.NewReader(body))
+	req.RemoteAddr = "127.0.0.1:1234"
+	req.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, req)
+	if response.Code != http.StatusOK {
+		t.Fatalf("command status=%d body=%s", response.Code, response.Body.String())
+	}
+	if err := capturecontract.ValidateJSON(capturecontract.SchemaReaderItem, response.Body.Bytes()); err != nil {
+		t.Fatalf("command response invalid: %v\n%s", err, response.Body.String())
+	}
+	var item capturecontract.ReaderItem
+	if err := json.Unmarshal(response.Body.Bytes(), &item); err != nil {
+		t.Fatal(err)
+	}
+	if item.FragmentID != accepted.FragmentID || item.Revision != 1 || item.ReadingState.State != "read" ||
+		item.ReadingState.Revision != 1 {
+		t.Fatalf("command projection = %+v", item)
 	}
 }
 

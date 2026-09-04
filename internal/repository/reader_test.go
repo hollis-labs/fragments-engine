@@ -40,7 +40,7 @@ func TestReaderRepositoryUsesSixQueriesIndependentOfPageCardinality(t *testing.T
 	counting := &countingReaderQueryer{db: st.DB}
 	repo := repository.NewReaderRepository(counting)
 
-	one, err := repo.List(context.Background(), repository.ReaderPageRequest{Scope: "all", Limit: 1})
+	one, err := repo.List(context.Background(), repository.ReaderPageRequest{Scope: "all", Limit: 1, PrincipalID: "local-user"})
 	if err != nil {
 		t.Fatalf("one-item page: %v", err)
 	}
@@ -49,7 +49,7 @@ func TestReaderRepositoryUsesSixQueriesIndependentOfPageCardinality(t *testing.T
 	}
 
 	counting.queries = 0
-	many, err := repo.List(context.Background(), repository.ReaderPageRequest{Scope: "all", Limit: 10})
+	many, err := repo.List(context.Background(), repository.ReaderPageRequest{Scope: "all", Limit: 10, PrincipalID: "local-user"})
 	if err != nil {
 		t.Fatalf("multi-item page: %v", err)
 	}
@@ -61,13 +61,13 @@ func TestReaderRepositoryUsesSixQueriesIndependentOfPageCardinality(t *testing.T
 			t.Fatalf("base %q lacks batched coverage/media: %+v", base.FragmentID, base)
 		}
 	}
-	firstPage, err := repo.List(context.Background(), repository.ReaderPageRequest{Scope: "all", Limit: 2})
+	firstPage, err := repo.List(context.Background(), repository.ReaderPageRequest{Scope: "all", Limit: 2, PrincipalID: "local-user"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	last := firstPage.Bases[len(firstPage.Bases)-1]
 	secondPage, err := repo.List(context.Background(), repository.ReaderPageRequest{Scope: "all", Limit: 10,
-		Cursor: &repository.ReaderPageCursor{SortAt: last.SortAt, FragmentID: last.FragmentID}})
+		Cursor: &repository.ReaderPageCursor{SortAt: last.SortAt, FragmentID: last.FragmentID}, PrincipalID: "local-user"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -76,7 +76,7 @@ func TestReaderRepositoryUsesSixQueriesIndependentOfPageCardinality(t *testing.T
 	}
 
 	counting.queries = 0
-	detail, err := repo.Get(context.Background(), accepted[0].FragmentID, accepted[0].FragmentRevisionID)
+	detail, err := repo.Get(context.Background(), accepted[0].FragmentID, accepted[0].FragmentRevisionID, "local-user")
 	if err != nil {
 		t.Fatalf("detail: %v", err)
 	}
@@ -85,7 +85,7 @@ func TestReaderRepositoryUsesSixQueriesIndependentOfPageCardinality(t *testing.T
 	}
 
 	counting.queries = 0
-	empty, err := repo.List(context.Background(), repository.ReaderPageRequest{Scope: "inbox", Limit: 10})
+	empty, err := repo.List(context.Background(), repository.ReaderPageRequest{Scope: "inbox", Limit: 10, PrincipalID: "local-user"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -105,11 +105,11 @@ func TestReaderRepositoryScopesAliasAndRevisionOwnership(t *testing.T) {
 		t.Fatal(err)
 	}
 	repo := repository.NewReaderRepository(st.DB)
-	inbox, err := repo.List(context.Background(), repository.ReaderPageRequest{Scope: "inbox", Limit: 10})
+	inbox, err := repo.List(context.Background(), repository.ReaderPageRequest{Scope: "inbox", Limit: 10, PrincipalID: "local-user"})
 	if err != nil || len(inbox.Bases) != 1 || inbox.Bases[0].FragmentID != first.FragmentID {
 		t.Fatalf("inbox scope = %+v err=%v", inbox.Bases, err)
 	}
-	library, err := repo.List(context.Background(), repository.ReaderPageRequest{Scope: "library", Limit: 10})
+	library, err := repo.List(context.Background(), repository.ReaderPageRequest{Scope: "library", Limit: 10, PrincipalID: "local-user"})
 	if err != nil || len(library.Bases) != 2 {
 		t.Fatalf("library scope count=%d err=%v", len(library.Bases), err)
 	}
@@ -128,11 +128,11 @@ ingest_name, canonical_path, '', '' FROM fragments WHERE id = ?`, aliasID, first
 VALUES (?, ?, 'test', '2026-09-03T12:00:00Z')`, aliasID, first.FragmentID); err != nil {
 		t.Fatal(err)
 	}
-	aliased, err := repo.Get(context.Background(), aliasID, first.FragmentRevisionID)
+	aliased, err := repo.Get(context.Background(), aliasID, first.FragmentRevisionID, "local-user")
 	if err != nil || len(aliased.Bases) != 1 || aliased.Bases[0].FragmentID != first.FragmentID {
 		t.Fatalf("alias detail = %+v err=%v", aliased.Bases, err)
 	}
-	if _, err := repo.Get(context.Background(), first.FragmentID, second.FragmentRevisionID); err != sql.ErrNoRows {
+	if _, err := repo.Get(context.Background(), first.FragmentID, second.FragmentRevisionID, "local-user"); err != sql.ErrNoRows {
 		t.Fatalf("foreign revision error = %v, want sql.ErrNoRows", err)
 	}
 }

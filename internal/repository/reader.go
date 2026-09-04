@@ -33,20 +33,24 @@ type ReaderPageCursor struct {
 }
 
 type ReaderPageRequest struct {
-	Scope  string
-	Cursor *ReaderPageCursor
-	Limit  int
+	Scope       string
+	Cursor      *ReaderPageCursor
+	Limit       int
+	PrincipalID string
 }
 
 type ReaderBase struct {
-	FragmentID       string
-	FragmentStatus   string
-	FragmentRevision domain.FragmentRevision
-	Source           domain.SourceIdentity
-	SortAt           time.Time
-	InInbox          bool
-	CaptureCount     int
-	CuratedNote      *domain.CuratedNote
+	FragmentID        string
+	FragmentStatus    string
+	FragmentRevision  domain.FragmentRevision
+	Source            domain.SourceIdentity
+	SortAt            time.Time
+	InInbox           bool
+	CaptureCount      int
+	HasCaptureAttempt bool
+	AggregateRevision int
+	ReadingState      *domain.ReadingState
+	CuratedNote       *domain.CuratedNote
 }
 
 type ReaderCoverage struct {
@@ -63,6 +67,9 @@ type ReaderTagFact struct {
 	Source             domain.AttributionSource
 	ObservationID      string
 	ValueJSON          string
+	Producer           string
+	ActorID            string
+	OverlayAction      string
 	ObservedAt         time.Time
 }
 
@@ -72,6 +79,8 @@ type ReaderEffect struct {
 	DestinationID string
 	Decision      string
 	Reason        string
+	CommandKind   string
+	CommandState  domain.ReaderCommandState
 	CreatedAt     time.Time
 }
 
@@ -104,8 +113,13 @@ func (r *ReaderRepository) List(ctx context.Context, request ReaderPageRequest) 
 		}
 		cursorAt, cursorID = formatTime(request.Cursor.SortAt), strings.TrimSpace(request.Cursor.FragmentID)
 	}
+	principalID := strings.TrimSpace(request.PrincipalID)
+	if principalID == "" {
+		return ReaderSnapshot{}, fmt.Errorf("reader principal ID is required")
+	}
 	rows, err := r.db.QueryContext(ctx, readerListBaseSQL,
-		request.Scope, request.Scope, cursorAt, cursorAt, cursorAt, cursorID, request.Limit)
+		request.Scope, request.Scope, principalID, principalID,
+		cursorAt, cursorAt, cursorAt, cursorID, request.Limit)
 	if err != nil {
 		return ReaderSnapshot{}, fmt.Errorf("list reader bases: %w", err)
 	}
@@ -113,13 +127,13 @@ func (r *ReaderRepository) List(ctx context.Context, request ReaderPageRequest) 
 	if err != nil {
 		return ReaderSnapshot{}, err
 	}
-	return r.loadBatches(ctx, bases)
+	return r.loadBatches(ctx, bases, principalID)
 }
 
 // Get resolves a historical alias to its canonical fragment in the base query
 // and requires an explicitly requested revision to belong to that canonical
 // fragment. It uses the same five batch readers as List.
-func (r *ReaderRepository) Get(ctx context.Context, fragmentID, revisionID string) (ReaderSnapshot, error) {
+func (r *ReaderRepository) Get(ctx context.Context, fragmentID, revisionID, principalID string) (ReaderSnapshot, error) {
 	if r == nil || r.db == nil {
 		return ReaderSnapshot{}, fmt.Errorf("reader repository is unavailable")
 	}
@@ -127,7 +141,12 @@ func (r *ReaderRepository) Get(ctx context.Context, fragmentID, revisionID strin
 	if fragmentID == "" {
 		return ReaderSnapshot{}, fmt.Errorf("reader fragment ID is required")
 	}
-	rows, err := r.db.QueryContext(ctx, readerDetailBaseSQL, fragmentID, fragmentID, revisionID, revisionID)
+	principalID = strings.TrimSpace(principalID)
+	if principalID == "" {
+		return ReaderSnapshot{}, fmt.Errorf("reader principal ID is required")
+	}
+	rows, err := r.db.QueryContext(ctx, readerDetailBaseSQL,
+		fragmentID, fragmentID, revisionID, revisionID, principalID, principalID)
 	if err != nil {
 		return ReaderSnapshot{}, fmt.Errorf("get reader base: %w", err)
 	}
@@ -138,7 +157,7 @@ func (r *ReaderRepository) Get(ctx context.Context, fragmentID, revisionID strin
 	if len(bases) == 0 {
 		return ReaderSnapshot{}, sql.ErrNoRows
 	}
-	return r.loadBatches(ctx, bases)
+	return r.loadBatches(ctx, bases, principalID)
 }
 
 const readerBaseColumns = `
@@ -153,6 +172,10 @@ const readerBaseColumns = `
   si.canonicalizer_adapter, si.canonicalizer_version,
   candidates.sort_at, CASE WHEN i.fragment_id IS NULL THEN 0 ELSE 1 END,
   MAX(1, COALESCE(ca.capture_count, 0)),
+  CASE WHEN ca.fragment_id IS NULL THEN 0 ELSE 1 END,
+  COALESCE(rca.revision, 0),
+  rs.state, rs.position_json, rs.last_opened_at, rs.completed_at,
+  rs.revision, rs.updated_at,
   cn.body_markdown, cn.revision, cn.actor_id, cn.updated_at`
 
 const readerCaptureAggregate = `
@@ -183,6 +206,10 @@ JOIN fragment_source_identities si ON si.fragment_id = f.id
 JOIN fragment_revisions r ON r.id = f.current_revision_id AND r.fragment_id = f.id
 LEFT JOIN inbox i ON i.fragment_id = f.id
 LEFT JOIN capture_aggregate ca ON ca.fragment_id = f.id
+LEFT JOIN reader_command_aggregates rca
+  ON rca.fragment_id = f.id AND rca.principal_id = ?
+LEFT JOIN reading_states rs
+  ON rs.fragment_id = f.id AND rs.principal_id = ?
 LEFT JOIN curated_notes cn ON cn.fragment_id = f.id
 WHERE (? = '') OR candidates.sort_at < ?
    OR (candidates.sort_at = ? AND f.id < ?)
@@ -210,6 +237,10 @@ JOIN fragment_revisions r ON r.id = CASE WHEN ? = '' THEN f.current_revision_id 
   AND r.fragment_id = f.id
 LEFT JOIN inbox i ON i.fragment_id = f.id
 LEFT JOIN capture_aggregate ca ON ca.fragment_id = f.id
+LEFT JOIN reader_command_aggregates rca
+  ON rca.fragment_id = f.id AND rca.principal_id = ?
+LEFT JOIN reading_states rs
+  ON rs.fragment_id = f.id AND rs.principal_id = ?
 LEFT JOIN curated_notes cn ON cn.fragment_id = f.id`
 
 func scanReaderBases(rows *sql.Rows) ([]ReaderBase, error) {
@@ -218,7 +249,10 @@ func scanReaderBases(rows *sql.Rows) ([]ReaderBase, error) {
 	for rows.Next() {
 		var base ReaderBase
 		var observedAt, committedAt, sortAt string
-		var inInbox int
+		var inInbox, hasCaptureAttempt int
+		var readingStatus, readingPosition, readingLastOpened, readingCompleted sql.NullString
+		var readingRevision sql.NullInt64
+		var readingUpdated sql.NullString
 		var noteBody, noteActor, noteUpdated sql.NullString
 		var noteRevision sql.NullInt64
 		if err := rows.Scan(
@@ -236,7 +270,9 @@ func scanReaderBases(rows *sql.Rows) ([]ReaderBase, error) {
 			&base.Source.SubmittedURL, &base.Source.CanonicalURL,
 			&base.Source.SourceAdapter.Adapter, &base.Source.SourceAdapter.Version,
 			&base.Source.Canonicalizer.Adapter, &base.Source.Canonicalizer.Version,
-			&sortAt, &inInbox, &base.CaptureCount,
+			&sortAt, &inInbox, &base.CaptureCount, &hasCaptureAttempt,
+			&base.AggregateRevision, &readingStatus, &readingPosition,
+			&readingLastOpened, &readingCompleted, &readingRevision, &readingUpdated,
 			&noteBody, &noteRevision, &noteActor, &noteUpdated,
 		); err != nil {
 			return nil, fmt.Errorf("scan reader base: %w", err)
@@ -246,6 +282,25 @@ func scanReaderBases(rows *sql.Rows) ([]ReaderBase, error) {
 		base.FragmentRevision.CommittedAt = parseTime(committedAt)
 		base.SortAt = parseTime(sortAt)
 		base.InInbox = inInbox != 0
+		base.HasCaptureAttempt = hasCaptureAttempt != 0
+		if readingStatus.Valid && readingPosition.Valid && readingRevision.Valid && readingUpdated.Valid {
+			var position domain.ReadingPosition
+			if err := json.Unmarshal([]byte(readingPosition.String), &position); err != nil {
+				return nil, fmt.Errorf("decode reader position: %w", err)
+			}
+			state := domain.ReadingState{PrincipalID: "", FragmentID: base.FragmentID,
+				State: domain.ReadingStatus(readingStatus.String), Position: position,
+				Revision: int(readingRevision.Int64), UpdatedAt: parseTime(readingUpdated.String)}
+			if readingLastOpened.Valid {
+				value := parseTime(readingLastOpened.String)
+				state.LastOpened = &value
+			}
+			if readingCompleted.Valid {
+				value := parseTime(readingCompleted.String)
+				state.CompletedAt = &value
+			}
+			base.ReadingState = &state
+		}
 		if noteBody.Valid && noteRevision.Valid && noteUpdated.Valid {
 			base.CuratedNote = &domain.CuratedNote{FragmentID: base.FragmentID,
 				BodyMarkdown: noteBody.String, Revision: int(noteRevision.Int64),
@@ -259,7 +314,7 @@ func scanReaderBases(rows *sql.Rows) ([]ReaderBase, error) {
 	return bases, nil
 }
 
-func (r *ReaderRepository) loadBatches(ctx context.Context, bases []ReaderBase) (ReaderSnapshot, error) {
+func (r *ReaderRepository) loadBatches(ctx context.Context, bases []ReaderBase, principalID string) (ReaderSnapshot, error) {
 	snapshot := ReaderSnapshot{
 		Bases: bases, Coverage: map[string][]ReaderCoverage{}, Media: map[string][]domain.MediaManifestItem{},
 		Tags: map[string][]ReaderTagFact{}, Annotations: map[string][]domain.CaptureAnnotation{},
@@ -282,13 +337,13 @@ func (r *ReaderRepository) loadBatches(ctx context.Context, bases []ReaderBase) 
 	if snapshot.Media, err = r.loadMedia(ctx, revisionIDs); err != nil {
 		return ReaderSnapshot{}, err
 	}
-	if snapshot.Tags, err = r.loadTags(ctx, fragmentIDs, revisionIDs); err != nil {
+	if snapshot.Tags, err = r.loadTags(ctx, fragmentIDs, revisionIDs, principalID); err != nil {
 		return ReaderSnapshot{}, err
 	}
 	if snapshot.Annotations, err = r.loadAnnotations(ctx, fragmentIDs); err != nil {
 		return ReaderSnapshot{}, err
 	}
-	if snapshot.Effects, err = r.loadEffects(ctx, fragmentIDs); err != nil {
+	if snapshot.Effects, err = r.loadEffects(ctx, fragmentIDs, principalID); err != nil {
 		return ReaderSnapshot{}, err
 	}
 	return snapshot, nil
@@ -444,18 +499,29 @@ ORDER BY ar.fragment_revision_id, ar.position,
 	return out, nil
 }
 
-func (r *ReaderRepository) loadTags(ctx context.Context, fragmentIDs, revisionIDs []string) (map[string][]ReaderTagFact, error) {
+func (r *ReaderRepository) loadTags(ctx context.Context, fragmentIDs, revisionIDs []string, principalID string) (map[string][]ReaderTagFact, error) {
 	query := `SELECT fragment_id, '' AS fragment_revision_id, value, normalized_value,
-  attribution_source, observation_id, '' AS value_json, observed_at, 0 AS source_order
+  attribution_source, observation_id, '' AS value_json, producer, actor_id,
+  '' AS overlay_action, observed_at, 0 AS source_order
 FROM fragment_tag_observations
 WHERE fragment_id IN (` + queryPlaceholders(len(fragmentIDs)) + `)
+  AND (producer <> 'reader-command' OR actor_id = ?)
 UNION ALL
 SELECT fragment_id, fragment_revision_id, '', '', attribution_source, id,
-  value_json, observed_at, 1 AS source_order
+  value_json, producer, '', '', observed_at, 1 AS source_order
 FROM enrichment_observations
 WHERE capability = 'tags' AND fragment_revision_id IN (` + queryPlaceholders(len(revisionIDs)) + `)
+UNION ALL
+SELECT fragment_id, '', display_value, normalized_value, 'user', command_id,
+  '', 'reader-command', principal_id, action, created_at, 2 AS source_order
+FROM reader_tag_overlay_events
+WHERE principal_id = ? AND fragment_id IN (` + queryPlaceholders(len(fragmentIDs)) + `)
 ORDER BY fragment_id, source_order, observed_at, observation_id`
-	args := append(stringsToAny(fragmentIDs), stringsToAny(revisionIDs)...)
+	args := stringsToAny(fragmentIDs)
+	args = append(args, principalID)
+	args = append(args, stringsToAny(revisionIDs)...)
+	args = append(args, principalID)
+	args = append(args, stringsToAny(fragmentIDs)...)
 	rows, err := r.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("load reader tags: %w", err)
@@ -468,7 +534,7 @@ ORDER BY fragment_id, source_order, observed_at, observation_id`
 		var sourceOrder int
 		if err := rows.Scan(&item.FragmentID, &item.FragmentRevisionID, &item.Value,
 			&item.NormalizedValue, &item.Source, &item.ObservationID, &item.ValueJSON,
-			&observedAt, &sourceOrder); err != nil {
+			&item.Producer, &item.ActorID, &item.OverlayAction, &observedAt, &sourceOrder); err != nil {
 			return nil, fmt.Errorf("scan reader tag: %w", err)
 		}
 		item.ObservedAt = parseTime(observedAt)
@@ -519,13 +585,23 @@ ORDER BY fragment_id, captured_at, id`
 	return out, nil
 }
 
-func (r *ReaderRepository) loadEffects(ctx context.Context, fragmentIDs []string) (map[string][]ReaderEffect, error) {
+func (r *ReaderRepository) loadEffects(ctx context.Context, fragmentIDs []string, principalID string) (map[string][]ReaderEffect, error) {
 	query := `SELECT fragment_id, COALESCE(route_id, ''), COALESCE(destination_id, ''),
-  decision, reason, created_at
+  decision, reason, '', '', created_at, 1 AS source_order, id AS stable_id
 FROM route_log
 WHERE fragment_id IN (` + queryPlaceholders(len(fragmentIDs)) + `)
-ORDER BY fragment_id, created_at, id`
-	rows, err := r.db.QueryContext(ctx, query, stringsToAny(fragmentIDs)...)
+UNION ALL
+SELECT fragment_id,
+  CASE WHEN kind = 'route' THEN target_id ELSE '' END,
+  CASE WHEN kind = 'materialize' THEN target_id ELSE '' END,
+  kind, '', kind, state, created_at, 0 AS source_order, command_id AS stable_id
+FROM reader_command_effects
+WHERE principal_id = ? AND fragment_id IN (` + queryPlaceholders(len(fragmentIDs)) + `)
+ORDER BY fragment_id, created_at, source_order, stable_id`
+	args := stringsToAny(fragmentIDs)
+	args = append(args, principalID)
+	args = append(args, stringsToAny(fragmentIDs)...)
+	rows, err := r.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("load reader effects: %w", err)
 	}
@@ -533,11 +609,14 @@ ORDER BY fragment_id, created_at, id`
 	out := make(map[string][]ReaderEffect, len(fragmentIDs))
 	for rows.Next() {
 		var item ReaderEffect
-		var createdAt string
+		var createdAt, commandState, stableID string
+		var sourceOrder int
 		if err := rows.Scan(&item.FragmentID, &item.RouteID, &item.DestinationID,
-			&item.Decision, &item.Reason, &createdAt); err != nil {
+			&item.Decision, &item.Reason, &item.CommandKind, &commandState,
+			&createdAt, &sourceOrder, &stableID); err != nil {
 			return nil, fmt.Errorf("scan reader effect: %w", err)
 		}
+		item.CommandState = domain.ReaderCommandState(commandState)
 		item.CreatedAt = parseTime(createdAt)
 		out[item.FragmentID] = append(out[item.FragmentID], item)
 	}
