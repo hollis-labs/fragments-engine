@@ -125,6 +125,7 @@ func (s *CaptureService) AcceptManifest(ctx context.Context, raw []byte) (captur
 	}
 	write.Media = media
 	write.AssetBindings = bindings
+	write.EnrichmentObservations, write.CapabilityCoverage = buildInitialCaptureEnrichment(envelope, fragment, media, now)
 	write.FollowUpKind = "capture_enrichment"
 	write.FollowUpPayloadJSON = string(followUp)
 	write.BuildAcceptanceSnapshot = func(accepted domain.CaptureAcceptance) (string, error) {
@@ -566,10 +567,7 @@ func projectOptimisticReader(envelope capturecontract.CaptureEnvelope, accepted 
 		}
 		annotations = append(annotations, annotation)
 	}
-	enrichment := make([]capturecontract.CapabilityCoverage, 0, len(envelope.Extraction.ObservedCapabilities))
-	for _, capability := range envelope.Extraction.ObservedCapabilities {
-		enrichment = append(enrichment, capturecontract.CapabilityCoverage{Capability: capability, State: "provided"})
-	}
+	enrichment := projectCapabilityCoverage(accepted.Coverage)
 	source := capturecontract.SourceIdentity{
 		SourceRegistrationID: accepted.Fragment.SourceIdentity.SourceRegistrationID,
 		SubmittedURL:         accepted.Fragment.SourceIdentity.SubmittedURL, CanonicalURL: accepted.Fragment.SourceIdentity.CanonicalURL,

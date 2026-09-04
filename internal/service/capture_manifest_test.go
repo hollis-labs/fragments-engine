@@ -19,6 +19,7 @@ import (
 	capturecontract "github.com/hollis-labs/fragments-engine/contracts/browser-capture-reader/v1"
 	"github.com/hollis-labs/fragments-engine/internal/blobstore"
 	"github.com/hollis-labs/fragments-engine/internal/domain"
+	"github.com/hollis-labs/fragments-engine/internal/provider"
 	"github.com/hollis-labs/fragments-engine/internal/repository"
 	"github.com/hollis-labs/fragments-engine/internal/store"
 )
@@ -34,7 +35,7 @@ func TestCaptureManifestAcceptReplayConflictAndAtomicFollowUp(t *testing.T) {
 		t.Fatalf("unexpected first response: %+v", first)
 	}
 	assertContractJSON(t, capturecontract.SchemaCaptureResponse, first)
-	for table, want := range map[string]int{"fragments": 1, "fragment_revisions": 1, "capture_attempts": 1, "capture_annotations": 1, "attachment_refs": 1, "capture_asset_bindings": 2, "capture_followup_outbox": 1} {
+	for table, want := range map[string]int{"fragments": 1, "fragment_revisions": 1, "capture_attempts": 1, "capture_annotations": 1, "attachment_refs": 1, "capture_asset_bindings": 2, "capture_followup_outbox": 1, "enrichment_observations": 6, "fragment_capability_coverage": 12} {
 		assertProtocolTableCount(t, st.DB, table, want)
 	}
 
@@ -50,7 +51,7 @@ func TestCaptureManifestAcceptReplayConflictAndAtomicFollowUp(t *testing.T) {
 	if !reflect.DeepEqual(replayed, want) {
 		t.Fatalf("replay changed snapshot\n got=%+v\nwant=%+v", replayed, want)
 	}
-	for table, wantCount := range map[string]int{"capture_attempts": 1, "capture_annotations": 1, "capture_asset_bindings": 2, "capture_followup_outbox": 1} {
+	for table, wantCount := range map[string]int{"capture_attempts": 1, "capture_annotations": 1, "capture_asset_bindings": 2, "capture_followup_outbox": 1, "enrichment_observations": 6, "fragment_capability_coverage": 12} {
 		assertProtocolTableCount(t, st.DB, table, wantCount)
 	}
 
@@ -83,12 +84,13 @@ func TestCaptureManifestLateProjectionFailureRollsBackEverything(t *testing.T) {
 		t.Fatal(err)
 	}
 	write.Media, write.AssetBindings = media, bindings
+	write.EnrichmentObservations, write.CapabilityCoverage = buildInitialCaptureEnrichment(envelope, fragment, media, captureTestTime)
 	write.FollowUpKind, write.FollowUpPayloadJSON = "capture_enrichment", `{}`
 	write.BuildAcceptanceSnapshot = func(domain.CaptureAcceptance) (string, error) { return "", errors.New("late projection failed") }
 	if _, err := captureRepo.Accept(context.Background(), write); err == nil {
 		t.Fatal("late projection failure unexpectedly committed")
 	}
-	for _, table := range []string{"fragments", "fragment_revisions", "capture_attempts", "attachment_refs", "media_assets", "asset_variants", "capture_asset_bindings", "capture_followup_outbox"} {
+	for _, table := range []string{"fragments", "fragment_revisions", "capture_attempts", "attachment_refs", "media_assets", "asset_variants", "capture_asset_bindings", "capture_followup_outbox", "enrichment_observations", "fragment_capability_coverage"} {
 		assertProtocolTableCount(t, st.DB, table, 0)
 	}
 	_ = svc
@@ -122,6 +124,236 @@ func TestCaptureManifestConcurrentHandlesConverge(t *testing.T) {
 	}
 	assertProtocolTableCount(t, firstStore.DB, "capture_attempts", 1)
 	assertProtocolTableCount(t, firstStore.DB, "capture_followup_outbox", 1)
+	assertProtocolTableCount(t, firstStore.DB, "enrichment_observations", 6)
+	assertProtocolTableCount(t, firstStore.DB, "fragment_capability_coverage", 12)
+}
+
+func TestCaptureManifestInitializesAllCapabilityCoverageFromTypedEvidence(t *testing.T) {
+	st, svc, _ := openManifestTestService(t, filepath.Join(t.TempDir(), "capture.db"))
+	envelope := decodeEnvelope(t, captureFixture(t))
+	// Bare declarations cannot manufacture observations for missing values.
+	envelope.Extraction.ObservedCapabilities = append(envelope.Extraction.ObservedCapabilities, "transcript", "entities")
+	response, err := svc.AcceptManifest(context.Background(), encodeEnvelope(t, envelope))
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertContractJSON(t, capturecontract.SchemaCaptureResponse, response)
+	want := map[string]string{
+		"title": "provided", "description": "provided", "body": "provided",
+		"gallery_manifest": "not_applicable", "original_media": "provided",
+		"thumbnail_or_poster": "provided", "transcript": "missing", "OCR": "missing",
+		"vision": "missing", "summary": "missing", "tags": "provided", "entities": "missing",
+	}
+	if len(response.ReaderItem.Operations.Enrichment) != len(want) {
+		t.Fatalf("coverage entries = %d, want %d", len(response.ReaderItem.Operations.Enrichment), len(want))
+	}
+	for _, item := range response.ReaderItem.Operations.Enrichment {
+		if item.State != want[item.Capability] {
+			t.Fatalf("%s state = %q, want %q", item.Capability, item.State, want[item.Capability])
+		}
+		if item.State == "provided" && item.ObservationID == "" {
+			t.Fatalf("provided %s lacks supplying observation", item.Capability)
+		}
+	}
+	// Media coverage means an observed logical reference exists. It remains
+	// independent from reference-only/pending acquisition of its bytes.
+	var originalState, posterState string
+	if err := st.DB.QueryRow(`SELECT state FROM fragment_capability_coverage WHERE fragment_revision_id = ? AND capability = 'original_media'`, response.FragmentRevisionID).Scan(&originalState); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.DB.QueryRow(`SELECT state FROM fragment_capability_coverage WHERE fragment_revision_id = ? AND capability = 'thumbnail_or_poster'`, response.FragmentRevisionID).Scan(&posterState); err != nil {
+		t.Fatal(err)
+	}
+	if originalState != "provided" || posterState != "provided" {
+		t.Fatalf("logical media evidence coupled to acquisition: original=%s poster=%s", originalState, posterState)
+	}
+}
+
+func TestCaptureCapabilityInitializationIsProviderAwareAndTranscriptTyped(t *testing.T) {
+	t.Run("instagram single item may be incomplete carousel", func(t *testing.T) {
+		_, svc, _ := openManifestTestService(t, filepath.Join(t.TempDir(), "capture.db"))
+		envelope := decodeEnvelope(t, captureFixture(t))
+		envelope.CaptureID = "capture-instagram-one"
+		envelope.Source.Provider = "instagram"
+		envelope.Source.ProviderItemID = "post-1"
+		envelope.Source.SourceItemKey = "instagram:post-1"
+		envelope.Source.CanonicalURL = "https://www.instagram.com/p/post-1/"
+		envelope.Source.SubmittedURL = envelope.Source.CanonicalURL
+		envelope.Media[0].Kind = "image"
+		response, err := svc.AcceptManifest(context.Background(), encodeEnvelope(t, envelope))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if state := readerCoverageState(response, "gallery_manifest"); state != "missing" {
+			t.Fatalf("single Instagram gallery coverage = %q, want missing", state)
+		}
+	})
+
+	t.Run("source transcript variant supplies typed reference observation", func(t *testing.T) {
+		st, svc, _ := openManifestTestService(t, filepath.Join(t.TempDir(), "capture.db"))
+		envelope := decodeEnvelope(t, captureFixture(t))
+		envelope.CaptureID = "capture-youtube-transcript"
+		envelope.Media[0].Variants = append(envelope.Media[0].Variants, capturecontract.CaptureAssetVariant{
+			ClientVariantID: "captions-en", Kind: "transcript", SourceURL: "https://captions.example/video.vtt",
+			MIMEType: "text/vtt", TransferPreference: "reference_only", RequestedCustody: "reference",
+		})
+		response, err := svc.AcceptManifest(context.Background(), encodeEnvelope(t, envelope))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if state := readerCoverageState(response, "transcript"); state != "provided" {
+			t.Fatalf("transcript state = %q", state)
+		}
+		var valueJSON string
+		if err := st.DB.QueryRow(`SELECT value_json FROM enrichment_observations WHERE fragment_revision_id = ? AND capability = 'transcript'`, response.FragmentRevisionID).Scan(&valueJSON); err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(valueJSON, `"kind":"variant_refs"`) || strings.Contains(strings.ToLower(valueJSON), "html") {
+			t.Fatalf("unexpected transcript observation: %s", valueJSON)
+		}
+	})
+
+	t.Run("plain article marks only impossible media analysis not applicable", func(t *testing.T) {
+		_, svc, _ := openManifestTestService(t, filepath.Join(t.TempDir(), "capture.db"))
+		envelope := decodeEnvelope(t, captureFixture(t))
+		envelope.CaptureID = "capture-plain-article"
+		envelope.Source.Provider = "web"
+		envelope.Source.ProviderItemID = ""
+		envelope.Source.SourceItemKey = "https://example.test/article"
+		envelope.Source.CanonicalURL = envelope.Source.SourceItemKey
+		envelope.Source.SubmittedURL = envelope.Source.SourceItemKey
+		envelope.Media = []capturecontract.CaptureMediaItem{}
+		response, err := svc.AcceptManifest(context.Background(), encodeEnvelope(t, envelope))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, capability := range []string{"gallery_manifest", "original_media", "thumbnail_or_poster"} {
+			if state := readerCoverageState(response, capability); state != "missing" {
+				t.Fatalf("article %s = %q, want conservatively missing", capability, state)
+			}
+		}
+		for _, capability := range []string{"transcript", "OCR", "vision"} {
+			if state := readerCoverageState(response, capability); state != "not_applicable" {
+				t.Fatalf("article %s = %q, want not_applicable", capability, state)
+			}
+		}
+	})
+}
+
+func TestCaptureGalleryObservationUsesStableMediaIDsAfterLegacyIdentityResolution(t *testing.T) {
+	st, svc, _ := openManifestTestService(t, filepath.Join(t.TempDir(), "capture.db"))
+	envelope := decodeEnvelope(t, captureFixture(t))
+	envelope.CaptureID = "capture-legacy-gallery"
+	second := envelope.Media[0]
+	second.Position = 1
+	second.ClientMediaID = "youtube:second"
+	second.ProviderMediaID = "second-video"
+	second.SourceLocator = "https://www.youtube.com/watch?v=secondvideo"
+	second.Variants = append([]capturecontract.CaptureAssetVariant(nil), envelope.Media[0].Variants...)
+	for index := range second.Variants {
+		second.Variants[index].ClientVariantID += ":second"
+		second.Variants[index].SourceURL += "?item=second"
+	}
+	envelope.Media = append(envelope.Media, second)
+
+	candidate, _, _, err := buildCaptureManifest(envelope, captureTestTime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidateID := candidate.ID
+	const preservedLegacyID = "legacy-browser-fragment"
+	if candidateID == preservedLegacyID {
+		t.Fatal("fixture must exercise a speculative ID different from the preserved legacy ID")
+	}
+	candidate.ID = preservedLegacyID
+	candidate.Revision.FragmentID = preservedLegacyID
+	seeded, outcome, err := repository.NewFragmentRepository(st.DB).UpsertResolved(context.Background(), candidate)
+	if err != nil || outcome != repository.UpsertInserted || seeded.ID != preservedLegacyID {
+		t.Fatalf("seed preserved identity: fragment=%+v outcome=%s err=%v", seeded, outcome, err)
+	}
+
+	response, err := svc.AcceptManifest(context.Background(), encodeEnvelope(t, envelope))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.FragmentID != preservedLegacyID {
+		t.Fatalf("capture did not resolve preserved fragment ID: got %q", response.FragmentID)
+	}
+	var valueJSON string
+	if err := st.DB.QueryRow(`SELECT value_json FROM enrichment_observations WHERE fragment_revision_id = ? AND capability = 'gallery_manifest'`, response.FragmentRevisionID).Scan(&valueJSON); err != nil {
+		t.Fatal(err)
+	}
+	var gallery provider.ReferenceListValue
+	if err := json.Unmarshal([]byte(valueJSON), &gallery); err != nil {
+		t.Fatal(err)
+	}
+	if len(gallery.AttachmentIDs) != 0 || len(gallery.MediaAssetIDs) != 2 {
+		t.Fatalf("gallery carried pre-resolution attachment identity: %s", valueJSON)
+	}
+	rows, err := st.DB.Query(`
+SELECT m.id FROM attachment_refs a
+JOIN media_assets m ON m.id = a.media_asset_id
+WHERE a.fragment_revision_id = ? ORDER BY a.position`, response.FragmentRevisionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var persistedMediaIDs []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			t.Fatal(err)
+		}
+		persistedMediaIDs = append(persistedMediaIDs, id)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(gallery.MediaAssetIDs, persistedMediaIDs) {
+		t.Fatalf("gallery media IDs = %v, want persisted ordered IDs %v", gallery.MediaAssetIDs, persistedMediaIDs)
+	}
+}
+
+func TestCaptureRecaptureAppendsSourceObservationsWithoutDuplicatingReplay(t *testing.T) {
+	st, svc, _ := openManifestTestService(t, filepath.Join(t.TempDir(), "capture.db"))
+	envelope := decodeEnvelope(t, captureFixture(t))
+	first, err := svc.AcceptManifest(context.Background(), encodeEnvelope(t, envelope))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.AcceptManifest(context.Background(), encodeEnvelope(t, envelope)); err != nil {
+		t.Fatal(err)
+	}
+	assertProtocolTableCount(t, st.DB, "enrichment_observations", 6)
+
+	envelope.CaptureID = "01KCAPTURE0000000000000001"
+	envelope.CapturedAt = envelope.CapturedAt.Add(time.Minute)
+	envelope.Annotations = []capturecontract.CaptureAnnotation{}
+	second, err := svc.AcceptManifest(context.Background(), encodeEnvelope(t, envelope))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.FragmentRevisionID != first.FragmentRevisionID {
+		t.Fatalf("exact source recapture created revision: %s != %s", second.FragmentRevisionID, first.FragmentRevisionID)
+	}
+	assertProtocolTableCount(t, st.DB, "enrichment_observations", 12)
+	assertProtocolTableCount(t, st.DB, "fragment_capability_coverage", 12)
+	var captures int
+	if err := st.DB.QueryRow(`SELECT COUNT(DISTINCT capture_id) FROM enrichment_observations WHERE fragment_revision_id = ?`, first.FragmentRevisionID).Scan(&captures); err != nil {
+		t.Fatal(err)
+	}
+	if captures != 2 {
+		t.Fatalf("source observations lost recapture provenance: captures=%d", captures)
+	}
+}
+
+func readerCoverageState(response capturecontract.CaptureManifestResponse, capability string) string {
+	for _, item := range response.ReaderItem.Operations.Enrichment {
+		if item.Capability == capability {
+			return item.State
+		}
+	}
+	return ""
 }
 
 func TestCaptureRevisionUsesLogicalMediaSemanticsNotRotatingURL(t *testing.T) {

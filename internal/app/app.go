@@ -47,6 +47,7 @@ type App struct {
 	InboxReviewer   *service.InboxReviewerService
 	Jobs            *service.JobsService
 	Captures        *service.CaptureService
+	Enrichment      *service.EnrichmentService
 }
 
 func Open(ctx context.Context, cfg config.Config) (*App, error) {
@@ -153,7 +154,8 @@ func Open(ctx context.Context, cfg config.Config) (*App, error) {
 			fragmentRepo,
 			cfg,
 		),
-		Captures: service.NewCaptureService(captureRepo, service.NewMediaService(mediaRepo, blobs)),
+		Captures:   service.NewCaptureService(captureRepo, service.NewMediaService(mediaRepo, blobs)),
+		Enrichment: service.NewEnrichmentService(repository.NewEnrichmentRepository(st.DB), nil),
 	}, nil
 }
 

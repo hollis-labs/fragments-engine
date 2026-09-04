@@ -161,6 +161,7 @@ type CaptureAcceptance struct {
 	Descriptions     []DescriptionObservation `json:"descriptions"`
 	Media            []MediaManifestItem      `json:"media"`
 	AssetBindings    []CaptureAssetBinding    `json:"asset_bindings"`
+	Coverage         []CapabilityCoverage     `json:"coverage"`
 	IdempotentReplay bool                     `json:"idempotent_replay"`
 }
 

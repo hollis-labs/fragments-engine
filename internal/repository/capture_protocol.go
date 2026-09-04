@@ -276,7 +276,13 @@ SELECT COUNT(*) FROM capture_followup_outbox
 WHERE capture_id = ? AND state IN ('pending', 'processing')`, attempt.CaptureID).Scan(&pending); err != nil {
 		return CaptureProtocolState{}, fmt.Errorf("inspect capture follow-up state: %w", err)
 	}
-	return CaptureProtocolState{Attempt: attempt, Bindings: bindings, Outcomes: outcomes, EnrichmentInProgress: pending > 0}, nil
+	var activeJobs int
+	if err := r.db.QueryRowContext(ctx, `
+SELECT COUNT(*) FROM enrichment_jobs
+WHERE fragment_revision_id = ? AND status IN ('queued', 'running')`, attempt.FragmentRevisionID).Scan(&activeJobs); err != nil {
+		return CaptureProtocolState{}, fmt.Errorf("inspect capture enrichment jobs: %w", err)
+	}
+	return CaptureProtocolState{Attempt: attempt, Bindings: bindings, Outcomes: outcomes, EnrichmentInProgress: pending > 0 || activeJobs > 0}, nil
 }
 
 func (r *CaptureRepository) CompleteCapture(ctx context.Context, write CaptureCompletionWrite) (CaptureProtocolState, error) {
@@ -485,5 +491,9 @@ func loadProtocolState(ctx context.Context, conn *sql.Conn, attempt domain.Captu
 	if err := conn.QueryRowContext(ctx, `SELECT COUNT(*) FROM capture_followup_outbox WHERE capture_id = ? AND state IN ('pending', 'processing')`, attempt.CaptureID).Scan(&pending); err != nil {
 		return CaptureProtocolState{}, err
 	}
-	return CaptureProtocolState{Attempt: attempt, Bindings: bindings, Outcomes: outcomes, EnrichmentInProgress: pending > 0}, nil
+	var activeJobs int
+	if err := conn.QueryRowContext(ctx, `SELECT COUNT(*) FROM enrichment_jobs WHERE fragment_revision_id = ? AND status IN ('queued', 'running')`, attempt.FragmentRevisionID).Scan(&activeJobs); err != nil {
+		return CaptureProtocolState{}, err
+	}
+	return CaptureProtocolState{Attempt: attempt, Bindings: bindings, Outcomes: outcomes, EnrichmentInProgress: pending > 0 || activeJobs > 0}, nil
 }

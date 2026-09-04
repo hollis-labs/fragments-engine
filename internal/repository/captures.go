@@ -23,15 +23,17 @@ func NewCaptureRepository(db *sql.DB) *CaptureRepository {
 // service layer normalizes it and calculates the semantic digest before this
 // repository crosses the persistence boundary.
 type CaptureWrite struct {
-	Fragment            domain.Fragment
-	Attempt             domain.CaptureAttempt
-	Annotations         []domain.CaptureAnnotation
-	Tags                []domain.AttributedTag
-	Descriptions        []domain.DescriptionObservation
-	Media               []domain.MediaManifestItem
-	AssetBindings       []domain.CaptureAssetBinding
-	FollowUpKind        string
-	FollowUpPayloadJSON string
+	Fragment               domain.Fragment
+	Attempt                domain.CaptureAttempt
+	Annotations            []domain.CaptureAnnotation
+	Tags                   []domain.AttributedTag
+	Descriptions           []domain.DescriptionObservation
+	Media                  []domain.MediaManifestItem
+	AssetBindings          []domain.CaptureAssetBinding
+	EnrichmentObservations []domain.EnrichmentObservation
+	CapabilityCoverage     []domain.CapabilityCoverage
+	FollowUpKind           string
+	FollowUpPayloadJSON    string
 	// BuildAcceptanceSnapshot runs after every row required by manifest
 	// acceptance has been written, but before COMMIT. It lets the application
 	// persist an exact transport response without moving transaction ownership
@@ -260,6 +262,14 @@ INSERT INTO fragment_description_observations (
 			return domain.CaptureAcceptance{}, fmt.Errorf("reload accepted capture media: %w", err)
 		}
 	}
+	var resolvedCoverage []domain.CapabilityCoverage
+	if len(write.CapabilityCoverage) != 0 || len(write.EnrichmentObservations) != 0 {
+		resolvedCoverage, err = InitializeCaptureOn(ctx, conn, attempt.CaptureID, fragment.ID,
+			revisionID, write.EnrichmentObservations, write.CapabilityCoverage, attempt.CreatedAt)
+		if err != nil {
+			return domain.CaptureAcceptance{}, fmt.Errorf("accept capture enrichment: %w", err)
+		}
+	}
 	if strings.TrimSpace(write.FollowUpKind) != "" {
 		payload := strings.TrimSpace(write.FollowUpPayloadJSON)
 		if payload == "" {
@@ -286,6 +296,7 @@ INSERT INTO capture_followup_outbox (
 	}
 	accepted.Media = resolvedMedia
 	accepted.AssetBindings = resolvedBindings
+	accepted.Coverage = resolvedCoverage
 	if write.BuildAcceptanceSnapshot != nil {
 		raw, err := write.BuildAcceptanceSnapshot(accepted)
 		if err != nil {
@@ -381,6 +392,19 @@ func validateCaptureWrite(write CaptureWrite) error {
 			return fmt.Errorf("accept capture: duplicate client variant ID %q", binding.ClientVariantID)
 		}
 		seenBindings[binding.ClientVariantID] = struct{}{}
+	}
+	if (strings.TrimSpace(write.FollowUpKind) != "" || len(write.EnrichmentObservations) != 0 || len(write.CapabilityCoverage) != 0) && len(write.CapabilityCoverage) != len(domain.AllEnrichmentCapabilities()) {
+		return fmt.Errorf("accept capture: all enrichment capabilities must be initialized")
+	}
+	seenCoverage := make(map[domain.EnrichmentCapability]struct{}, len(write.CapabilityCoverage))
+	for _, item := range write.CapabilityCoverage {
+		if !item.Capability.Valid() || !item.State.Valid() {
+			return fmt.Errorf("accept capture: invalid capability coverage %q/%q", item.Capability, item.State)
+		}
+		if _, duplicate := seenCoverage[item.Capability]; duplicate {
+			return fmt.Errorf("accept capture: duplicate capability coverage %q", item.Capability)
+		}
+		seenCoverage[item.Capability] = struct{}{}
 	}
 	return nil
 }
@@ -644,10 +668,14 @@ FROM fragment_revisions WHERE id = ?`, attempt.FragmentRevisionID))
 	if err != nil {
 		return domain.CaptureAcceptance{}, err
 	}
+	coverage, err := listCoverageOn(ctx, conn, attempt.FragmentRevisionID)
+	if err != nil {
+		return domain.CaptureAcceptance{}, err
+	}
 	return domain.CaptureAcceptance{
 		Fragment: fragment, ObservedRevision: revision, Attempt: attempt,
 		Annotations: annotations, Tags: tags, Descriptions: descriptions,
-		Media: media, AssetBindings: bindings,
+		Media: media, AssetBindings: bindings, Coverage: coverage,
 		IdempotentReplay: replay,
 	}, nil
 }
