@@ -35,9 +35,11 @@ field's meaning, or changing a discriminator requires a new major contract.
 operation readiness, so a client must check both. Manifest acceptance, raw asset
 upload, capture lookup, and client completion are ready at `/v1/captures` and
 its capture-scoped subresources. Capability discovery reports
-`capture_manifest`, `asset_upload`, and `capture_completion` as `true`, while
-the later Reader operations remain `false`. It also advertises the 2 MiB
-manifest and 256 MiB asset limits; completion JSON is limited to 1 MiB.
+`capture_manifest`, `asset_upload`, `capture_completion`, `reader_query`, and
+`reader_commands` as `true`. Revision-pinned Reader context and conversation
+references remain contract seams and are reported as `false`. Discovery also
+advertises the 2 MiB manifest and 256 MiB asset limits; completion JSON is
+limited to 1 MiB.
 
 ## Go edge validation
 

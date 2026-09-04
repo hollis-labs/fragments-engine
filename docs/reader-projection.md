@@ -60,22 +60,24 @@ pending, stale, or failed refresh does not blank a useful selected observation.
 Provider observations fill gaps only through the shared enrichment resolver;
 the Reader projection does not apply a later-wins rule.
 
-The article preview is bounded to 4,000 Unicode code points. A content reference
-is included when the immutable revision has full content, but the content
-resource itself belongs to task 0043. Media placement is ordered only by
+The article preview is bounded to 4,000 Unicode code points. A revision-scoped
+content reference is included when the immutable revision has full content.
+Media placement is ordered only by
 `attachment_refs.position`. Every variant retains its own
 `pending`/`available`/`reference_only`/`failed` acquisition state; sibling states
 are never collapsed.
 
-Renderer selection uses provider-neutral content and recognized media roles:
-video wins, then multiple image attachments form a gallery, then one image,
-audio, document, article, text, or unknown. Acquisition state never changes the
-discriminator: a failed image/gallery/video remains that renderer so the
-failure can be shown. Timed text,
-poster, transcript, and other auxiliary attachments cannot turn a video or
-article into a gallery. Provider playback is emitted only for a video projection whose canonical source is
-YouTube and whose provider item ID passes the closed YouTube playback validator.
-No provider HTML or arbitrary embed instructions participate in projection.
+Renderer selection uses provider-neutral content and recognized media roles.
+More than one renderable visual attachment (image or video) forms an ordered
+gallery, including mixed-media carousels. A single video then wins over a
+single image, followed by audio, document, article, text, or unknown.
+Acquisition state never changes the discriminator: a failed
+image/gallery/video remains that renderer so the failure can be shown. Timed
+text, poster, transcript, and other auxiliary attachments cannot turn a video
+or article into a gallery. Provider playback is emitted only for a video
+projection whose canonical source is YouTube and whose provider item ID passes
+the closed YouTube playback validator. No provider HTML or arbitrary embed
+instructions participate in projection.
 
 ## Independent operational state
 
@@ -89,36 +91,26 @@ No provider HTML or arbitrary embed instructions participate in projection.
 - Capture count uses accepted capture attempts and is floored at one for legacy
   fragments whose original ingest predates capture-attempt persistence.
 
-No Reader reading-state or command persistence is introduced here. Missing
-reading state is honestly projected as `unread` at position `none`, revision
-zero, for the local Reader principal. `ReaderItem.revision` is likewise zero:
-it is the future optimistic Reader aggregate revision, not the immutable source
-revision ordinal (that identity remains in `fragment_revision_id`). The
-`actions` array is empty and
-`reader_commands` remains unavailable until task 0042 supplies actual command
-handlers.
+Reader state is principal-scoped and independent of source revisions and
+operational state. A fragment without saved state is projected as `unread` at
+position `none`, revision zero, for the local Reader principal. Saved positions
+use the renderer-specific `article`, `video`, `gallery`, `document`, or `audio`
+shape. `ReaderItem.revision` is the optimistic Reader aggregate revision, not
+the immutable source revision ordinal; immutable content remains identified by
+`fragment_revision_id`.
 
-## Integration hooks for task 0042
+The projection advertises only commands that apply to the item. The closed v1
+registry contains `add_tag`, `remove_tag`, `append_capture_note`,
+`update_curated_note`, `set_reading_progress`, `mark_read`, `mark_unread`,
+`request_asset_acquisition`, `route`, and `materialize`. Every mutation carries
+the expected aggregate revision plus stable command and idempotency identities.
+Principal tag overlays do not erase attributed source/provider/user facts.
+External route and materialize effects retain durable receipts and surface
+uncertain outcomes instead of risking an automatic duplicate effect.
 
-The read model is intentionally modular so task 0042 can add authoritative
-principal state without per-item queries:
-
-- Add the future principal reading-state join to `readerListBaseSQL` and
-  `readerDetailBaseSQL` in `internal/repository/reader.go`, carrying the
-  principal through `ReaderPageRequest`/`Get`. This keeps the base read as one
-  statement and preserves the six-statement budget.
-- Extend the existing `loadTags` UNION in that file to apply future explicit
-  user tag assertions/tombstones. Do not add a seventh per-item or per-principal
-  query.
-- Replace the default `ReadingState` and empty `Actions` assignments in
-  `projectReaderItem` in `internal/service/reader.go` only after the 0042 command
-  registry and aggregate revision are authoritative; hydrate
-  `ReaderItem.revision` from that aggregate at the same time.
-- Replace the centralized `readerMediaContentHref` implementation in that file
-  with 0043's fragment-and-revision-authorized resource route. The projection
-  already supplies all three fragment, revision, and variant identifiers to the
-  helper; no call-site or per-item query change is needed.
-
-These are projection hydration seams only. They do not change the conservative
-scope definitions above, and the frozen command schema does not define triage or
-disposition mutations.
+The six-query read budget remains intact: principal reading state and the
+aggregate revision are joined into the base query, while tag overlays are
+folded into the existing batched tag read. Generated media links use the
+fragment-and-revision-authorized resource route described in
+[`reader-resources.md`](./reader-resources.md). The command schema still defines
+no triage or disposition mutation.

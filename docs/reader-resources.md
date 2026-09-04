@@ -32,6 +32,12 @@ and provider/oEmbed markup cannot survive into rendered output. Markdown is
 served with `nosniff`, an inline-safe disposition, and a restrictive CSP so its
 source text is not interpreted as a browser document.
 
+Because remote Markdown images are outside this trust boundary, the HTML
+projection removes both inline and reference-style image markup before Markdown
+rendering, including multiline linked-image forms that would otherwise leave
+orphan `[` or `](` text. The immutable canonical Markdown is unchanged and
+remains available through `format=markdown`.
+
 Revision content is checked against its stored SHA-256 digest. Both HTML and
 Markdown responses expose a digest and strong ETag for the exact response bytes.
 Because a revision is immutable, these responses are private and immutable.

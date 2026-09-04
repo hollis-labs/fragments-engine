@@ -1,8 +1,10 @@
 # Browser Capture and Reader Architecture
 
-**Status:** Agreed target architecture
+**Status:** Implemented v1 baseline; deferred boundaries remain explicit
 
 **Date:** 2026-09-03
+
+**Implementation reviewed:** 2026-09-04
 
 **Scope:** `fe-clipper` browser capture, Fragments Engine intake and media
 custody, and the Fragments Engine Reader experience. This is an architecture
@@ -25,8 +27,11 @@ This design specializes the broader direction in
 stable fragment, immutable revision, attributed observation, triage case, and
 attachment custody concepts are the foundation for this document.
 
-Existing code and schemas remain implementation truth until this target is
-implemented.
+The v1 baseline described here is implemented. The frozen contracts and current
+code remain implementation truth where this record discusses deferred work.
+Inbox disposition/organization and external agent-session integration remain
+separate follow-ups. See [`browser-capture-reader.md`](./browser-capture-reader.md)
+for the current operator-facing protocol, runtime, and diagnostic details.
 
 ## Agreed outcomes
 
@@ -47,8 +52,8 @@ The target architecture is governed by these decisions:
 7. Mirrored media remains in FE's blob store indefinitely by default. Eviction
    requires an explicit future retention policy.
 8. YouTube playback initially uses a trusted provider embed. Downloading video
-   bytes is an explicit, infrequent, future acquisition command supported by the
-   same media model.
+   bytes requires an explicit, infrequent acquisition command and a configured
+   provider worker; it is never automatic.
 9. Reader supports both an inbox-oriented queue view and persistent library
    reading. Reading state is independent of triage, routing, and materialization.
 10. Reader locations are URL-addressable, including a canonical
@@ -91,10 +96,9 @@ normalized body, source title or description, or ordered media manifest creates
 a new revision under the same fragment. Earlier descriptions and content remain
 available through the immutable observation and revision history.
 
-This is stronger than the current FE behavior. The present `source + source_id
-+ content_hash` uniqueness rule skips exact repeats but changes identity when
-content changes and cannot safely merge new metadata into a skipped intake.
-That behavior does not satisfy the target invariant.
+This replaced FE's earlier `source + source_id + content_hash` uniqueness rule,
+which skipped exact repeats but changed identity when content changed and could
+not safely merge new metadata into a skipped intake.
 
 ### Captured facts are attributed observations
 
@@ -721,6 +725,11 @@ retained: the value may be an explicit source description, a deterministic
 excerpt, or a derived summary. The full reading view uses the normalized body,
 not the card truncation.
 
+The implemented baseline keeps list cards inert and bounded: one plain-text
+excerpt plus at most one authorized visual preview. Players, gallery navigation,
+and full resource states live on the detail page. Audio and document detail use
+safe resource-state/link fallbacks until richer inline renderers are added.
+
 Clicking a card outside its interactive media and controls opens the item detail.
 Player controls, gallery navigation, links, selection, and quick-action controls
 stop card navigation. Keyboard interaction follows the same boundary.
@@ -737,8 +746,10 @@ set_reading_progress / mark_read / mark_unread
 request_asset_acquisition
 route
 materialize
-apply_triage_decision
 ```
+
+`apply_triage_decision` is intentionally not part of the v1 registry; it belongs
+to the separate disposition decision below.
 
 The server advertises which actions are valid for each item and the schema each
 command requires. The UI applies safe mutations optimistically, submits an
@@ -780,9 +791,9 @@ other client.
 
 ## Disposition and organization: deliberately open decision
 
-Reader will expose current triage, route, and materialization controls, but this
-architecture does not define what it means to finish processing an inbox item.
-That is a separate product/domain decision.
+Reader exposes current triage state plus route and materialization controls, but
+this architecture does not define what it means to finish processing an inbox
+item. That remains a separate product/domain decision.
 
 The unresolved question is which deliberate action closes an inbox/triage case
 and how these concepts relate:

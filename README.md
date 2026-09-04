@@ -16,6 +16,9 @@ External destinations are always peers reached through explicit transports such 
 - ingest saved URL manifests for articles, PDFs, videos, images, and text resources
 - ingest a single link via manual intake (bare URL, or a `#link` hashtag alongside a URL embedded in other text) with deterministic title/summary extraction and an optional async Firecrawl fallback for bot-blocked sources
 - accept pre-fetched content from a client that already extracted a page itself (the `apps/fe-clipper` Chrome extension being the first such client), skipping FE's own fetch entirely
+- accept manifest-first browser captures with idempotent asset transfer and explicit completion
+- retain captured media in a content-addressed FE blob store and expose revision-scoped Reader resources
+- provide a media-aware Sysop Reader with inbox/library scopes, durable reading progress, and semantic quick actions
 - ingest `note`/`scratch` items directly out of Nil's per-vault SQLite databases, converting Nil's TipTap/ProseMirror note bodies to plain text
 - persist fragment metadata, provenance, inbox state, and route history in SQLite
 - persist FE-owned attachment and URL-reference records alongside fragments
@@ -29,7 +32,7 @@ External destinations are always peers reached through explicit transports such 
 
 ## Status
 
-This repo is the greenfield build for the architecture in [`docs/`](./docs/). UI is intentionally deferred. The first milestone is an agent-first core with a stable service layer and thin transport wrappers.
+This repo is the active greenfield build for the architecture in [`docs/`](./docs/). It includes the agent-first core, thin transport wrappers, and an embedded Sysop UI. Browser capture and the media-aware Reader are implemented as an initial local v1 baseline.
 
 ## Quick Start
 
@@ -40,6 +43,19 @@ go run ./cmd/fragments-engine ingest run -config ./fragments.yaml
 go run ./cmd/fragments-engine search -q "project roadmap"
 go run ./cmd/fragments-engine fragment backfill-pinterest-corpus -config ./fragments.yaml
 ```
+
+## Browser capture and Reader
+
+Browser clients should discover compatibility at `GET /v1/capabilities`, then
+use the manifest-first `/v1/captures` protocol. The Sysop Reader is available
+at `/sysop/reader?scope=inbox`; canonical item links use
+`/sysop/reader/<fragment-id>`. Capture status, media custody and backup,
+Reader actions/progress, legacy compatibility, and diagnostics are documented
+in [`docs/browser-capture-reader.md`](./docs/browser-capture-reader.md).
+
+Capture and Reader HTTP endpoints delegate to the same application services and
+repositories used by FE's other transports. Streaming capture upload and the
+Reader projection/command surface do not yet have separate CLI or MCP wrappers.
 
 ## Configuration
 

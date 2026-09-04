@@ -7,6 +7,8 @@ This is the operator and agent usage guide for Fragments Engine.
 - FE ingests source material into fragments.
 - FE keeps the canonical metadata, provenance, routing history, recall index, queue state, and entities.
 - FE can export fragments to external peer systems through `file`, `mcp`, `api`, and `cli`.
+- Browser capture and the Sysop Reader have a dedicated operator guide at
+  [`browser-capture-reader.md`](./browser-capture-reader.md).
 
 ## Common Flows
 
