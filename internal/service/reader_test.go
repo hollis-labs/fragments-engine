@@ -489,7 +489,8 @@ WHERE media_asset_id IN (SELECT media_asset_id FROM attachment_refs WHERE fragme
 AND kind = 'poster'`, accepted.FragmentRevisionID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Exec(`INSERT INTO inbox (fragment_id, reason, staged_at) VALUES (?, 'reader test', ?)`, accepted.FragmentID, now); err != nil {
+	if _, err := db.Exec(`INSERT INTO inbox (fragment_id, reason, staged_at) VALUES (?, 'reader test', ?)
+ON CONFLICT(fragment_id) DO UPDATE SET reason = excluded.reason, staged_at = excluded.staged_at`, accepted.FragmentID, now); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.Exec(`INSERT INTO curated_notes (fragment_id, body_markdown, revision, actor_id, updated_at)

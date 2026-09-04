@@ -25,6 +25,7 @@ func NewCaptureRepository(db *sql.DB) *CaptureRepository {
 type CaptureWrite struct {
 	Fragment               domain.Fragment
 	Attempt                domain.CaptureAttempt
+	Inbox                  *CaptureInboxWrite
 	Annotations            []domain.CaptureAnnotation
 	Tags                   []domain.AttributedTag
 	Descriptions           []domain.DescriptionObservation
@@ -44,6 +45,14 @@ type CaptureWrite struct {
 	// out of the repository. A projection/validation failure therefore rolls
 	// back the fragment, context, media, bindings, and outbox together.
 	BuildAcceptanceSnapshot func(domain.CaptureAcceptance) (string, error)
+}
+
+// CaptureInboxWrite requests initial inbox staging as part of the same atomic
+// transaction that accepts a capture. It is explicit so legacy intake can keep
+// running its existing routing and inbox pipeline after capture persistence.
+type CaptureInboxWrite struct {
+	Reason   string
+	StagedAt time.Time
 }
 
 // CaptureConflictError reports reuse of a capture ID, idempotency key, or
@@ -305,6 +314,17 @@ INSERT INTO capture_followup_outbox (
 			return domain.CaptureAcceptance{}, fmt.Errorf("insert capture follow-up intent: %w", err)
 		}
 	}
+	if write.Inbox != nil && outcome != UpsertSkipped && fragment.Status == domain.FragmentStatusInbox {
+		if _, err := conn.ExecContext(ctx, `
+INSERT INTO inbox (fragment_id, reason, staged_at, route_id)
+VALUES (?, ?, ?, NULL)
+ON CONFLICT(fragment_id) DO UPDATE SET
+  reason = excluded.reason,
+  staged_at = excluded.staged_at`,
+			fragment.ID, strings.TrimSpace(write.Inbox.Reason), formatTime(write.Inbox.StagedAt)); err != nil {
+			return domain.CaptureAcceptance{}, fmt.Errorf("stage accepted capture in inbox: %w", err)
+		}
+	}
 	accepted, err := loadCaptureAcceptance(ctx, conn, attempt, false)
 	if err != nil {
 		return domain.CaptureAcceptance{}, err
@@ -410,6 +430,11 @@ func validateCaptureWrite(write CaptureWrite) error {
 	}
 	if (strings.TrimSpace(write.FollowUpKind) != "" || len(write.EnrichmentObservations) != 0 || len(write.CapabilityCoverage) != 0) && len(write.CapabilityCoverage) != len(domain.AllEnrichmentCapabilities()) {
 		return fmt.Errorf("accept capture: all enrichment capabilities must be initialized")
+	}
+	if write.Inbox != nil {
+		if strings.TrimSpace(write.Inbox.Reason) == "" || write.Inbox.StagedAt.IsZero() {
+			return fmt.Errorf("accept capture: inbox reason and staged timestamp are required")
+		}
 	}
 	seenCoverage := make(map[domain.EnrichmentCapability]struct{}, len(write.CapabilityCoverage))
 	for _, item := range write.CapabilityCoverage {
@@ -687,8 +712,13 @@ FROM fragment_revisions WHERE id = ?`, attempt.FragmentRevisionID))
 	if err != nil {
 		return domain.CaptureAcceptance{}, err
 	}
+	var inInbox int
+	if err := conn.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM inbox WHERE fragment_id = ?)`, attempt.FragmentID).Scan(&inInbox); err != nil {
+		return domain.CaptureAcceptance{}, fmt.Errorf("load accepted capture inbox state: %w", err)
+	}
 	return domain.CaptureAcceptance{
 		Fragment: fragment, ObservedRevision: revision, Attempt: attempt,
+		InInbox:     inInbox != 0,
 		Annotations: annotations, Tags: tags, Descriptions: descriptions,
 		Media: media, AssetBindings: bindings, Coverage: coverage,
 		IdempotentReplay: replay,

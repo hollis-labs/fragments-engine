@@ -125,6 +125,7 @@ func (s *CaptureService) AcceptManifest(ctx context.Context, raw []byte) (captur
 	}
 	write.Media = media
 	write.AssetBindings = bindings
+	write.Inbox = &repository.CaptureInboxWrite{Reason: "awaiting routing", StagedAt: now}
 	write.EnrichmentObservations, write.CapabilityCoverage = buildInitialCaptureEnrichment(envelope, fragment, media, now)
 	write.FollowUpKind = "capture_enrichment"
 	write.FollowUpPayloadJSON = string(followUp)
@@ -594,7 +595,7 @@ func projectOptimisticReader(envelope capturecontract.CaptureEnvelope, accepted 
 		ReadingState: capturecontract.ReadingState{PrincipalID: accepted.Attempt.PrincipalID,
 			FragmentID: accepted.Fragment.ID, State: "unread", Position: capturecontract.ReadingPosition{Kind: "none"}, Revision: 0},
 		Operations: capturecontract.OperationalSummaries{
-			Triage:          capturecontract.TriageSummary{CaseIDs: []string{}, UnresolvedCount: 0},
+			Triage:          capturecontract.TriageSummary{CaseIDs: []string{}, UnresolvedCount: boolInt(accepted.InInbox)},
 			Routing:         capturecontract.EffectSummary{State: "none", References: []string{}},
 			Materialization: capturecontract.EffectSummary{State: "none", References: []string{}},
 			Enrichment:      enrichment, Acquisition: acquisition,

@@ -35,8 +35,18 @@ func TestCaptureManifestAcceptReplayConflictAndAtomicFollowUp(t *testing.T) {
 		t.Fatalf("unexpected first response: %+v", first)
 	}
 	assertContractJSON(t, capturecontract.SchemaCaptureResponse, first)
-	for table, want := range map[string]int{"fragments": 1, "fragment_revisions": 1, "capture_attempts": 1, "capture_annotations": 1, "attachment_refs": 1, "capture_asset_bindings": 2, "capture_followup_outbox": 1, "enrichment_observations": 6, "fragment_capability_coverage": 12} {
+	for table, want := range map[string]int{"fragments": 1, "fragment_revisions": 1, "capture_attempts": 1, "capture_annotations": 1, "attachment_refs": 1, "capture_asset_bindings": 2, "capture_followup_outbox": 1, "enrichment_observations": 6, "fragment_capability_coverage": 12, "inbox": 1} {
 		assertProtocolTableCount(t, st.DB, table, want)
+	}
+	if first.ReaderItem.Operations.Triage.UnresolvedCount != 1 {
+		t.Fatalf("optimistic Reader triage count = %d, want 1", first.ReaderItem.Operations.Triage.UnresolvedCount)
+	}
+	var inboxReason, inboxStagedAt string
+	if err := st.DB.QueryRow(`SELECT reason, staged_at FROM inbox WHERE fragment_id = ?`, first.FragmentID).Scan(&inboxReason, &inboxStagedAt); err != nil {
+		t.Fatalf("read accepted capture inbox row: %v", err)
+	}
+	if inboxReason != "awaiting routing" || inboxStagedAt != captureTestTime.Format(time.RFC3339Nano) {
+		t.Fatalf("accepted capture inbox row = %q at %q", inboxReason, inboxStagedAt)
 	}
 
 	replayed, err := svc.AcceptManifest(context.Background(), raw)
@@ -51,7 +61,7 @@ func TestCaptureManifestAcceptReplayConflictAndAtomicFollowUp(t *testing.T) {
 	if !reflect.DeepEqual(replayed, want) {
 		t.Fatalf("replay changed snapshot\n got=%+v\nwant=%+v", replayed, want)
 	}
-	for table, wantCount := range map[string]int{"capture_attempts": 1, "capture_annotations": 1, "capture_asset_bindings": 2, "capture_followup_outbox": 1, "enrichment_observations": 6, "fragment_capability_coverage": 12} {
+	for table, wantCount := range map[string]int{"capture_attempts": 1, "capture_annotations": 1, "capture_asset_bindings": 2, "capture_followup_outbox": 1, "enrichment_observations": 6, "fragment_capability_coverage": 12, "inbox": 1} {
 		assertProtocolTableCount(t, st.DB, table, wantCount)
 	}
 
@@ -184,13 +194,14 @@ func TestCaptureManifestLateProjectionFailureRollsBackEverything(t *testing.T) {
 		t.Fatal(err)
 	}
 	write.Media, write.AssetBindings = media, bindings
+	write.Inbox = &repository.CaptureInboxWrite{Reason: "awaiting routing", StagedAt: captureTestTime}
 	write.EnrichmentObservations, write.CapabilityCoverage = buildInitialCaptureEnrichment(envelope, fragment, media, captureTestTime)
 	write.FollowUpKind, write.FollowUpPayloadJSON = "capture_enrichment", `{}`
 	write.BuildAcceptanceSnapshot = func(domain.CaptureAcceptance) (string, error) { return "", errors.New("late projection failed") }
 	if _, err := captureRepo.Accept(context.Background(), write); err == nil {
 		t.Fatal("late projection failure unexpectedly committed")
 	}
-	for _, table := range []string{"fragments", "fragment_revisions", "capture_attempts", "attachment_refs", "media_assets", "asset_variants", "capture_asset_bindings", "capture_followup_outbox", "enrichment_observations", "fragment_capability_coverage"} {
+	for _, table := range []string{"fragments", "fragment_revisions", "capture_attempts", "attachment_refs", "media_assets", "asset_variants", "capture_asset_bindings", "capture_followup_outbox", "enrichment_observations", "fragment_capability_coverage", "inbox"} {
 		assertProtocolTableCount(t, st.DB, table, 0)
 	}
 	_ = svc

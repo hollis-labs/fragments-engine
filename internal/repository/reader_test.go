@@ -85,12 +85,12 @@ func TestReaderRepositoryUsesSixQueriesIndependentOfPageCardinality(t *testing.T
 	}
 
 	counting.queries = 0
-	empty, err := repo.List(context.Background(), repository.ReaderPageRequest{Scope: "inbox", Limit: 10, PrincipalID: "local-user"})
+	inbox, err := repo.List(context.Background(), repository.ReaderPageRequest{Scope: "inbox", Limit: 10, PrincipalID: "local-user"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(empty.Bases) != 0 || counting.queries != 6 {
-		t.Fatalf("empty page bases=%d queries=%d, want 0 and 6", len(empty.Bases), counting.queries)
+	if len(inbox.Bases) != 3 || counting.queries != 6 {
+		t.Fatalf("inbox page bases=%d queries=%d, want 3 and 6", len(inbox.Bases), counting.queries)
 	}
 }
 
@@ -98,7 +98,7 @@ func TestReaderRepositoryScopesAliasAndRevisionOwnership(t *testing.T) {
 	st, captureService := openReaderRepositoryFixture(t)
 	first := acceptReaderRepositoryFixture(t, captureService, 0)
 	second := acceptReaderRepositoryFixture(t, captureService, 1)
-	if _, err := st.DB.Exec(`INSERT INTO inbox (fragment_id, reason, staged_at) VALUES (?, 'test', '2026-09-03T12:00:00Z')`, first.FragmentID); err != nil {
+	if _, err := st.DB.Exec(`UPDATE inbox SET reason = 'test', staged_at = '2026-09-03T12:00:00Z' WHERE fragment_id = ?`, first.FragmentID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := st.DB.Exec(`DELETE FROM inbox WHERE fragment_id = ?`, second.FragmentID); err != nil {

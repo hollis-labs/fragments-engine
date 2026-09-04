@@ -22,7 +22,7 @@ func TestReaderHTTPListAndDetailReturnFrozenV1Contracts(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	listed := serveReaderRequest(server, http.MethodGet, "/v1/reader/items?scope=all")
+	listed := serveReaderRequest(server, http.MethodGet, "/v1/reader/items?scope=inbox")
 	if listed.Code != http.StatusOK {
 		t.Fatalf("list status=%d body=%s", listed.Code, listed.Body.String())
 	}
@@ -37,6 +37,9 @@ func TestReaderHTTPListAndDetailReturnFrozenV1Contracts(t *testing.T) {
 	}
 	if page.Items[0].Revision != 0 {
 		t.Fatalf("Reader aggregate revision=%d, want explicit no-command-state fallback 0", page.Items[0].Revision)
+	}
+	if page.Items[0].Operations.Triage.UnresolvedCount != 1 {
+		t.Fatalf("Reader inbox triage count=%d, want 1", page.Items[0].Operations.Triage.UnresolvedCount)
 	}
 	if page.Items[0].Playback == nil || page.Items[0].Playback.ProviderItemID != acceptance.ReaderItem.Playback.ProviderItemID {
 		t.Fatalf("persisted projection lost safe optimistic playback: %+v", page.Items[0].Playback)

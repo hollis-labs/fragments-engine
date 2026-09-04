@@ -156,6 +156,7 @@ type CaptureAcceptance struct {
 	Fragment         Fragment                 `json:"fragment"`
 	ObservedRevision FragmentRevision         `json:"observed_revision"`
 	Attempt          CaptureAttempt           `json:"attempt"`
+	InInbox          bool                     `json:"in_inbox"`
 	Annotations      []CaptureAnnotation      `json:"annotations"`
 	Tags             []AttributedTag          `json:"tags"`
 	Descriptions     []DescriptionObservation `json:"descriptions"`
