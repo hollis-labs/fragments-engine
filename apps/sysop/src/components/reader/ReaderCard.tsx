@@ -1,11 +1,12 @@
-import type { ReactNode } from 'react'
+import { useState, type ReactNode } from 'react'
 import { ExternalLink } from 'lucide-react'
 import { ReaderCardMediaSeam } from './ReaderRendererSeam'
 import { ReaderProvenanceSpine } from './ReaderProvenanceSpine'
-import { ReaderQuickActionSeam } from './ReaderQuickActionSeam'
 import { ReaderStateSummary } from './ReaderStateSummary'
+import { ReaderEffectActions, ReaderReadingControls } from './ReaderInlineActions'
+import { ReaderNoteEditor, type ReaderNoteKind } from './ReaderNotes'
+import { ReaderTags } from './ReaderTags'
 import {
-  readingStateLabel,
   readerPlainTextExcerpt,
   safeReaderSourceHref,
   sourceHost,
@@ -17,8 +18,8 @@ import type { ReaderItem } from '@/lib/types'
 interface ReaderCardProps {
   item: ReaderItem
   onOpen: (fragmentId: string) => void
+  onItemChange: (item: ReaderItem) => void
   mediaSlot?: ReactNode
-  actionSlot?: ReactNode
 }
 
 function publishedLabel(value: string | undefined): string | undefined {
@@ -32,7 +33,10 @@ function publishedLabel(value: string | undefined): string | undefined {
   }).format(date)
 }
 
-export function ReaderCard({ item, onOpen, mediaSlot, actionSlot }: ReaderCardProps) {
+type ReaderCardTab = 'content' | ReaderNoteKind
+
+export function ReaderCard({ item, onOpen, onItemChange, mediaSlot }: ReaderCardProps) {
+  const [activeTab, setActiveTab] = useState<ReaderCardTab>('content')
   const source = sourceLabel(item)
   const host = sourceHost(item)
   const published = publishedLabel(item.display.published_at)
@@ -66,55 +70,94 @@ export function ReaderCard({ item, onOpen, mediaSlot, actionSlot }: ReaderCardPr
     >
       <ReaderProvenanceSpine item={item} />
 
-      <div className="grid min-w-0 gap-5 lg:grid-cols-[minmax(0,1fr)_16rem] lg:items-start">
-        <div className="min-w-0 flex-1">
+      <div
+        className="grid min-w-0 gap-4 md:grid-cols-[minmax(0,1fr)_14rem] md:items-start"
+        data-testid="reader-card-heading"
+      >
+        <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[12px] leading-4 text-text-subtle">
             <span className="font-medium text-text-soft">{source}</span>
             {host && <span>{host}</span>}
             {published && <time dateTime={item.display.published_at}>{published}</time>}
             <span>{item.capture_count === 1 ? 'Captured once' : `Captured ${item.capture_count} times`}</span>
-            <span>{readingStateLabel(item.reading_state.state)}</span>
           </div>
 
           <h2 className="mt-2 line-clamp-2 text-[18px] font-semibold leading-6 text-text sm:text-[19px]">
             {item.display.title.value || 'Untitled fragment'}
           </h2>
 
-          <p className="mt-2 line-clamp-3 max-w-[70ch] text-[14px] leading-[1.6] text-text-soft">
-            {summary || 'No summary is available yet.'}
-          </p>
-
-          <p className="mt-2 text-[11px] leading-4 text-text-subtle">
-            Title from {item.display.title.source}; summary from {item.display.summary.source}
-          </p>
-
-          {item.tags.combined.length > 0 && (
-            <ul className="mt-3 flex flex-wrap gap-x-3 gap-y-1" aria-label="Tags">
-              {item.tags.combined.slice(0, 4).map((tag) => (
-                <li key={tag} className="text-[12px] text-text-muted">
-                  #{tag}
-                </li>
-              ))}
-              {item.tags.combined.length > 4 && (
-                <li className="text-[12px] text-text-subtle">+{item.tags.combined.length - 4} more</li>
-              )}
-            </ul>
-          )}
+          <div className="mt-2">
+            <ReaderReadingControls item={item} onItemChange={onItemChange} compact />
+          </div>
         </div>
 
-        <div className="flex min-w-0 flex-col items-stretch gap-2 overflow-hidden">
-          <div className="min-w-0 overflow-hidden" data-reader-media-slot data-reader-nav-exclude>
-            {mediaSlot ?? <ReaderCardMediaSeam item={item} />}
-          </div>
-          <div className="flex justify-end">
-            <ReaderQuickActionSeam>{actionSlot}</ReaderQuickActionSeam>
-          </div>
+        <div className="w-full min-w-0 overflow-hidden md:justify-self-end" data-reader-media-slot data-reader-nav-exclude>
+          {mediaSlot ?? <ReaderCardMediaSeam item={item} />}
         </div>
       </div>
 
-      <div className="mt-5 border-t border-border-soft pt-4">
-        <ReaderStateSummary item={item} compact />
+      <div
+        className="mt-4 flex items-center gap-1 border-b border-border-soft"
+        role="tablist"
+        aria-label={`Views for ${item.display.title.value || 'untitled fragment'}`}
+        data-reader-nav-exclude
+      >
+        {(['content', 'curated', 'capture'] as const).map((tab) => (
+          <button
+            key={tab}
+            type="button"
+            role="tab"
+            aria-selected={activeTab === tab}
+            className={`min-h-9 border-b px-3 text-[12px] font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring ${
+              activeTab === tab
+                ? 'border-primary text-text'
+                : 'border-transparent text-text-subtle hover:text-text'
+            }`}
+            onClick={(event) => {
+              event.stopPropagation()
+              setActiveTab(tab)
+            }}
+            onKeyDown={(event) => event.stopPropagation()}
+          >
+            {tab === 'content' ? 'Content' : tab === 'curated' ? 'Curated note' : 'Capture note'}
+          </button>
+        ))}
       </div>
+
+      {activeTab === 'content' ? (
+        <>
+          <div className="mt-4 min-w-0">
+            <p className="line-clamp-3 max-w-[78ch] text-[14px] leading-[1.6] text-text-soft">
+              {summary || 'No summary is available yet.'}
+            </p>
+
+            <p className="mt-2 text-[11px] leading-4 text-text-subtle">
+              Title from {item.display.title.source}; summary from {item.display.summary.source}
+            </p>
+
+            <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
+              <div className="min-w-0">
+                <ReaderTags item={item} onItemChange={onItemChange} compact />
+              </div>
+              <ReaderEffectActions item={item} onItemChange={onItemChange} includeMedia compact />
+            </div>
+          </div>
+
+          <div className="mt-5 border-t border-border-soft pt-4">
+            <ReaderStateSummary item={item} compact />
+          </div>
+        </>
+      ) : (
+        <div className="pt-4">
+          <ReaderNoteEditor
+            key={`${activeTab}-${activeTab === 'curated' ? item.curated_note?.revision ?? 0 : 'append'}`}
+            item={item}
+            onItemChange={onItemChange}
+            kind={activeTab}
+            compact
+          />
+        </div>
+      )}
 
       {sourceHref && (
         <a

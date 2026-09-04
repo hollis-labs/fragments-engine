@@ -93,7 +93,7 @@ export function UnknownRenderer({ item, presentation, className }: ReaderRendere
   )
   return (
     <section
-      className={cn('rounded-md border border-border bg-panel-2/30 p-4', className)}
+      className={cn('py-2', className)}
       data-reader-renderer="unknown"
       data-reader-presentation={presentation}
     >

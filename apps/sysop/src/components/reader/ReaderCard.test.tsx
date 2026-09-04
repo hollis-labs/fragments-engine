@@ -1,7 +1,6 @@
-import { fireEvent, render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, within } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { ReaderCard } from './ReaderCard'
-import { ReaderActions } from './ReaderActions'
 import { ApiProvider } from '@/contexts/ApiContext'
 import { apiClient } from '@/lib/api'
 import { readerItem } from '@/test/reader-fixture'
@@ -9,7 +8,7 @@ import { readerItem } from '@/test/reader-fixture'
 describe('ReaderCard', () => {
   it('opens from the card surface and keyboard', () => {
     const onOpen = vi.fn()
-    render(<ReaderCard item={readerItem()} onOpen={onOpen} />)
+    render(<ReaderCard item={readerItem()} onOpen={onOpen} onItemChange={() => {}} />)
     const card = screen.getByRole('link', { name: 'Open A durable fragment' })
 
     fireEvent.click(card)
@@ -17,7 +16,7 @@ describe('ReaderCard', () => {
 
     expect(onOpen).toHaveBeenCalledTimes(2)
     expect(onOpen).toHaveBeenLastCalledWith('fragment-1')
-    expect(screen.getByRole('button', { name: 'Actions are not available yet' }).hasAttribute('disabled')).toBe(true)
+    expect(screen.getByRole('tab', { name: 'Content' }).getAttribute('aria-selected')).toBe('true')
   })
 
   it('excludes source links, media controls, action menus, and text selection', () => {
@@ -26,20 +25,19 @@ describe('ReaderCard', () => {
       <ReaderCard
         item={readerItem()}
         onOpen={onOpen}
+        onItemChange={() => {}}
         mediaSlot={
           <div>
             <button type="button">Next image</button>
             <video data-testid="reader-player" controls />
           </div>
         }
-        actionSlot={<button type="button">Open actions</button>}
       />,
     )
 
     fireEvent.click(screen.getByRole('link', { name: 'View source' }))
     fireEvent.click(screen.getByRole('button', { name: 'Next image' }))
     fireEvent.click(screen.getByTestId('reader-player'))
-    fireEvent.click(screen.getByRole('button', { name: 'Open actions' }))
     expect(onOpen).not.toHaveBeenCalled()
 
     const summary = screen.getByText(/A compact summary/)
@@ -71,6 +69,7 @@ describe('ReaderCard', () => {
           })
         }
         onOpen={() => {}}
+        onItemChange={() => {}}
       />,
     )
 
@@ -82,16 +81,48 @@ describe('ReaderCard', () => {
     expect(states.textContent).toContain('Media1 failed · 1 pending')
   })
 
+  it('keeps the media preview in the same heading row as the title and reading controls', () => {
+    const item = readerItem({
+      actions: [
+        {
+          command: 'mark_read',
+          input_schema:
+            'https://schemas.hollis-labs.dev/fragments-engine/browser-capture-reader/v1/reader-command.schema.json#/$defs/MarkRead',
+          expected_revision_required: true,
+        },
+        {
+          command: 'set_reading_progress',
+          input_schema:
+            'https://schemas.hollis-labs.dev/fragments-engine/browser-capture-reader/v1/reader-command.schema.json#/$defs/SetReadingProgress',
+          expected_revision_required: true,
+        },
+      ],
+    })
+    render(
+      <ReaderCard
+        item={item}
+        onOpen={() => {}}
+        onItemChange={() => {}}
+        mediaSlot={<div data-testid="custom-card-media">Preview</div>}
+      />,
+    )
+
+    const heading = screen.getByTestId('reader-card-heading')
+    expect(within(heading).getByRole('heading', { name: 'A durable fragment' })).not.toBeNull()
+    expect(within(heading).getByRole('button', { name: 'Reading position' })).not.toBeNull()
+    expect(within(heading).getByTestId('custom-card-media')).not.toBeNull()
+  })
+
   it('does not project an unsafe persisted source string as an anchor', () => {
     const item = readerItem({
       source: { ...readerItem().source, canonical_url: 'javascript:alert(document.cookie)' },
     })
-    render(<ReaderCard item={item} onOpen={() => {}} />)
+    render(<ReaderCard item={item} onOpen={() => {}} onItemChange={() => {}} />)
 
     expect(screen.queryByRole('link', { name: 'View source' })).toBeNull()
   })
 
-  it('keeps the real Reader action tray inside the card interaction fence', () => {
+  it('keeps inline reading controls inside the card interaction fence', () => {
     const onOpen = vi.fn()
     const item = readerItem({
       actions: [
@@ -108,13 +139,12 @@ describe('ReaderCard', () => {
         <ReaderCard
           item={item}
           onOpen={onOpen}
-          actionSlot={<ReaderActions item={item} onItemChange={() => {}} />}
+          onItemChange={() => {}}
         />
       </ApiProvider>,
     )
 
-    fireEvent.click(screen.getByRole('button', { name: 'Open Reader actions' }))
-    fireEvent.click(screen.getByRole('button', { name: 'Mark read' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Mark as read' }))
 
     expect(onOpen).not.toHaveBeenCalled()
   })

@@ -60,7 +60,7 @@ export function ImageRenderer({ item, presentation, className }: ReaderRendererP
       <button
         ref={triggerRef}
         type="button"
-        className={`${readerControlClass} group relative block w-full overflow-hidden border border-border bg-panel-2 text-left`}
+        className={`${readerControlClass} group relative block w-full overflow-hidden bg-transparent text-left`}
         onClick={(event) => {
           stopReaderNavigation(event)
           setOpen(true)

@@ -1,12 +1,15 @@
 // @vitest-environment jsdom
 
-import { afterEach, describe, expect, it } from 'vitest'
-import { cleanup, render, screen } from '@testing-library/react'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 
 import { imageFixture, mixedGalleryFixture, readerFixture, videoFixture } from './fixtures'
 import { ReaderContentRenderer } from './reader-content-renderer'
 
-afterEach(cleanup)
+afterEach(() => {
+  cleanup()
+  vi.unstubAllGlobals()
+})
 
 describe('ReaderContentRenderer', () => {
   it.each([
@@ -23,10 +26,15 @@ describe('ReaderContentRenderer', () => {
   it.each([
     ['image', imageFixture],
     ['gallery', mixedGalleryFixture],
-  ])('keeps the revision-pinned sanitized article available in %s detail', (_kind, item) => {
+  ])('keeps the revision-pinned sanitized article available in %s detail', async (_kind, item) => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(
+      '<p>Theme-aware captured page</p>',
+      { status: 200, headers: { 'content-type': 'text/html; charset=utf-8' } },
+    )))
     const { container } = render(<ReaderContentRenderer item={item} presentation="detail" />)
-    const frame = screen.getByTitle(`Article: ${item.display.title.value}`)
-    expect(frame.getAttribute('src')).toBe(item.article.full_content_href)
+    expect(await screen.findByText('Theme-aware captured page')).toBeTruthy()
+    expect(container.querySelector('[data-reader-sanitized-content]')).toBeTruthy()
+    expect(container.querySelector('iframe')).toBeNull()
     expect(container.innerHTML).not.toContain('untrusted.example')
   })
 
@@ -34,14 +42,16 @@ describe('ReaderContentRenderer', () => {
     ['image', imageFixture],
     ['gallery', mixedGalleryFixture],
     ['video', videoFixture],
-  ])('keeps %s cards static and bounded without loading detail interactions', (_kind, item) => {
+  ])('opens %s card media in a focused preview without navigating', async (_kind, item) => {
     const { container } = render(<ReaderContentRenderer item={item} presentation="card" />)
     expect(container.querySelector('[data-reader-card-visual]')).toBeTruthy()
-    expect(screen.queryByTitle(`Article: ${item.display.title.value}`)).toBeNull()
-    expect(container.querySelector('button')).toBeNull()
+    const trigger = screen.getByRole('button', { name: _kind === 'video' ? /Play video:/ : /View larger image:/ })
     expect(container.querySelector('iframe')).toBeNull()
     expect(container.querySelector('[role="dialog"]')).toBeNull()
     expect(container.querySelector('[data-transcript-state]')).toBeNull()
+    fireEvent.click(trigger)
+    expect(await screen.findByRole('dialog')).toBeTruthy()
+    if (_kind === 'video') expect(screen.getByTitle(/YouTube video:/)).toBeTruthy()
   })
 
   it('does not append an empty article section to pure media detail', () => {

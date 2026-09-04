@@ -144,6 +144,61 @@ describe('Reader routes', () => {
     await waitFor(() => expect(fetchReaderItem).toHaveBeenCalledTimes(2))
   })
 
+  it('paginates through Inbox neighbors with header buttons and arrow keys', async () => {
+    const first = readerItem({
+      fragment_id: 'fragment-first',
+      display: { ...readerItem().display, title: { value: 'First inbox item', source: 'source' } },
+    })
+    const middle = readerItem({
+      fragment_id: 'fragment-middle',
+      display: { ...readerItem().display, title: { value: 'Middle inbox item', source: 'source' } },
+    })
+    const last = readerItem({
+      fragment_id: 'fragment-last',
+      display: { ...readerItem().display, title: { value: 'Last inbox item', source: 'source' } },
+    })
+    const byID = new Map([first, middle, last].map((item) => [item.fragment_id, item]))
+    const fetchReaderItem = vi.fn<ApiClient['fetchReaderItem']>(async ({ fragmentId }) => byID.get(fragmentId)!)
+    renderMemoryShell(
+      '/reader/fragment-middle',
+      clientWithReader({
+        fetchReaderItem,
+        fetchReaderItems: async () => readerList('inbox', [first, middle, last]),
+      }),
+    )
+
+    expect(await screen.findByText('Middle inbox item')).not.toBeNull()
+    const next = screen.getByRole('button', { name: 'Next inbox item' })
+    await waitFor(() => expect(next.hasAttribute('disabled')).toBe(false))
+    fireEvent.click(next)
+    expect(await screen.findByText('Last inbox item')).not.toBeNull()
+
+    const previous = screen.getByRole('button', { name: 'Previous inbox item' })
+    await waitFor(() => expect(previous.hasAttribute('disabled')).toBe(false))
+    fireEvent.keyDown(window, { key: 'ArrowLeft' })
+    expect(await screen.findByText('Middle inbox item')).not.toBeNull()
+  })
+
+  it('always sends the detail header Reader link to the Inbox home', async () => {
+    window.history.replaceState({}, '', '/reader?scope=library')
+    render(
+      <ApiProvider client={clientWithReader()}>
+        <BrowserRouter>
+          <AppShell />
+        </BrowserRouter>
+      </ApiProvider>,
+    )
+
+    fireEvent.click(await screen.findByRole('link', { name: 'Open A durable fragment' }))
+    await waitFor(() => expect(window.location.pathname).toBe('/reader/fragment-1'))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Back to Reader inbox' }))
+
+    await waitFor(() => expect(window.location.pathname).toBe('/reader'))
+    expect(window.location.search).toBe('?scope=inbox')
+    expect(screen.getByRole('link', { name: 'Inbox' }).getAttribute('aria-current')).toBe('page')
+  })
+
   it('rejects an empty historical revision without issuing a detail request', async () => {
     const fetchReaderItem = vi.fn<ApiClient['fetchReaderItem']>(async () => readerItem())
     renderMemoryShell('/reader/fragment-1?revision_id=', clientWithReader({ fetchReaderItem }))
@@ -250,7 +305,7 @@ describe('Reader routes', () => {
     expect(sidecar?.getAttribute('data-fragment-revision-id')).toBe('revision-pinned')
   })
 
-  it('wires the capability-driven action tray into Reader cards', async () => {
+  it('wires capability-driven reading controls directly into Reader cards', async () => {
     const item = readerItem({
       actions: [
         {
@@ -266,7 +321,7 @@ describe('Reader routes', () => {
       clientWithReader({ fetchReaderItems: async () => readerList('inbox', [item]) }),
     )
 
-    expect(await screen.findByRole('button', { name: 'Open Reader actions' })).not.toBeNull()
+    expect(await screen.findByRole('button', { name: 'Mark as read' })).not.toBeNull()
   })
 
   it('shows one inert excerpt and the truthful no-visual state for a legacy article card', async () => {
@@ -284,7 +339,7 @@ describe('Reader routes', () => {
     expect(container.querySelector('[data-reader-card-visual]')).toBeNull()
   })
 
-  it('uses one bounded static authorized visual for rich image, gallery, and video cards', async () => {
+  it('uses one bounded interactive authorized visual for rich image, gallery, and video cards', async () => {
     const items = [
       readerItem({
         fragment_id: 'rich-image',
@@ -322,7 +377,7 @@ describe('Reader routes', () => {
       const mediaSlot = card!.querySelector('[data-reader-media-slot]')
       expect(mediaSlot?.querySelectorAll('img')).toHaveLength(1)
       expect(mediaSlot?.querySelector('[data-reader-card-visual]')?.className).toContain('max-h-40')
-      expect(mediaSlot?.querySelector('button')).toBeNull()
+      expect(mediaSlot?.querySelector('button')).not.toBeNull()
       expect(mediaSlot?.querySelector('iframe')).toBeNull()
       expect(mediaSlot?.querySelector('[role="dialog"]')).toBeNull()
       expect(mediaSlot?.querySelector('[data-transcript-state]')).toBeNull()
@@ -385,8 +440,9 @@ describe('Reader routes', () => {
     expect(screen.getByText('A distinct provider description.')).not.toBeNull()
   })
 
-  it('uses the real action tray by default on detail while retaining the injected seam', async () => {
+  it('uses inline reading controls by default on detail while retaining the injected seam', async () => {
     const item = readerItem({
+      reading_state: { ...readerItem().reading_state, state: 'read' },
       actions: [
         {
           command: 'mark_unread',
@@ -401,6 +457,6 @@ describe('Reader routes', () => {
       clientWithReader({ fetchReaderItem: async () => item }),
     )
 
-    expect(await screen.findByRole('button', { name: 'Open Reader actions' })).not.toBeNull()
+    expect(await screen.findByRole('button', { name: 'Mark as unread' })).not.toBeNull()
   })
 })

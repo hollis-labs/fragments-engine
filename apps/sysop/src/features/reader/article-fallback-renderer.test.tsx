@@ -1,13 +1,16 @@
 // @vitest-environment jsdom
 
-import { afterEach, describe, expect, it } from 'vitest'
-import { cleanup, render, screen } from '@testing-library/react'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { cleanup, render, screen, waitFor } from '@testing-library/react'
 
 import { ArticleRenderer } from './article-renderer'
 import { AudioRenderer, DocumentRenderer, UnknownRenderer } from './fallback-renderer'
 import { availableImageVariant, readerFixture } from './fixtures'
 
-afterEach(cleanup)
+afterEach(() => {
+  cleanup()
+  vi.unstubAllGlobals()
+})
 
 describe('ArticleRenderer', () => {
   it('renders preview Markdown as bounded plain text instead of executable HTML', () => {
@@ -25,14 +28,23 @@ describe('ArticleRenderer', () => {
     expect(container.querySelector('p')?.className).toContain('line-clamp-5')
   })
 
-  it('loads full content only through an empty-sandbox server article resource', () => {
+  it('loads server-sanitized full content into the theme-aware reading surface', async () => {
     const item = readerFixture()
+    const fetchContent = vi.fn(async () => new Response(
+      '<h1>Readable heading</h1><p>Sanitized body with <a href="https://example.com">a link</a>.</p>',
+      { status: 200, headers: { 'content-type': 'text/html; charset=utf-8' } },
+    ))
+    vi.stubGlobal('fetch', fetchContent)
     render(<ArticleRenderer item={item} presentation="detail" />)
-    const frame = screen.getByTitle(`Article: ${item.display.title.value}`)
-    expect(frame.getAttribute('src')).toBe(item.article.full_content_href)
-    expect(frame.getAttribute('sandbox')).toBe('')
-    expect(frame.getAttribute('srcdoc')).toBeNull()
-    expect(frame.getAttribute('referrerpolicy')).toBe('no-referrer')
+    expect(await screen.findByRole('heading', { name: 'Readable heading' })).toBeTruthy()
+    const surface = screen.getByText(/Sanitized body/).closest('[data-reader-sanitized-content]')
+    expect(surface?.className).toContain('reader-article-content')
+    expect(document.querySelector('iframe')).toBeNull()
+    expect(fetchContent).toHaveBeenCalledWith(
+      item.article.full_content_href,
+      expect.objectContaining({ headers: { Accept: 'text/html' }, credentials: 'same-origin' }),
+    )
+    await waitFor(() => expect(screen.queryByLabelText('Loading readable content')).toBeNull())
   })
 
   it('falls back to inert text when the projected full href is external or near-miss', () => {

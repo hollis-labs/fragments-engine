@@ -9,7 +9,7 @@ import { VideoRenderer } from './video-renderer'
 afterEach(cleanup)
 
 describe('VideoRenderer', () => {
-  it('uses poster first, then builds only a permission-minimal trusted YouTube iframe', () => {
+  it('renders a permission-minimal trusted YouTube iframe directly in the detail hero', () => {
     const parentNavigation = vi.fn()
     const { container } = render(
       <div onClick={parentNavigation}>
@@ -17,9 +17,7 @@ describe('VideoRenderer', () => {
       </div>,
     )
 
-    expect(screen.getByRole('img', { name: /poster/i }).getAttribute('src')).toContain('youtube-poster')
-    expect(screen.queryByTitle(/YouTube video/)).toBeNull()
-    fireEvent.click(screen.getByRole('button', { name: 'Load trusted YouTube player' }))
+    expect(screen.queryByRole('img', { name: /poster/i })).toBeNull()
     expect(parentNavigation).not.toHaveBeenCalled()
 
     const frame = screen.getByTitle(`YouTube video: ${videoFixture.display.title.value}`)
@@ -91,7 +89,7 @@ describe('VideoRenderer', () => {
     }
     render(<VideoRenderer item={item} presentation="detail" />)
     expect(screen.getByText('This representation is still being acquired.')).toBeTruthy()
-    expect(screen.getByRole('button', { name: 'Load trusted YouTube player' })).toBeTruthy()
+    expect(screen.getByTitle(/YouTube video/)).toBeTruthy()
   })
 
   it.each([
@@ -126,6 +124,6 @@ describe('VideoRenderer', () => {
 
     expect(container.querySelector('[data-transcript-state]')?.getAttribute('data-transcript-state')).toBe(expected)
     expect(screen.queryByRole('link', { name: 'Open transcript' })).toBeNull()
-    expect(screen.getByRole('button', { name: 'Load trusted YouTube player' })).toBeTruthy()
+    expect(screen.getByTitle(/YouTube video/)).toBeTruthy()
   })
 })

@@ -124,7 +124,7 @@ export function GalleryRenderer({ item, presentation, className }: ReaderRendere
       data-reader-renderer="gallery"
       data-reader-presentation={presentation}
     >
-      <div className="overflow-hidden rounded-md border border-border bg-panel-2">
+      <div className="overflow-hidden">
         {stage ? (
           <button
             ref={triggerRef}

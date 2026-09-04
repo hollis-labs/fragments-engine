@@ -4,6 +4,103 @@
   outline-offset: 2px !important;
 }
 
+.reader-hide-scrollbar {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.reader-hide-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+.reader-article-content {
+  color: var(--color-text-muted);
+  font-size: 1rem;
+  line-height: 1.75;
+  overflow-wrap: anywhere;
+}
+
+.reader-article-content > :first-child {
+  margin-top: 0;
+}
+
+.reader-article-content > :last-child {
+  margin-bottom: 0;
+}
+
+.reader-article-content :is(h1, h2, h3, h4, h5, h6) {
+  color: var(--color-text);
+  font-weight: 650;
+  line-height: 1.25;
+  margin: 1.75em 0 0.65em;
+}
+
+.reader-article-content h1 { font-size: 1.75rem; }
+.reader-article-content h2 { font-size: 1.4rem; }
+.reader-article-content h3 { font-size: 1.16rem; }
+
+.reader-article-content :is(p, ul, ol, blockquote, pre, table) {
+  margin: 0 0 1.15em;
+}
+
+.reader-article-content :is(ul, ol) {
+  padding-left: 1.5em;
+}
+
+.reader-article-content ul { list-style: disc; }
+.reader-article-content ol { list-style: decimal; }
+
+.reader-article-content li + li {
+  margin-top: 0.35em;
+}
+
+.reader-article-content a {
+  color: var(--color-primary);
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--color-primary) 48%, transparent);
+  text-underline-offset: 0.2em;
+}
+
+.reader-article-content a:hover {
+  text-decoration-color: var(--color-primary);
+}
+
+.reader-article-content blockquote {
+  border-left: 2px solid var(--color-border-strong);
+  color: var(--color-text-soft);
+  padding-left: 1rem;
+}
+
+.reader-article-content :is(pre, code) {
+  color: var(--color-text);
+  font-family: var(--font-mono);
+}
+
+.reader-article-content pre {
+  overflow-x: auto;
+  padding: 0.85rem 0;
+  white-space: pre-wrap;
+}
+
+.reader-article-content code {
+  font-size: 0.9em;
+}
+
+.reader-article-content table {
+  border-collapse: collapse;
+  width: 100%;
+}
+
+.reader-article-content :is(th, td) {
+  border-bottom: 1px solid var(--color-border-soft);
+  padding: 0.55rem 0.75rem;
+  text-align: left;
+}
+
+.reader-article-content th {
+  color: var(--color-text);
+}
+
 @media (prefers-reduced-motion: reduce) {
   [data-reader-dialog],
   [data-reader-dialog] *,
