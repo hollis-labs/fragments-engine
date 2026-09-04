@@ -35,10 +35,6 @@ export interface ReaderDetailPageProps {
   renderSidecar?: (pin: ReaderRevisionPin) => ReactNode
 }
 
-interface ReaderReturnState {
-  readerReturnPath?: string
-}
-
 interface ReaderNeighbors {
   fragmentId?: string
   previous?: string
@@ -47,10 +43,6 @@ interface ReaderNeighbors {
 
 function detailErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : 'The Reader item could not be loaded.'
-}
-
-function isReaderListPath(value: unknown): value is string {
-  return typeof value === 'string' && /^\/reader(?:\?|$)/.test(value)
 }
 
 function shortRevision(value: string): string {
@@ -168,11 +160,6 @@ export default function ReaderDetailPage({
   const activeNeighbors = !revisionId && neighbors.fragmentId === item?.fragment_id ? neighbors : {}
 
   function goBack() {
-    const state = location.state as ReaderReturnState | null
-    if (isReaderListPath(state?.readerReturnPath)) {
-      navigate(-1)
-      return
-    }
     navigate('/reader?scope=inbox')
   }
 

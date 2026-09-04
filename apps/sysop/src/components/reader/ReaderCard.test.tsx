@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, within } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { ReaderCard } from './ReaderCard'
 import { ApiProvider } from '@/contexts/ApiContext'
@@ -79,6 +79,38 @@ describe('ReaderCard', () => {
     expect(states.textContent).toContain('MaterializationPending')
     expect(states.textContent).toContain('Enrichment1 pending · 1 failed')
     expect(states.textContent).toContain('Media1 failed · 1 pending')
+  })
+
+  it('keeps the media preview in the same heading row as the title and reading controls', () => {
+    const item = readerItem({
+      actions: [
+        {
+          command: 'mark_read',
+          input_schema:
+            'https://schemas.hollis-labs.dev/fragments-engine/browser-capture-reader/v1/reader-command.schema.json#/$defs/MarkRead',
+          expected_revision_required: true,
+        },
+        {
+          command: 'set_reading_progress',
+          input_schema:
+            'https://schemas.hollis-labs.dev/fragments-engine/browser-capture-reader/v1/reader-command.schema.json#/$defs/SetReadingProgress',
+          expected_revision_required: true,
+        },
+      ],
+    })
+    render(
+      <ReaderCard
+        item={item}
+        onOpen={() => {}}
+        onItemChange={() => {}}
+        mediaSlot={<div data-testid="custom-card-media">Preview</div>}
+      />,
+    )
+
+    const heading = screen.getByTestId('reader-card-heading')
+    expect(within(heading).getByRole('heading', { name: 'A durable fragment' })).not.toBeNull()
+    expect(within(heading).getByRole('button', { name: 'Reading position' })).not.toBeNull()
+    expect(within(heading).getByTestId('custom-card-media')).not.toBeNull()
   })
 
   it('does not project an unsafe persisted source string as an anchor', () => {

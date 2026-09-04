@@ -70,19 +70,30 @@ export function ReaderCard({ item, onOpen, onItemChange, mediaSlot }: ReaderCard
     >
       <ReaderProvenanceSpine item={item} />
 
-      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[12px] leading-4 text-text-subtle">
-        <span className="font-medium text-text-soft">{source}</span>
-        {host && <span>{host}</span>}
-        {published && <time dateTime={item.display.published_at}>{published}</time>}
-        <span>{item.capture_count === 1 ? 'Captured once' : `Captured ${item.capture_count} times`}</span>
-      </div>
+      <div
+        className="grid min-w-0 gap-4 md:grid-cols-[minmax(0,1fr)_14rem] md:items-start"
+        data-testid="reader-card-heading"
+      >
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[12px] leading-4 text-text-subtle">
+            <span className="font-medium text-text-soft">{source}</span>
+            {host && <span>{host}</span>}
+            {published && <time dateTime={item.display.published_at}>{published}</time>}
+            <span>{item.capture_count === 1 ? 'Captured once' : `Captured ${item.capture_count} times`}</span>
+          </div>
 
-      <h2 className="mt-2 line-clamp-2 text-[18px] font-semibold leading-6 text-text sm:text-[19px]">
-        {item.display.title.value || 'Untitled fragment'}
-      </h2>
+          <h2 className="mt-2 line-clamp-2 text-[18px] font-semibold leading-6 text-text sm:text-[19px]">
+            {item.display.title.value || 'Untitled fragment'}
+          </h2>
 
-      <div className="mt-2">
-        <ReaderReadingControls item={item} onItemChange={onItemChange} compact />
+          <div className="mt-2">
+            <ReaderReadingControls item={item} onItemChange={onItemChange} compact />
+          </div>
+        </div>
+
+        <div className="w-full min-w-0 overflow-hidden md:justify-self-end" data-reader-media-slot data-reader-nav-exclude>
+          {mediaSlot ?? <ReaderCardMediaSeam item={item} />}
+        </div>
       </div>
 
       <div
@@ -115,24 +126,18 @@ export function ReaderCard({ item, onOpen, onItemChange, mediaSlot }: ReaderCard
 
       {activeTab === 'content' ? (
         <>
-          <div className="mt-4 grid min-w-0 gap-5 lg:grid-cols-[minmax(0,1fr)_16rem] lg:items-start">
-            <div className="min-w-0 flex-1">
-          <p className="mt-2 line-clamp-3 max-w-[70ch] text-[14px] leading-[1.6] text-text-soft">
-            {summary || 'No summary is available yet.'}
-          </p>
+          <div className="mt-4 min-w-0">
+            <p className="line-clamp-3 max-w-[78ch] text-[14px] leading-[1.6] text-text-soft">
+              {summary || 'No summary is available yet.'}
+            </p>
 
-          <p className="mt-2 text-[11px] leading-4 text-text-subtle">
-            Title from {item.display.title.source}; summary from {item.display.summary.source}
-          </p>
+            <p className="mt-2 text-[11px] leading-4 text-text-subtle">
+              Title from {item.display.title.source}; summary from {item.display.summary.source}
+            </p>
 
-              <div className="mt-3">
+            <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
+              <div className="min-w-0">
                 <ReaderTags item={item} onItemChange={onItemChange} compact />
-              </div>
-            </div>
-
-            <div className="flex min-w-0 flex-col items-stretch gap-2 overflow-hidden">
-              <div className="min-w-0 overflow-hidden" data-reader-media-slot data-reader-nav-exclude>
-                {mediaSlot ?? <ReaderCardMediaSeam item={item} />}
               </div>
               <ReaderEffectActions item={item} onItemChange={onItemChange} includeMedia compact />
             </div>

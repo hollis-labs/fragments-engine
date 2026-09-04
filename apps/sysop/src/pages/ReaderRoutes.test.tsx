@@ -179,6 +179,26 @@ describe('Reader routes', () => {
     expect(await screen.findByText('Middle inbox item')).not.toBeNull()
   })
 
+  it('always sends the detail header Reader link to the Inbox home', async () => {
+    window.history.replaceState({}, '', '/reader?scope=library')
+    render(
+      <ApiProvider client={clientWithReader()}>
+        <BrowserRouter>
+          <AppShell />
+        </BrowserRouter>
+      </ApiProvider>,
+    )
+
+    fireEvent.click(await screen.findByRole('link', { name: 'Open A durable fragment' }))
+    await waitFor(() => expect(window.location.pathname).toBe('/reader/fragment-1'))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Back to Reader inbox' }))
+
+    await waitFor(() => expect(window.location.pathname).toBe('/reader'))
+    expect(window.location.search).toBe('?scope=inbox')
+    expect(screen.getByRole('link', { name: 'Inbox' }).getAttribute('aria-current')).toBe('page')
+  })
+
   it('rejects an empty historical revision without issuing a detail request', async () => {
     const fetchReaderItem = vi.fn<ApiClient['fetchReaderItem']>(async () => readerItem())
     renderMemoryShell('/reader/fragment-1?revision_id=', clientWithReader({ fetchReaderItem }))

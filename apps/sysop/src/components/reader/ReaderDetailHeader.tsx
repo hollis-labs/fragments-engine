@@ -28,6 +28,7 @@ export function ReaderDetailHeader({
         <button
           type="button"
           onClick={onBack}
+          aria-label="Back to Reader inbox"
           className="inline-flex min-h-11 items-center gap-1.5 rounded-sm text-[13px] font-medium text-text-subtle outline-none hover:text-text focus-visible:ring-2 focus-visible:ring-ring sm:min-h-8"
         >
           <ArrowLeft className="h-3.5 w-3.5" aria-hidden="true" />
