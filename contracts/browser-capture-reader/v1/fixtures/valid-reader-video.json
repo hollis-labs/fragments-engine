@@ -1,0 +1,116 @@
+{
+  "schema_version": "fe.reader.item.v1",
+  "fragment_id": "fragment-1",
+  "fragment_revision_id": "revision-1",
+  "revision": 3,
+  "source": {
+    "source_registration_id": "source-clipper",
+    "submitted_url": "https://www.youtube.com/watch?v=3RmtNXqnreI",
+    "canonical_url": "https://www.youtube.com/watch?v=3RmtNXqnreI",
+    "provider": "youtube",
+    "provider_item_id": "3RmtNXqnreI",
+    "source_item_key": "youtube:3RmtNXqnreI",
+    "segment_key": "root"
+  },
+  "renderer": "video",
+  "display": {
+    "title": {"value": "Contract fixture video", "source": "source", "observation_id": "observation-1"},
+    "description": {"value": "A captured browser observation.", "source": "source"},
+    "summary": {"value": "A captured browser observation.", "source": "deterministic"}
+  },
+  "article": {
+    "preview_markdown": "Useful page text.",
+    "full_content_available": true,
+    "full_content_href": "/v1/reader/items/fragment-1/content?revision_id=revision-1"
+  },
+  "media": [
+    {
+      "attachment": {
+        "attachment_id": "attachment-1",
+        "fragment_revision_id": "revision-1",
+        "media_asset_id": "asset-1",
+        "role": "primary",
+        "position": 0
+      },
+      "media_asset_id": "asset-1",
+      "provider_media_id": "3RmtNXqnreI",
+      "kind": "video",
+      "variants": [
+        {
+          "asset_variant_id": "variant-poster",
+          "kind": "poster",
+          "custody": "mirror",
+          "acquisition_state": "available",
+          "mime_type": "image/jpeg",
+          "content_href": "/v1/media/variants/variant-poster/content"
+        },
+        {
+          "asset_variant_id": "variant-video",
+          "kind": "original",
+          "custody": "reference",
+          "acquisition_state": "reference_only",
+          "mime_type": "video/mp4",
+          "source_url": "https://www.youtube.com/watch?v=3RmtNXqnreI"
+        }
+      ]
+    }
+  ],
+  "playback": {
+    "kind": "provider_embed",
+    "provider": "youtube",
+    "provider_item_id": "3RmtNXqnreI",
+    "start_seconds": 12
+  },
+  "tags": {
+    "combined": ["contracts", "video"],
+    "attributed": [
+      {"value": "contracts", "source": "user"},
+      {"value": "video", "source": "provider", "observation_id": "observation-1"}
+    ]
+  },
+  "annotations": [
+    {
+      "annotation_id": "annotation-1",
+      "capture_id": "capture-1",
+      "kind": "highlight",
+      "text": "Useful page text.",
+      "captured_at": "2026-09-03T18:42:00Z"
+    }
+  ],
+  "capture_count": 2,
+  "reading_state": {
+    "principal_id": "local-user",
+    "fragment_id": "fragment-1",
+    "state": "in_progress",
+    "position": {
+      "kind": "video",
+      "elapsed_seconds": 12,
+      "duration_seconds": 180,
+      "provider_media_id": "3RmtNXqnreI"
+    },
+    "last_opened_at": "2026-09-03T19:00:00Z",
+    "revision": 4
+  },
+  "operations": {
+    "triage": {"case_ids": ["case-1"], "unresolved_count": 1},
+    "routing": {"state": "none", "references": []},
+    "materialization": {"state": "succeeded", "references": ["materialization-1"]},
+    "enrichment": [
+      {"capability": "transcript", "state": "pending"},
+      {"capability": "thumbnail_or_poster", "state": "provided", "observation_id": "observation-1"}
+    ],
+    "acquisition": {"pending": 0, "available": 1, "reference_only": 1, "failed": 0}
+  },
+  "actions": [
+    {
+      "command": "set_reading_progress",
+      "input_schema": "https://schemas.hollis-labs.dev/fragments-engine/browser-capture-reader/v1/reader-command.schema.json#/$defs/SetReadingProgress",
+      "expected_revision_required": true
+    },
+    {
+      "command": "request_asset_acquisition",
+      "input_schema": "https://schemas.hollis-labs.dev/fragments-engine/browser-capture-reader/v1/reader-command.schema.json#/$defs/RequestAssetAcquisition",
+      "expected_revision_required": true
+    }
+  ]
+}

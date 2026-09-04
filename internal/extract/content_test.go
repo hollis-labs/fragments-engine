@@ -158,6 +158,9 @@ func TestExtractYouTubeTranscript(t *testing.T) {
 	if out.Metadata["transcript_source"] != "watch_caption_track" {
 		t.Fatalf("unexpected transcript source metadata: %+v", out.Metadata)
 	}
+	if out.Metadata["transcript_text"] != "Hello world Roadmap plans" {
+		t.Fatalf("expected exact transcript metadata without description, got %+v", out.Metadata)
+	}
 }
 
 func TestExtractYouTubeTranscript_FallsBackToYTDLP(t *testing.T) {
@@ -193,6 +196,28 @@ printf 'WEBVTT\n\n00:00:00.000 --> 00:00:02.000\nhello from ytdlp\n' > "$dir/vid
 	}
 	if out.Metadata["transcript_source"] != "yt-dlp" {
 		t.Fatalf("unexpected yt-dlp metadata: %+v", out.Metadata)
+	}
+	if out.Metadata["transcript_text"] != out.Text {
+		t.Fatalf("expected exact fallback transcript metadata, got %+v", out.Metadata)
+	}
+}
+
+func TestExtractYouTubeTranscriptUnavailableDoesNotFabricateTranscriptMetadata(t *testing.T) {
+	restoreYTDLP := SetYTDLPCommandForTest(filepath.Join(t.TempDir(), "missing-yt-dlp"))
+	restore := SetYouTubeBaseURLsForTest("http://127.0.0.1:1/watch?v=%s", "http://127.0.0.1:1/oembed?v=%s")
+	defer func() {
+		restoreYTDLP()
+		restore()
+	}()
+	out, err := ExtractYouTubeTranscript(context.Background(), &http.Client{Timeout: 100 * time.Millisecond}, "https://youtu.be/abc123", "FragmentsEngineTest/1.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(out.Text, "[Transcript unavailable") {
+		t.Fatalf("unexpected placeholder: %q", out.Text)
+	}
+	if _, exists := out.Metadata["transcript_text"]; exists {
+		t.Fatalf("placeholder was exposed as transcript evidence: %+v", out.Metadata)
 	}
 }
 
@@ -234,6 +259,9 @@ printf 'WEBVTT\n\n00:00:00.000 --> 00:00:02.000\nhello from generic video\n' > "
 	}
 	if out.Metadata["extractor"] != "yt-dlp" || out.Metadata["transcript_source"] != "yt-dlp" {
 		t.Fatalf("unexpected generic video metadata: %+v", out.Metadata)
+	}
+	if out.Metadata["transcript_text"] != out.Text {
+		t.Fatalf("expected exact generic-video transcript metadata, got %+v", out.Metadata)
 	}
 }
 

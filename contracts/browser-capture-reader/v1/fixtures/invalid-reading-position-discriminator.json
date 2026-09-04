@@ -1,0 +1,11 @@
+{
+  "principal_id": "local-user",
+  "fragment_id": "fragment-1",
+  "state": "in_progress",
+  "position": {
+    "kind": "video",
+    "elapsed_seconds": 12,
+    "progress": 0.5
+  },
+  "revision": 4
+}

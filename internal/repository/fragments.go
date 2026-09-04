@@ -2,11 +2,10 @@ package repository
 
 import (
 	"context"
-	"crypto/sha256"
 	"database/sql"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"strings"
 	"time"
 
@@ -36,15 +35,36 @@ func BuildFragment(in domain.PipelineFragment, ingestName string, now time.Time)
 	if strings.TrimSpace(in.SourceID) == "" {
 		return domain.Fragment{}, fmt.Errorf("build fragment: source_id is required")
 	}
-	if strings.TrimSpace(in.Content) == "" {
-		return domain.Fragment{}, fmt.Errorf("build fragment: content is required")
-	}
 
 	if in.CreatedAt.IsZero() {
 		in.CreatedAt = now
 	}
-	contentHash := hashText(in.Content)
-	identity := hashText(in.Source + "\n" + in.SourceID + "\n" + contentHash)
+	identity := domain.NormalizeSourceIdentity(in, ingestName)
+	if strings.TrimSpace(in.Content) == "" && strings.TrimSpace(in.Title) == "" &&
+		strings.TrimSpace(in.Description) == "" && len(in.Attachments) == 0 &&
+		!validExplicitSourceURL(in.SourceIdentity.SubmittedURL) &&
+		!validExplicitSourceURL(in.SourceIdentity.CanonicalURL) {
+		return domain.Fragment{}, fmt.Errorf("build fragment: source material is required")
+	}
+	if identity.SourceRegistrationID == "" {
+		return domain.Fragment{}, fmt.Errorf("build fragment: source registration id is required")
+	}
+	if identity.SourceItemKey == "" {
+		return domain.Fragment{}, fmt.Errorf("build fragment: source item key is required")
+	}
+	if identity.SegmentKey == "" {
+		return domain.Fragment{}, fmt.Errorf("build fragment: segment key is required")
+	}
+	normalizer := in.Normalizer
+	if strings.TrimSpace(normalizer.Adapter) == "" {
+		normalizer.Adapter = domain.DefaultNormalizerAdapter
+	}
+	if strings.TrimSpace(normalizer.Version) == "" {
+		normalizer.Version = domain.DefaultAdapterVersion
+	}
+	material := domain.NormalizeMaterial(in.Title, in.Description, in.Content, in.ContentFormat, in.Attachments)
+	contentHash := domain.DigestText(material.Content)
+	fragmentID := domain.StableFragmentID(identity)
 	metaJSON := "{}"
 	if len(in.Metadata) > 0 {
 		raw, err := json.Marshal(in.Metadata)
@@ -55,78 +75,401 @@ func BuildFragment(in domain.PipelineFragment, ingestName string, now time.Time)
 	}
 
 	return domain.Fragment{
-		ID:            identity,
-		Source:        in.Source,
-		SourceType:    in.SourceType,
-		SourceID:      in.SourceID,
-		Title:         in.Title,
-		Content:       in.Content,
-		ContentHash:   contentHash,
-		CreatedAt:     in.CreatedAt.UTC(),
-		IngestedAt:    now.UTC(),
-		Status:        domain.FragmentStatusInbox,
-		MetadataJSON:  metaJSON,
-		IngestName:    ingestName,
-		CanonicalPath: in.CanonicalPath,
+		ID:             fragmentID,
+		Source:         in.Source,
+		SourceType:     in.SourceType,
+		SourceID:       in.SourceID,
+		SourceIdentity: identity,
+		Title:          material.Title,
+		Content:        material.Content,
+		ContentHash:    contentHash,
+		CreatedAt:      in.CreatedAt.UTC(),
+		IngestedAt:     now.UTC(),
+		Status:         domain.FragmentStatusInbox,
+		MetadataJSON:   metaJSON,
+		IngestName:     ingestName,
+		CanonicalPath:  in.CanonicalPath,
+		Revision: domain.FragmentRevision{
+			FragmentID:         fragmentID,
+			MaterialDigest:     material.Digest(),
+			ContentDigest:      contentHash,
+			Title:              material.Title,
+			Description:        material.Description,
+			Content:            material.Content,
+			ContentFormat:      material.ContentFormat,
+			OrderedMediaDigest: material.OrderedMediaDigest,
+			MetadataJSON:       metaJSON,
+			Normalizer:         normalizer,
+			ObservedAt:         in.CreatedAt.UTC(),
+			CommittedAt:        now.UTC(),
+		},
 	}, nil
 }
 
+func validExplicitSourceURL(raw string) bool {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	return err == nil && (parsed.Scheme == "http" || parsed.Scheme == "https") && parsed.Host != ""
+}
+
 func (r *FragmentRepository) Upsert(ctx context.Context, fragment domain.Fragment) (UpsertOutcome, error) {
-	var existingID string
-	err := r.db.QueryRowContext(
-		ctx,
-		`SELECT id FROM fragments WHERE source = ? AND source_id = ? AND content_hash = ?`,
-		fragment.Source,
-		fragment.SourceID,
-		fragment.ContentHash,
-	).Scan(&existingID)
-	switch {
-	case err == nil && existingID == fragment.ID:
-		return UpsertSkipped, nil
-	case err != nil && err != sql.ErrNoRows:
-		return "", fmt.Errorf("lookup existing fragment: %w", err)
+	_, outcome, err := r.UpsertResolved(ctx, fragment)
+	return outcome, err
+}
+
+// UpsertResolved applies the stable identity/revision invariant and returns the
+// persisted canonical Fragment. Callers that perform downstream writes must use
+// this result because a migrated identity can resolve a freshly built candidate
+// to a preserved legacy primary key.
+func (r *FragmentRepository) UpsertResolved(ctx context.Context, fragment domain.Fragment) (domain.Fragment, UpsertOutcome, error) {
+	conn, err := r.db.Conn(ctx)
+	if err != nil {
+		return domain.Fragment{}, "", fmt.Errorf("acquire fragment upsert connection: %w", err)
+	}
+	defer conn.Close()
+	if _, err := conn.ExecContext(ctx, `PRAGMA busy_timeout=5000`); err != nil {
+		return domain.Fragment{}, "", fmt.Errorf("configure fragment upsert connection: %w", err)
+	}
+	if _, err := conn.ExecContext(ctx, `PRAGMA foreign_keys=ON`); err != nil {
+		return domain.Fragment{}, "", fmt.Errorf("enable fragment upsert foreign keys: %w", err)
+	}
+	// Acquire the SQLite write reservation before identity lookup so separate
+	// repository instances and database handles cannot both observe a missing
+	// identity and race to create it.
+	if _, err := conn.ExecContext(ctx, `BEGIN IMMEDIATE`); err != nil {
+		return domain.Fragment{}, "", fmt.Errorf("begin immediate fragment upsert: %w", err)
+	}
+	defer conn.ExecContext(context.Background(), `ROLLBACK`)
+
+	resolved, outcome, err := upsertFragmentResolved(ctx, conn, fragment)
+	if err != nil {
+		return domain.Fragment{}, "", err
+	}
+	if _, err := conn.ExecContext(ctx, `COMMIT`); err != nil {
+		return domain.Fragment{}, "", fmt.Errorf("commit fragment upsert: %w", err)
+	}
+	return resolved, outcome, nil
+}
+
+// upsertFragmentResolved applies the identity/revision write using a
+// caller-owned SQLite transaction. Keeping the commit boundary outside this
+// helper lets capture acceptance compose fragment/revision resolution with the
+// attempt and additive context in one BEGIN IMMEDIATE transaction.
+func upsertFragmentResolved(ctx context.Context, conn fragmentWriteConn, fragment domain.Fragment) (domain.Fragment, UpsertOutcome, error) {
+	identity := fragment.SourceIdentity
+	if identity.SourceRegistrationID == "" || identity.SourceItemKey == "" || identity.SegmentKey == "" {
+		return domain.Fragment{}, "", fmt.Errorf("upsert fragment: stable source identity is incomplete")
+	}
+	if fragment.Revision.MaterialDigest == "" {
+		return domain.Fragment{}, "", fmt.Errorf("upsert fragment: material digest is required")
 	}
 
-	res, err := r.db.ExecContext(ctx, `
+	resolvedID, err := findFragmentByIdentity(ctx, conn, identity)
+	inserted := false
+	if err == sql.ErrNoRows {
+		resolvedID = fragment.ID
+		storageHash, err := availableLegacyContentHash(ctx, conn, fragment, fragment.ID)
+		if err != nil {
+			return domain.Fragment{}, "", err
+		}
+		if _, err := conn.ExecContext(ctx, `
 INSERT INTO fragments (
   id, source, source_type, source_id, title, content, content_hash, created_at,
-  ingested_at, status, metadata_json, ingest_name, canonical_path
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-ON CONFLICT(source, source_id, content_hash) DO UPDATE SET
-  title = excluded.title,
-  content = excluded.content,
-  ingested_at = excluded.ingested_at,
-  metadata_json = excluded.metadata_json,
-  ingest_name = excluded.ingest_name,
-  canonical_path = excluded.canonical_path`,
-		fragment.ID,
-		fragment.Source,
-		fragment.SourceType,
-		fragment.SourceID,
-		fragment.Title,
-		fragment.Content,
-		fragment.ContentHash,
-		fragment.CreatedAt.Format(time.RFC3339),
-		fragment.IngestedAt.Format(time.RFC3339),
-		string(fragment.Status),
-		fragment.MetadataJSON,
-		fragment.IngestName,
-		fragment.CanonicalPath,
+  ingested_at, status, metadata_json, ingest_name, canonical_path,
+  accepted_revision_id, current_revision_id
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', '')`,
+			fragment.ID, fragment.Source, fragment.SourceType, fragment.SourceID,
+			fragment.Title, fragment.Content, storageHash,
+			fragment.CreatedAt.Format(time.RFC3339Nano), fragment.IngestedAt.Format(time.RFC3339Nano),
+			string(fragment.Status), fragment.MetadataJSON, fragment.IngestName, fragment.CanonicalPath,
+		); err != nil {
+			return domain.Fragment{}, "", fmt.Errorf("insert stable fragment: %w", err)
+		}
+		if err := insertSourceIdentity(ctx, conn, resolvedID, identity, fragment.CreatedAt); err != nil {
+			return domain.Fragment{}, "", err
+		}
+		inserted = true
+	} else if err != nil {
+		return domain.Fragment{}, "", fmt.Errorf("resolve stable fragment identity: %w", err)
+	} else if err := fillSourceIdentityProvenance(ctx, conn, resolvedID, identity, fragment.IngestedAt); err != nil {
+		return domain.Fragment{}, "", err
+	}
+
+	revisionID, err := findRevisionByDigest(ctx, conn, resolvedID, fragment.Revision.MaterialDigest)
+	if err == nil {
+		var currentRevisionID string
+		if err := conn.QueryRowContext(ctx, `SELECT current_revision_id FROM fragments WHERE id = ?`, resolvedID).Scan(&currentRevisionID); err != nil {
+			return domain.Fragment{}, "", fmt.Errorf("read current fragment revision: %w", err)
+		}
+		outcome := UpsertSkipped
+		if currentRevisionID != revisionID {
+			if err := updateCurrentFragment(ctx, conn, resolvedID, revisionID, fragment); err != nil {
+				return domain.Fragment{}, "", err
+			}
+			outcome = UpsertUpdated
+		}
+		resolved, err := getFragmentByID(ctx, conn, resolvedID)
+		if err != nil {
+			return domain.Fragment{}, "", err
+		}
+		return resolved, outcome, nil
+	}
+	if err != sql.ErrNoRows {
+		return domain.Fragment{}, "", fmt.Errorf("resolve fragment revision: %w", err)
+	}
+
+	var ordinal int
+	if err := conn.QueryRowContext(ctx, `SELECT COALESCE(MAX(ordinal), 0) + 1 FROM fragment_revisions WHERE fragment_id = ?`, resolvedID).Scan(&ordinal); err != nil {
+		return domain.Fragment{}, "", fmt.Errorf("allocate fragment revision ordinal: %w", err)
+	}
+	revisionID = domain.DigestText(resolvedID + "\n" + fragment.Revision.MaterialDigest)
+	if _, err := conn.ExecContext(ctx, `
+INSERT INTO fragment_revisions (
+  id, fragment_id, ordinal, material_digest, content_digest, title,
+  description, content, content_format, ordered_media_digest, metadata_json,
+  normalizer_adapter, normalizer_version, observed_at, committed_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		revisionID, resolvedID, ordinal, fragment.Revision.MaterialDigest,
+		fragment.Revision.ContentDigest, fragment.Revision.Title,
+		fragment.Revision.Description, fragment.Revision.Content,
+		fragment.Revision.ContentFormat, fragment.Revision.OrderedMediaDigest,
+		fragment.Revision.MetadataJSON, fragment.Revision.Normalizer.Adapter,
+		fragment.Revision.Normalizer.Version,
+		fragment.Revision.ObservedAt.Format(time.RFC3339Nano),
+		fragment.Revision.CommittedAt.Format(time.RFC3339Nano),
+	); err != nil {
+		return domain.Fragment{}, "", fmt.Errorf("insert immutable fragment revision: %w", err)
+	}
+	if err := updateCurrentFragment(ctx, conn, resolvedID, revisionID, fragment); err != nil {
+		return domain.Fragment{}, "", err
+	}
+	resolved, err := getFragmentByID(ctx, conn, resolvedID)
+	if err != nil {
+		return domain.Fragment{}, "", err
+	}
+	if inserted {
+		return resolved, UpsertInserted, nil
+	}
+	return resolved, UpsertUpdated, nil
+}
+
+type fragmentWriteConn interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
+
+func findFragmentByIdentity(ctx context.Context, tx fragmentWriteConn, identity domain.SourceIdentity) (string, error) {
+	var fragmentID string
+	err := tx.QueryRowContext(ctx, `
+SELECT fragment_id
+FROM fragment_source_identities
+WHERE source_registration_id = ? AND source_item_key = ? AND segment_key = ?`,
+		identity.SourceRegistrationID, identity.SourceItemKey, identity.SegmentKey,
+	).Scan(&fragmentID)
+	return fragmentID, err
+}
+
+func findRevisionByDigest(ctx context.Context, tx fragmentWriteConn, fragmentID, materialDigest string) (string, error) {
+	var revisionID string
+	err := tx.QueryRowContext(ctx, `
+SELECT id FROM fragment_revisions WHERE fragment_id = ? AND material_digest = ?`,
+		fragmentID, materialDigest,
+	).Scan(&revisionID)
+	return revisionID, err
+}
+
+func insertSourceIdentity(ctx context.Context, tx fragmentWriteConn, fragmentID string, identity domain.SourceIdentity, createdAt time.Time) error {
+	stamp := createdAt.UTC().Format(time.RFC3339Nano)
+	_, err := tx.ExecContext(ctx, `
+INSERT INTO fragment_source_identities (
+  fragment_id, source_registration_id, provider, provider_item_id,
+  source_item_key, source_locator, segment_key, submitted_url, canonical_url,
+  source_adapter, source_adapter_version, canonicalizer_adapter,
+  canonicalizer_version, created_at, updated_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		fragmentID, identity.SourceRegistrationID, identity.Provider,
+		identity.ProviderItemID, identity.SourceItemKey, identity.SourceLocator,
+		identity.SegmentKey, identity.SubmittedURL, identity.CanonicalURL,
+		identity.SourceAdapter.Adapter, identity.SourceAdapter.Version,
+		identity.Canonicalizer.Adapter, identity.Canonicalizer.Version,
+		stamp, stamp,
 	)
 	if err != nil {
-		return "", fmt.Errorf("upsert fragment: %w", err)
+		return fmt.Errorf("insert fragment source identity: %w", err)
 	}
-	if _, err := res.RowsAffected(); err != nil {
-		return "", nil
+	return nil
+}
+
+func fillSourceIdentityProvenance(ctx context.Context, tx fragmentWriteConn, fragmentID string, identity domain.SourceIdentity, observedAt time.Time) error {
+	_, err := tx.ExecContext(ctx, `
+UPDATE fragment_source_identities
+SET provider_item_id = CASE WHEN provider_item_id = '' THEN ? ELSE provider_item_id END,
+    source_locator = CASE WHEN source_locator = '' THEN ? ELSE source_locator END,
+    submitted_url = CASE WHEN submitted_url = '' THEN ? ELSE submitted_url END,
+    canonical_url = CASE WHEN canonical_url = '' THEN ? ELSE canonical_url END,
+    updated_at = ?
+WHERE fragment_id = ?`,
+		identity.ProviderItemID, identity.SourceLocator, identity.SubmittedURL,
+		identity.CanonicalURL, observedAt.UTC().Format(time.RFC3339Nano), fragmentID,
+	)
+	if err != nil {
+		return fmt.Errorf("update fragment source provenance: %w", err)
 	}
-	if existingID != "" {
-		return UpsertUpdated, nil
+	return nil
+}
+
+// The original fragments table still carries its historical three-column
+// uniqueness constraint. Revisions are authoritative for content digests; this
+// compatibility value is salted only when two source registrations ingest the
+// same legacy tuple, avoiding a destructive table rebuild.
+func availableLegacyContentHash(ctx context.Context, tx fragmentWriteConn, fragment domain.Fragment, targetID string) (string, error) {
+	storageHash := fragment.ContentHash
+	var existingID string
+	err := tx.QueryRowContext(ctx, `
+SELECT id FROM fragments WHERE source = ? AND source_id = ? AND content_hash = ?`,
+		fragment.Source, fragment.SourceID, storageHash,
+	).Scan(&existingID)
+	if err == sql.ErrNoRows || existingID == targetID {
+		return storageHash, nil
 	}
-	return UpsertInserted, nil
+	if err != nil {
+		return "", fmt.Errorf("check legacy fragment uniqueness: %w", err)
+	}
+	return domain.DigestText(storageHash + "\n" + targetID), nil
+}
+
+func updateCurrentFragment(ctx context.Context, tx fragmentWriteConn, fragmentID, revisionID string, fragment domain.Fragment) error {
+	storageHash, err := availableLegacyContentHash(ctx, tx, fragment, fragmentID)
+	if err != nil {
+		return err
+	}
+	_, err = tx.ExecContext(ctx, `
+UPDATE fragments
+SET source = ?, source_type = ?, source_id = ?, title = ?, content = ?,
+    content_hash = ?, ingested_at = ?, metadata_json = ?, ingest_name = ?,
+    canonical_path = ?, accepted_revision_id = ?, current_revision_id = ?
+WHERE id = ?`,
+		fragment.Source, fragment.SourceType, fragment.SourceID, fragment.Title,
+		fragment.Content, storageHash, fragment.IngestedAt.Format(time.RFC3339Nano),
+		fragment.MetadataJSON, fragment.IngestName, fragment.CanonicalPath,
+		revisionID, revisionID, fragmentID,
+	)
+	if err != nil {
+		return fmt.Errorf("select current fragment revision: %w", err)
+	}
+	return nil
+}
+
+type rowScanner interface {
+	Scan(dest ...any) error
+}
+
+const fragmentReadColumns = `
+  f.id, f.source, f.source_type, f.source_id, f.title, f.content,
+  COALESCE(NULLIF(fr.content_digest, ''), f.content_hash),
+  f.created_at, f.ingested_at, f.status, f.summary_text, f.indexed_at,
+  f.metadata_json, f.ingest_name, f.canonical_path,
+  f.accepted_revision_id, f.current_revision_id,
+  COALESCE(si.source_registration_id, ''), COALESCE(si.provider, ''),
+  COALESCE(si.provider_item_id, ''), COALESCE(si.source_item_key, ''),
+  COALESCE(si.source_locator, ''), COALESCE(si.segment_key, ''),
+  COALESCE(si.submitted_url, ''), COALESCE(si.canonical_url, ''),
+  COALESCE(si.source_adapter, ''), COALESCE(si.source_adapter_version, ''),
+  COALESCE(si.canonicalizer_adapter, ''), COALESCE(si.canonicalizer_version, ''),
+  COALESCE(fr.id, ''), COALESCE(fr.ordinal, 0),
+  COALESCE(fr.material_digest, ''), COALESCE(fr.content_digest, ''),
+  COALESCE(fr.title, ''), COALESCE(fr.description, ''),
+  COALESCE(fr.content, ''), COALESCE(fr.content_format, ''),
+  COALESCE(fr.ordered_media_digest, ''), COALESCE(fr.metadata_json, '{}'),
+  COALESCE(fr.normalizer_adapter, ''), COALESCE(fr.normalizer_version, ''),
+  COALESCE(fr.observed_at, ''), COALESCE(fr.committed_at, ''),
+  COALESCE(fr.legacy_fragment_id, '')`
+
+const fragmentReadJoins = `
+LEFT JOIN fragment_source_identities si ON si.fragment_id = f.id
+LEFT JOIN fragment_revisions fr ON fr.id = f.current_revision_id`
+
+type fragmentScanState struct {
+	createdAt   string
+	ingestedAt  string
+	indexedAt   string
+	status      string
+	observedAt  string
+	committedAt string
+}
+
+func (s *fragmentScanState) destinations(f *domain.Fragment) []any {
+	return []any{
+		&f.ID, &f.Source, &f.SourceType, &f.SourceID, &f.Title, &f.Content,
+		&f.ContentHash, &s.createdAt, &s.ingestedAt, &s.status, &f.Summary, &s.indexedAt,
+		&f.MetadataJSON, &f.IngestName, &f.CanonicalPath,
+		&f.AcceptedRevisionID, &f.CurrentRevisionID,
+		&f.SourceIdentity.SourceRegistrationID, &f.SourceIdentity.Provider,
+		&f.SourceIdentity.ProviderItemID, &f.SourceIdentity.SourceItemKey,
+		&f.SourceIdentity.SourceLocator, &f.SourceIdentity.SegmentKey,
+		&f.SourceIdentity.SubmittedURL, &f.SourceIdentity.CanonicalURL,
+		&f.SourceIdentity.SourceAdapter.Adapter, &f.SourceIdentity.SourceAdapter.Version,
+		&f.SourceIdentity.Canonicalizer.Adapter, &f.SourceIdentity.Canonicalizer.Version,
+		&f.Revision.ID, &f.Revision.Ordinal, &f.Revision.MaterialDigest,
+		&f.Revision.ContentDigest, &f.Revision.Title, &f.Revision.Description,
+		&f.Revision.Content, &f.Revision.ContentFormat, &f.Revision.OrderedMediaDigest,
+		&f.Revision.MetadataJSON, &f.Revision.Normalizer.Adapter,
+		&f.Revision.Normalizer.Version, &s.observedAt, &s.committedAt,
+		&f.Revision.LegacyFragmentID,
+	}
+}
+
+func (s *fragmentScanState) finish(f *domain.Fragment) {
+	f.CreatedAt, _ = time.Parse(time.RFC3339Nano, s.createdAt)
+	if f.CreatedAt.IsZero() {
+		f.CreatedAt, _ = time.Parse(time.RFC3339, s.createdAt)
+	}
+	f.IngestedAt, _ = time.Parse(time.RFC3339Nano, s.ingestedAt)
+	if f.IngestedAt.IsZero() {
+		f.IngestedAt, _ = time.Parse(time.RFC3339, s.ingestedAt)
+	}
+	if s.indexedAt != "" {
+		f.IndexedAt, _ = time.Parse(time.RFC3339Nano, s.indexedAt)
+		if f.IndexedAt.IsZero() {
+			f.IndexedAt, _ = time.Parse(time.RFC3339, s.indexedAt)
+		}
+	}
+	f.Status = domain.FragmentStatus(s.status)
+	f.Revision.FragmentID = f.ID
+	f.Revision.ObservedAt, _ = time.Parse(time.RFC3339Nano, s.observedAt)
+	f.Revision.CommittedAt, _ = time.Parse(time.RFC3339Nano, s.committedAt)
+	if f.Revision.ObservedAt.IsZero() {
+		f.Revision.ObservedAt, _ = time.Parse(time.RFC3339, s.observedAt)
+	}
+	if f.Revision.CommittedAt.IsZero() {
+		f.Revision.CommittedAt, _ = time.Parse(time.RFC3339, s.committedAt)
+	}
+}
+
+func scanFragment(scanner rowScanner) (domain.Fragment, error) {
+	var f domain.Fragment
+	var state fragmentScanState
+	if err := scanner.Scan(state.destinations(&f)...); err != nil {
+		return domain.Fragment{}, err
+	}
+	state.finish(&f)
+	return f, nil
+}
+
+func getFragmentByID(ctx context.Context, tx fragmentWriteConn, fragmentID string) (domain.Fragment, error) {
+	query := `SELECT ` + fragmentReadColumns + ` FROM fragments f ` + fragmentReadJoins + ` WHERE f.id = ?`
+	f, err := scanFragment(tx.QueryRowContext(ctx, query, fragmentID))
+	if err != nil {
+		return domain.Fragment{}, fmt.Errorf("get resolved fragment: %w", err)
+	}
+	return f, nil
 }
 
 func (r *FragmentRepository) UpdateEditableFields(ctx context.Context, fragmentID, title, summary, metadataJSON string) error {
-	_, err := r.db.ExecContext(ctx, `
+	canonicalID, err := r.ResolveCanonicalFragmentID(ctx, fragmentID)
+	if err != nil {
+		return fmt.Errorf("resolve editable fragment: %w", err)
+	}
+	_, err = r.db.ExecContext(ctx, `
 UPDATE fragments
 SET title = ?,
     summary_text = ?,
@@ -137,7 +480,7 @@ WHERE id = ?`,
 		summary,
 		metadataJSON,
 		time.Now().UTC().Format(time.RFC3339),
-		fragmentID,
+		canonicalID,
 	)
 	if err != nil {
 		return fmt.Errorf("update editable fragment fields: %w", err)
@@ -149,10 +492,7 @@ func (r *FragmentRepository) Search(ctx context.Context, query string, limit int
 	if limit <= 0 {
 		limit = 10
 	}
-	rows, err := r.db.QueryContext(ctx, `
-SELECT
-  f.id, f.source, f.source_type, f.source_id, f.title, f.content, f.content_hash,
-  f.created_at, f.ingested_at, f.status, f.summary_text, f.indexed_at, f.metadata_json, f.ingest_name, f.canonical_path,
+	readQuery := `SELECT ` + fragmentReadColumns + `,
   (
     SELECT fa.attachment_id
     FROM fragment_attachments fa
@@ -166,9 +506,14 @@ SELECT
   snippet(fragments_fts, 2, '[', ']', ' … ', 18) AS snippet
 FROM fragments_fts
 JOIN fragments f ON f.id = fragments_fts.fragment_id
+` + fragmentReadJoins + `
 WHERE fragments_fts MATCH ?
+  AND NOT EXISTS (
+    SELECT 1 FROM fragment_identity_aliases fia WHERE fia.alias_fragment_id = f.id
+  )
 ORDER BY rank
-LIMIT ?`, query, limit)
+LIMIT ?`
+	rows, err := r.db.QueryContext(ctx, readQuery, query, limit)
 	if err != nil {
 		return nil, fmt.Errorf("fts search: %w", err)
 	}
@@ -178,41 +523,17 @@ LIMIT ?`, query, limit)
 	for rows.Next() {
 		var (
 			f                   domain.Fragment
-			createdAt, ingested string
-			indexedAt           string
-			status              string
+			state               fragmentScanState
 			previewAttachmentID sql.NullString
 			rank                float64
 			snippet             string
 		)
-		if err := rows.Scan(
-			&f.ID,
-			&f.Source,
-			&f.SourceType,
-			&f.SourceID,
-			&f.Title,
-			&f.Content,
-			&f.ContentHash,
-			&createdAt,
-			&ingested,
-			&status,
-			&f.Summary,
-			&indexedAt,
-			&f.MetadataJSON,
-			&f.IngestName,
-			&f.CanonicalPath,
-			&previewAttachmentID,
-			&rank,
-			&snippet,
-		); err != nil {
+		destinations := state.destinations(&f)
+		destinations = append(destinations, &previewAttachmentID, &rank, &snippet)
+		if err := rows.Scan(destinations...); err != nil {
 			return nil, fmt.Errorf("scan search result: %w", err)
 		}
-		f.CreatedAt, _ = time.Parse(time.RFC3339, createdAt)
-		f.IngestedAt, _ = time.Parse(time.RFC3339, ingested)
-		if indexedAt != "" {
-			f.IndexedAt, _ = time.Parse(time.RFC3339, indexedAt)
-		}
-		f.Status = domain.FragmentStatus(status)
+		state.finish(&f)
 		item := domain.SearchResult{
 			Fragment: f,
 			Score:    -rank,
@@ -333,12 +654,16 @@ LIMIT ?`, limit)
 }
 
 func (r *FragmentRepository) UpdateStatus(ctx context.Context, fragmentID string, status domain.FragmentStatus) error {
-	_, err := r.db.ExecContext(ctx, `
+	canonicalID, err := r.ResolveCanonicalFragmentID(ctx, fragmentID)
+	if err != nil {
+		return fmt.Errorf("resolve fragment status target: %w", err)
+	}
+	_, err = r.db.ExecContext(ctx, `
 UPDATE fragments
 SET status = ?
 WHERE id = ?`,
 		string(status),
-		fragmentID,
+		canonicalID,
 	)
 	if err != nil {
 		return fmt.Errorf("update fragment status: %w", err)
@@ -347,13 +672,17 @@ WHERE id = ?`,
 }
 
 func (r *FragmentRepository) UpdateIndexMetadata(ctx context.Context, fragmentID, summary string, indexedAt time.Time) error {
-	_, err := r.db.ExecContext(ctx, `
+	canonicalID, err := r.ResolveCanonicalFragmentID(ctx, fragmentID)
+	if err != nil {
+		return fmt.Errorf("resolve fragment index target: %w", err)
+	}
+	_, err = r.db.ExecContext(ctx, `
 UPDATE fragments
 SET summary_text = ?, indexed_at = ?
 WHERE id = ?`,
 		summary,
 		indexedAt.Format(time.RFC3339),
-		fragmentID,
+		canonicalID,
 	)
 	if err != nil {
 		return fmt.Errorf("update index metadata: %w", err)
@@ -362,7 +691,11 @@ WHERE id = ?`,
 }
 
 func (r *FragmentRepository) UpdateDerivedFields(ctx context.Context, fragmentID, title, sourceType, metadataJSON, canonicalPath string) error {
-	_, err := r.db.ExecContext(ctx, `
+	canonicalID, err := r.ResolveCanonicalFragmentID(ctx, fragmentID)
+	if err != nil {
+		return fmt.Errorf("resolve derived fragment target: %w", err)
+	}
+	_, err = r.db.ExecContext(ctx, `
 UPDATE fragments
 SET title = ?, source_type = ?, metadata_json = ?, canonical_path = ?
 WHERE id = ?`,
@@ -370,7 +703,7 @@ WHERE id = ?`,
 		sourceType,
 		metadataJSON,
 		canonicalPath,
-		fragmentID,
+		canonicalID,
 	)
 	if err != nil {
 		return fmt.Errorf("update fragment derived fields: %w", err)
@@ -379,40 +712,103 @@ WHERE id = ?`,
 }
 
 func (r *FragmentRepository) GetByID(ctx context.Context, fragmentID string) (domain.Fragment, error) {
-	var f domain.Fragment
-	var createdAt, ingestedAt, indexedAt, status string
-	err := r.db.QueryRowContext(ctx, `
-SELECT
-  id, source, source_type, source_id, title, content, content_hash, created_at,
-  ingested_at, status, summary_text, indexed_at, metadata_json, ingest_name, canonical_path
-FROM fragments
-WHERE id = ?`, fragmentID).Scan(
-		&f.ID,
-		&f.Source,
-		&f.SourceType,
-		&f.SourceID,
-		&f.Title,
-		&f.Content,
-		&f.ContentHash,
-		&createdAt,
-		&ingestedAt,
-		&status,
-		&f.Summary,
-		&indexedAt,
-		&f.MetadataJSON,
-		&f.IngestName,
-		&f.CanonicalPath,
-	)
+	canonicalID, err := r.ResolveCanonicalFragmentID(ctx, fragmentID)
 	if err != nil {
 		return domain.Fragment{}, fmt.Errorf("get fragment: %w", err)
 	}
-	f.CreatedAt, _ = time.Parse(time.RFC3339, createdAt)
-	f.IngestedAt, _ = time.Parse(time.RFC3339, ingestedAt)
-	if indexedAt != "" {
-		f.IndexedAt, _ = time.Parse(time.RFC3339, indexedAt)
+	query := `SELECT ` + fragmentReadColumns + ` FROM fragments f ` + fragmentReadJoins + ` WHERE f.id = ?`
+	f, err := scanFragment(r.db.QueryRowContext(ctx, query, canonicalID))
+	if err != nil {
+		return domain.Fragment{}, fmt.Errorf("get fragment: %w", err)
 	}
-	f.Status = domain.FragmentStatus(status)
 	return f, nil
+}
+
+// ResolveCanonicalFragmentID keeps legacy IDs usable without exposing retained
+// content-hash rows as additional active fragments.
+func (r *FragmentRepository) ResolveCanonicalFragmentID(ctx context.Context, fragmentID string) (string, error) {
+	var canonicalID sql.NullString
+	err := r.db.QueryRowContext(ctx, `
+SELECT COALESCE((
+  SELECT fragment_id FROM fragment_identity_aliases WHERE alias_fragment_id = ?
+), (
+  SELECT id FROM fragments WHERE id = ?
+))`, fragmentID, fragmentID).Scan(&canonicalID)
+	if err != nil {
+		return "", err
+	}
+	if !canonicalID.Valid || canonicalID.String == "" {
+		return "", sql.ErrNoRows
+	}
+	return canonicalID.String, nil
+}
+
+func (r *FragmentRepository) GetRevision(ctx context.Context, revisionID string) (domain.FragmentRevision, error) {
+	row := r.db.QueryRowContext(ctx, `
+SELECT id, fragment_id, ordinal, material_digest, content_digest, title,
+       description, content, content_format, ordered_media_digest, metadata_json,
+       normalizer_adapter, normalizer_version, observed_at, committed_at,
+       COALESCE(legacy_fragment_id, '')
+FROM fragment_revisions
+WHERE id = ?`, revisionID)
+	revision, err := scanRevision(row)
+	if err != nil {
+		return domain.FragmentRevision{}, fmt.Errorf("get fragment revision: %w", err)
+	}
+	return revision, nil
+}
+
+func (r *FragmentRepository) ListRevisions(ctx context.Context, fragmentID string) ([]domain.FragmentRevision, error) {
+	canonicalID, err := r.ResolveCanonicalFragmentID(ctx, fragmentID)
+	if err != nil {
+		return nil, fmt.Errorf("resolve fragment revision owner: %w", err)
+	}
+	rows, err := r.db.QueryContext(ctx, `
+SELECT id, fragment_id, ordinal, material_digest, content_digest, title,
+       description, content, content_format, ordered_media_digest, metadata_json,
+       normalizer_adapter, normalizer_version, observed_at, committed_at,
+       COALESCE(legacy_fragment_id, '')
+FROM fragment_revisions
+WHERE fragment_id = ?
+ORDER BY ordinal`, canonicalID)
+	if err != nil {
+		return nil, fmt.Errorf("list fragment revisions: %w", err)
+	}
+	defer rows.Close()
+	var out []domain.FragmentRevision
+	for rows.Next() {
+		revision, err := scanRevision(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan fragment revision: %w", err)
+		}
+		out = append(out, revision)
+	}
+	return out, rows.Err()
+}
+
+func scanRevision(scanner rowScanner) (domain.FragmentRevision, error) {
+	var revision domain.FragmentRevision
+	var observedAt, committedAt string
+	err := scanner.Scan(
+		&revision.ID, &revision.FragmentID, &revision.Ordinal,
+		&revision.MaterialDigest, &revision.ContentDigest, &revision.Title,
+		&revision.Description, &revision.Content, &revision.ContentFormat,
+		&revision.OrderedMediaDigest, &revision.MetadataJSON,
+		&revision.Normalizer.Adapter, &revision.Normalizer.Version,
+		&observedAt, &committedAt, &revision.LegacyFragmentID,
+	)
+	if err != nil {
+		return domain.FragmentRevision{}, err
+	}
+	revision.ObservedAt, _ = time.Parse(time.RFC3339Nano, observedAt)
+	if revision.ObservedAt.IsZero() {
+		revision.ObservedAt, _ = time.Parse(time.RFC3339, observedAt)
+	}
+	revision.CommittedAt, _ = time.Parse(time.RFC3339Nano, committedAt)
+	if revision.CommittedAt.IsZero() {
+		revision.CommittedAt, _ = time.Parse(time.RFC3339, committedAt)
+	}
+	return revision, nil
 }
 
 // ListOptions filters and paginates FragmentRepository.List.
@@ -445,34 +841,33 @@ func (r *FragmentRepository) List(ctx context.Context, opts ListOptions) ([]doma
 		where   string
 	)
 	if opts.Status != "" {
-		clauses = append(clauses, "status = ?")
+		clauses = append(clauses, "f.status = ?")
 		args = append(args, opts.Status)
 	}
 	if strings.TrimSpace(opts.Source) != "" {
-		clauses = append(clauses, "source = ?")
+		clauses = append(clauses, "f.source = ?")
 		args = append(args, strings.TrimSpace(opts.Source))
 	}
 	if strings.TrimSpace(opts.SourceType) != "" {
-		clauses = append(clauses, "source_type = ?")
+		clauses = append(clauses, "f.source_type = ?")
 		args = append(args, strings.TrimSpace(opts.SourceType))
 	}
-	if len(clauses) > 0 {
-		where = " WHERE " + strings.Join(clauses, " AND ")
-	}
+	clauses = append(clauses, `NOT EXISTS (
+  SELECT 1 FROM fragment_identity_aliases fia WHERE fia.alias_fragment_id = f.id
+)`)
+	where = " WHERE " + strings.Join(clauses, " AND ")
 
 	var total int
-	if err := r.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM fragments`+where, args...).Scan(&total); err != nil {
+	if err := r.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM fragments f`+where, args...).Scan(&total); err != nil {
 		return nil, 0, fmt.Errorf("count fragments: %w", err)
 	}
 
 	listArgs := append(append([]any{}, args...), limit, offset)
-	rows, err := r.db.QueryContext(ctx, `
-SELECT
-  id, source, source_type, source_id, title, content, content_hash, created_at,
-  ingested_at, status, summary_text, indexed_at, metadata_json, ingest_name, canonical_path
-FROM fragments`+where+`
-ORDER BY created_at DESC, id DESC
-LIMIT ? OFFSET ?`, listArgs...)
+	query := `SELECT ` + fragmentReadColumns + `
+FROM fragments f ` + fragmentReadJoins + where + `
+ORDER BY f.created_at DESC, f.id DESC
+LIMIT ? OFFSET ?`
+	rows, err := r.db.QueryContext(ctx, query, listArgs...)
 	if err != nil {
 		return nil, 0, fmt.Errorf("list fragments: %w", err)
 	}
@@ -517,6 +912,14 @@ func (r *FragmentRepository) ListBrowse(ctx context.Context, opts ListOptions) (
 	if len(clauses) > 0 {
 		where = " WHERE " + strings.Join(clauses, " AND ")
 	}
+	if where == "" {
+		where = " WHERE "
+	} else {
+		where += " AND "
+	}
+	where += `NOT EXISTS (
+  SELECT 1 FROM fragment_identity_aliases fia WHERE fia.alias_fragment_id = f.id
+)`
 
 	var total int
 	if err := r.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM fragments f`+where, args...).Scan(&total); err != nil {
@@ -569,12 +972,12 @@ LIMIT ? OFFSET ?`, listArgs...)
 	items := make([]domain.FragmentBrowseItem, 0, limit)
 	for rows.Next() {
 		var (
-			item               domain.FragmentBrowseItem
-			createdAt          string
-			modifiedAt         string
-			previewAttachment  string
-			tagsRaw            string
-			materializedInt    int
+			item              domain.FragmentBrowseItem
+			createdAt         string
+			modifiedAt        string
+			previewAttachment string
+			tagsRaw           string
+			materializedInt   int
 		)
 		if err := rows.Scan(
 			&item.FragmentID,
@@ -612,14 +1015,15 @@ func (r *FragmentRepository) FindRelationCandidates(ctx context.Context, fragmen
 	if limit <= 0 {
 		limit = 5
 	}
-	rows, err := r.db.QueryContext(ctx, `
-SELECT
-  id, source, source_type, source_id, title, content, content_hash, created_at,
-  ingested_at, status, summary_text, indexed_at, metadata_json, ingest_name, canonical_path
-FROM fragments
-WHERE id <> ? AND source = ? AND source_type = ?
-ORDER BY created_at DESC
-LIMIT ?`, fragment.ID, fragment.Source, fragment.SourceType, limit)
+	query := `SELECT ` + fragmentReadColumns + `
+FROM fragments f ` + fragmentReadJoins + `
+WHERE f.id <> ? AND f.source = ? AND f.source_type = ?
+  AND NOT EXISTS (
+    SELECT 1 FROM fragment_identity_aliases fia WHERE fia.alias_fragment_id = f.id
+  )
+	ORDER BY f.created_at DESC
+LIMIT ?`
+	rows, err := r.db.QueryContext(ctx, query, fragment.ID, fragment.Source, fragment.SourceType, limit)
 	if err != nil {
 		return nil, fmt.Errorf("find relation candidates: %w", err)
 	}
@@ -656,10 +1060,7 @@ func (r *FragmentRepository) ListRelated(ctx context.Context, fragmentID string,
 	if limit <= 0 {
 		limit = 10
 	}
-	rows, err := r.db.QueryContext(ctx, `
-SELECT
-  f.id, f.source, f.source_type, f.source_id, f.title, f.content, f.content_hash,
-  f.created_at, f.ingested_at, f.status, f.summary_text, f.indexed_at, f.metadata_json, f.ingest_name, f.canonical_path,
+	query := `SELECT ` + fragmentReadColumns + `,
   (
     SELECT fa.attachment_id
     FROM fragment_attachments fa
@@ -672,9 +1073,14 @@ SELECT
   l.kind, l.score, l.metadata_json
 FROM fragment_links l
 JOIN fragments f ON f.id = l.related_fragment_id
+` + fragmentReadJoins + `
 WHERE l.fragment_id = ?
+  AND NOT EXISTS (
+    SELECT 1 FROM fragment_identity_aliases fia WHERE fia.alias_fragment_id = f.id
+  )
 ORDER BY l.score DESC, f.created_at DESC
-LIMIT ?`, fragmentID, limit)
+LIMIT ?`
+	rows, err := r.db.QueryContext(ctx, query, fragmentID, limit)
 	if err != nil {
 		return nil, fmt.Errorf("list related: %w", err)
 	}
@@ -684,28 +1090,18 @@ LIMIT ?`, fragmentID, limit)
 	for rows.Next() {
 		var (
 			f                   domain.Fragment
-			createdAt, ingested string
-			indexedAt           string
-			status              string
+			state               fragmentScanState
 			previewAttachmentID sql.NullString
 			kind                string
 			score               float64
 			relationMeta        string
 		)
-		if err := rows.Scan(
-			&f.ID, &f.Source, &f.SourceType, &f.SourceID, &f.Title, &f.Content, &f.ContentHash,
-			&createdAt, &ingested, &status, &f.Summary, &indexedAt, &f.MetadataJSON, &f.IngestName, &f.CanonicalPath,
-			&previewAttachmentID,
-			&kind, &score, &relationMeta,
-		); err != nil {
+		destinations := state.destinations(&f)
+		destinations = append(destinations, &previewAttachmentID, &kind, &score, &relationMeta)
+		if err := rows.Scan(destinations...); err != nil {
 			return nil, fmt.Errorf("scan related fragment: %w", err)
 		}
-		f.CreatedAt, _ = time.Parse(time.RFC3339, createdAt)
-		f.IngestedAt, _ = time.Parse(time.RFC3339, ingested)
-		if indexedAt != "" {
-			f.IndexedAt, _ = time.Parse(time.RFC3339, indexedAt)
-		}
-		f.Status = domain.FragmentStatus(status)
+		state.finish(&f)
 		item := domain.SearchResult{
 			Fragment: f,
 			Score:    score,
@@ -733,16 +1129,19 @@ func (r *FragmentRepository) ListRelations(ctx context.Context, fragmentID strin
 	if limit <= 0 {
 		limit = 10
 	}
-	rows, err := r.db.QueryContext(ctx, `
-SELECT
+	query := `SELECT
   l.fragment_id, l.related_fragment_id, l.kind, l.score, l.metadata_json, l.created_at,
-  f.id, f.source, f.source_type, f.source_id, f.title, f.content, f.content_hash,
-  f.created_at, f.ingested_at, f.status, f.summary_text, f.indexed_at, f.metadata_json, f.ingest_name, f.canonical_path
+` + fragmentReadColumns + `
 FROM fragment_links l
 JOIN fragments f ON f.id = l.related_fragment_id
+` + fragmentReadJoins + `
 WHERE l.fragment_id = ?
+  AND NOT EXISTS (
+    SELECT 1 FROM fragment_identity_aliases fia WHERE fia.alias_fragment_id = f.id
+  )
 ORDER BY l.score DESC, l.created_at DESC
-LIMIT ?`, fragmentID, limit)
+LIMIT ?`
+	rows, err := r.db.QueryContext(ctx, query, fragmentID, limit)
 	if err != nil {
 		return nil, fmt.Errorf("list relations: %w", err)
 	}
@@ -751,44 +1150,25 @@ LIMIT ?`, fragmentID, limit)
 	items := make([]domain.FragmentRelationDetail, 0, limit)
 	for rows.Next() {
 		var (
-			item                         domain.FragmentRelationDetail
-			related                      domain.Fragment
-			relationCreatedAt            string
-			relatedCreatedAt, ingestedAt string
-			indexedAt, status            string
+			item              domain.FragmentRelationDetail
+			related           domain.Fragment
+			state             fragmentScanState
+			relationCreatedAt string
 		)
-		if err := rows.Scan(
+		destinations := []any{
 			&item.Relation.FragmentID,
 			&item.Relation.RelatedFragmentID,
 			&item.Relation.Kind,
 			&item.Relation.Score,
 			&item.Relation.MetadataJSON,
 			&relationCreatedAt,
-			&related.ID,
-			&related.Source,
-			&related.SourceType,
-			&related.SourceID,
-			&related.Title,
-			&related.Content,
-			&related.ContentHash,
-			&relatedCreatedAt,
-			&ingestedAt,
-			&status,
-			&related.Summary,
-			&indexedAt,
-			&related.MetadataJSON,
-			&related.IngestName,
-			&related.CanonicalPath,
-		); err != nil {
+		}
+		destinations = append(destinations, state.destinations(&related)...)
+		if err := rows.Scan(destinations...); err != nil {
 			return nil, fmt.Errorf("scan relation detail: %w", err)
 		}
 		item.Relation.CreatedAt, _ = time.Parse(time.RFC3339, relationCreatedAt)
-		related.CreatedAt, _ = time.Parse(time.RFC3339, relatedCreatedAt)
-		related.IngestedAt, _ = time.Parse(time.RFC3339, ingestedAt)
-		if indexedAt != "" {
-			related.IndexedAt, _ = time.Parse(time.RFC3339, indexedAt)
-		}
-		related.Status = domain.FragmentStatus(status)
+		state.finish(&related)
 		item.Related = related
 		items = append(items, item)
 	}
@@ -801,33 +1181,14 @@ LIMIT ?`, fragmentID, limit)
 func scanFragments(rows *sql.Rows) ([]domain.Fragment, error) {
 	var out []domain.Fragment
 	for rows.Next() {
-		var (
-			f                   domain.Fragment
-			createdAt, ingested string
-			indexedAt           string
-			status              string
-		)
-		if err := rows.Scan(
-			&f.ID, &f.Source, &f.SourceType, &f.SourceID, &f.Title, &f.Content, &f.ContentHash,
-			&createdAt, &ingested, &status, &f.Summary, &indexedAt, &f.MetadataJSON, &f.IngestName, &f.CanonicalPath,
-		); err != nil {
+		f, err := scanFragment(rows)
+		if err != nil {
 			return nil, fmt.Errorf("scan fragment: %w", err)
 		}
-		f.CreatedAt, _ = time.Parse(time.RFC3339, createdAt)
-		f.IngestedAt, _ = time.Parse(time.RFC3339, ingested)
-		if indexedAt != "" {
-			f.IndexedAt, _ = time.Parse(time.RFC3339, indexedAt)
-		}
-		f.Status = domain.FragmentStatus(status)
 		out = append(out, f)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate fragments: %w", err)
 	}
 	return out, nil
-}
-
-func hashText(text string) string {
-	sum := sha256.Sum256([]byte(text))
-	return hex.EncodeToString(sum[:])
 }

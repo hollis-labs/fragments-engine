@@ -92,6 +92,7 @@ func (s *InboxReviewerService) reviewFragment(ctx context.Context, fragmentID st
 	if err != nil {
 		return false, false, detail, err
 	}
+	fragmentID = fragment.ID
 	if fragment.Source != "manual" {
 		return false, false, reviewDetail{action: "skip_non_manual"}, nil
 	}
@@ -146,6 +147,7 @@ func (s *InboxReviewerService) syncPinterestCorpus(ctx context.Context, fragment
 	if err != nil {
 		return err
 	}
+	fragmentID = fragment.ID
 	if fragment.Source != "manual" || fragment.SourceType != "pin" {
 		return nil
 	}
@@ -204,7 +206,7 @@ func (s *InboxReviewerService) applyEnrichment(
 	}
 	if len(enriched.Attachments) > 0 || len(currentAttachments) > 0 {
 		mergedAttachments := mergeAttachments(currentAttachments, enriched.Attachments)
-		if err := s.attachments.ReplaceFragmentAttachments(ctx, fragment.ID, mergedAttachments, s.now()); err != nil {
+		if err := s.attachments.ReplaceFragmentProjectionAttachments(ctx, fragment.ID, mergedAttachments, s.now()); err != nil {
 			return err
 		}
 		storage := map[string]domain.PublishedAttachmentInfo{}

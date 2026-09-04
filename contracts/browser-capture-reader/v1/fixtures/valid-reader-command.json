@@ -1,0 +1,12 @@
+{
+  "schema_version": "fe.reader.command.v1",
+  "command": "set_reading_progress",
+  "command_id": "command-1",
+  "idempotency_key": "command-1",
+  "expected_revision": 4,
+  "position": {
+    "kind": "gallery",
+    "attachment_id": "attachment-2",
+    "index": 1
+  }
+}

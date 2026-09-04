@@ -1,0 +1,22 @@
+{
+  "schema_version": "fe.capture.v1",
+  "capture_id": "capture-without-browser-urls",
+  "captured_at": "2026-09-03T18:42:00Z",
+  "principal_id": "local-user",
+  "client": {"kind": "fe-clipper", "version": "1.0.0"},
+  "source": {
+    "provider": "web",
+    "source_item_key": "https://example.com/article",
+    "segment_key": "root"
+  },
+  "document": {"title": "Browser captures must retain URL provenance"},
+  "tags": [],
+  "annotations": [],
+  "media": [],
+  "extraction": {
+    "adapter": "generic",
+    "adapter_version": "1.0.0",
+    "observed_capabilities": ["title"],
+    "warnings": []
+  }
+}

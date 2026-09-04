@@ -39,7 +39,24 @@ func (r *EntityRepository) ReplaceFragmentEntities(ctx context.Context, fragment
 		return fmt.Errorf("clear fragment entities: %w", err)
 	}
 
-	if err := upsertFragmentEntities(ctx, tx, fragmentID, entities); err != nil {
+	if err := upsertFragmentEntities(ctx, tx, fragmentID, entities, time.Now().UTC()); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit fragment entities: %w", err)
+	}
+	return nil
+}
+
+// AddFragmentEntities merges independent observations without deleting rows
+// owned by another capture, ingest stage, or concurrent writer.
+func (r *EntityRepository) AddFragmentEntities(ctx context.Context, fragmentID string, entities []domain.FragmentEntity) error {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin add fragment entities: %w", err)
+	}
+	defer tx.Rollback()
+	if err := upsertFragmentEntities(ctx, tx, fragmentID, entities, time.Now().UTC()); err != nil {
 		return err
 	}
 	if err := tx.Commit(); err != nil {
@@ -64,6 +81,21 @@ func (r *EntityRepository) ReplaceFragmentEntities(ctx context.Context, fragment
 // Every entity in entities must have a Kind present in kinds; entities
 // outside that scope are rejected rather than silently written or dropped.
 func (r *EntityRepository) ReplaceFragmentEntitiesByKind(ctx context.Context, fragmentID string, entities []domain.FragmentEntity, kinds ...string) error {
+	return r.replaceFragmentEntitiesByKindAndSource(ctx, fragmentID, entities, kinds, nil)
+}
+
+// ReplaceFragmentEntitiesByKindAndSource replaces only the relations owned by
+// the supplied producers. It lets deterministic indexing refresh its own
+// evidence without deleting a compatibility/provider projection of the same
+// entity kind.
+func (r *EntityRepository) ReplaceFragmentEntitiesByKindAndSource(ctx context.Context, fragmentID string, entities []domain.FragmentEntity, kinds, sources []string) error {
+	if len(sources) == 0 {
+		return fmt.Errorf("replace fragment entities by kind and source: at least one source is required")
+	}
+	return r.replaceFragmentEntitiesByKindAndSource(ctx, fragmentID, entities, kinds, sources)
+}
+
+func (r *EntityRepository) replaceFragmentEntitiesByKindAndSource(ctx context.Context, fragmentID string, entities []domain.FragmentEntity, kinds, sources []string) error {
 	if len(kinds) == 0 {
 		return fmt.Errorf("replace fragment entities by kind: at least one kind is required")
 	}
@@ -84,7 +116,7 @@ func (r *EntityRepository) ReplaceFragmentEntitiesByKind(ctx context.Context, fr
 	defer tx.Rollback()
 
 	placeholders := make([]string, len(kinds))
-	args := make([]any, 0, len(kinds)+1)
+	args := make([]any, 0, len(kinds)+len(sources)+1)
 	args = append(args, fragmentID)
 	for i, kind := range kinds {
 		placeholders[i] = "?"
@@ -94,11 +126,19 @@ func (r *EntityRepository) ReplaceFragmentEntitiesByKind(ctx context.Context, fr
 DELETE FROM fragment_entities
 WHERE fragment_id = ?
   AND entity_id IN (SELECT id FROM entities WHERE kind IN (%s))`, strings.Join(placeholders, ", "))
+	if len(sources) != 0 {
+		sourcePlaceholders := make([]string, len(sources))
+		for i, source := range sources {
+			sourcePlaceholders[i] = "?"
+			args = append(args, source)
+		}
+		deleteQuery += fmt.Sprintf("\n  AND source IN (%s)", strings.Join(sourcePlaceholders, ", "))
+	}
 	if _, err := tx.ExecContext(ctx, deleteQuery, args...); err != nil {
 		return fmt.Errorf("clear fragment entities by kind: %w", err)
 	}
 
-	if err := upsertFragmentEntities(ctx, tx, fragmentID, entities); err != nil {
+	if err := upsertFragmentEntities(ctx, tx, fragmentID, entities, time.Now().UTC()); err != nil {
 		return err
 	}
 	if err := tx.Commit(); err != nil {
@@ -111,8 +151,8 @@ WHERE fragment_id = ?
 // already-open transaction. Shared by ReplaceFragmentEntities and
 // ReplaceFragmentEntitiesByKind, which differ only in how much of the
 // fragment's existing entities they clear first.
-func upsertFragmentEntities(ctx context.Context, tx *sql.Tx, fragmentID string, entities []domain.FragmentEntity) error {
-	now := time.Now().UTC().Format(time.RFC3339)
+func upsertFragmentEntities(ctx context.Context, tx entityWriteConn, fragmentID string, entities []domain.FragmentEntity, observedAt time.Time) error {
+	now := observedAt.UTC().Format(time.RFC3339)
 	for _, entity := range entities {
 		entityID := stableEntityID(entity.Kind, entity.Value)
 		if _, err := tx.ExecContext(ctx, `
@@ -137,6 +177,10 @@ ON CONFLICT(fragment_id, entity_id, source) DO UPDATE SET
 		}
 	}
 	return nil
+}
+
+type entityWriteConn interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
 }
 
 func (r *EntityRepository) ListByFragment(ctx context.Context, fragmentID string) ([]domain.FragmentEntity, error) {
@@ -202,10 +246,7 @@ func (r *EntityRepository) ListFragments(ctx context.Context, kind, value string
 	if limit <= 0 {
 		limit = 20
 	}
-	rows, err := r.db.QueryContext(ctx, `
-SELECT
-  f.id, f.source, f.source_type, f.source_id, f.title, f.content, f.content_hash,
-  f.created_at, f.ingested_at, f.status, f.summary_text, f.indexed_at, f.metadata_json, f.ingest_name, f.canonical_path,
+	query := `SELECT ` + fragmentReadColumns + `,
   (
     SELECT fa.attachment_id
     FROM fragment_attachments fa
@@ -219,9 +260,14 @@ SELECT
 FROM entities e
 JOIN fragment_entities fe ON fe.entity_id = e.id
 JOIN fragments f ON f.id = fe.fragment_id
+` + fragmentReadJoins + `
 WHERE e.kind = ? AND e.value = ?
+  AND NOT EXISTS (
+    SELECT 1 FROM fragment_identity_aliases fia WHERE fia.alias_fragment_id = f.id
+  )
 ORDER BY fe.confidence DESC, f.created_at DESC
-LIMIT ?`, kind, value, limit)
+LIMIT ?`
+	rows, err := r.db.QueryContext(ctx, query, kind, value, limit)
 	if err != nil {
 		return nil, fmt.Errorf("list fragments by entity: %w", err)
 	}
@@ -231,26 +277,16 @@ LIMIT ?`, kind, value, limit)
 	for rows.Next() {
 		var (
 			f                   domain.Fragment
-			createdAt, ingested string
-			indexedAt           string
-			status              string
+			state               fragmentScanState
 			previewAttachmentID sql.NullString
 			confidence          float64
 		)
-		if err := rows.Scan(
-			&f.ID, &f.Source, &f.SourceType, &f.SourceID, &f.Title, &f.Content, &f.ContentHash,
-			&createdAt, &ingested, &status, &f.Summary, &indexedAt, &f.MetadataJSON, &f.IngestName, &f.CanonicalPath,
-			&previewAttachmentID,
-			&confidence,
-		); err != nil {
+		destinations := state.destinations(&f)
+		destinations = append(destinations, &previewAttachmentID, &confidence)
+		if err := rows.Scan(destinations...); err != nil {
 			return nil, fmt.Errorf("scan fragment by entity: %w", err)
 		}
-		f.CreatedAt, _ = time.Parse(time.RFC3339, createdAt)
-		f.IngestedAt, _ = time.Parse(time.RFC3339, ingested)
-		if indexedAt != "" {
-			f.IndexedAt, _ = time.Parse(time.RFC3339, indexedAt)
-		}
-		f.Status = domain.FragmentStatus(status)
+		state.finish(&f)
 		item := domain.SearchResult{
 			Fragment: f,
 			Score:    confidence,

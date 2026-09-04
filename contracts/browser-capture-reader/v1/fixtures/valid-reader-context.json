@@ -1,0 +1,41 @@
+{
+  "schema_version": "fe.reader.context.v1",
+  "fragment_id": "fragment-1",
+  "fragment_revision_id": "revision-3",
+  "readable_content": [
+    {
+      "kind": "normalized_document",
+      "reference_id": "document-revision-3",
+      "content_href": "/v1/reader/items/fragment-1/content?revision_id=revision-3",
+      "digest": {"algorithm": "sha256", "value": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}
+    },
+    {
+      "kind": "transcript",
+      "reference_id": "transcript-observation-3",
+      "content_href": "/v1/media/variants/transcript-3/content"
+    }
+  ],
+  "attachments": [
+    {
+      "attachment_id": "attachment-1",
+      "media_asset_id": "asset-1",
+      "asset_variant_ids": ["variant-poster", "variant-video"],
+      "digests": [
+        {"algorithm": "sha256", "value": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
+      ]
+    }
+  ],
+  "derived_observation_ids": ["transcript-observation-3"],
+  "selection": {
+    "text": "Useful page text.",
+    "selector": {"exact": "Useful page text."}
+  },
+  "provenance": {
+    "source_observation_ids": ["source-observation-3"],
+    "capture_ids": ["capture-1", "capture-2"]
+  },
+  "sensitivity_policy": {
+    "policy_id": "local-default",
+    "labels": ["personal"]
+  }
+}

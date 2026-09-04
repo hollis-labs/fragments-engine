@@ -82,6 +82,7 @@ func ExtractYouTubeTranscript(ctx context.Context, client *http.Client, rawURL, 
 					"video_platform":    "youtube",
 					"author":            author,
 					"transcript_source": transcriptSource,
+					"transcript_text":   transcript,
 				},
 			}, nil
 		}
@@ -91,6 +92,7 @@ func ExtractYouTubeTranscript(ctx context.Context, client *http.Client, rawURL, 
 	if fallbackErr == nil && strings.TrimSpace(fallback.Text) != "" {
 		fallback.Metadata["video_id"] = videoID
 		fallback.Metadata["video_platform"] = "youtube"
+		fallback.Metadata["transcript_text"] = fallback.Text
 		if title != "" {
 			fallback.Title = titleOrFallback(title, rawURL)
 		}

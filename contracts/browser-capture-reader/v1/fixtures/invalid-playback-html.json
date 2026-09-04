@@ -1,0 +1,6 @@
+{
+  "kind": "provider_embed",
+  "provider": "youtube",
+  "provider_item_id": "3RmtNXqnreI",
+  "html": "<iframe src=\"https://example.invalid\"></iframe>"
+}

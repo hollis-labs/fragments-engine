@@ -16,6 +16,7 @@ import (
 	"github.com/hollis-labs/fragments-engine/internal/domain"
 	"github.com/hollis-labs/fragments-engine/internal/extract"
 	"github.com/hollis-labs/fragments-engine/internal/ingest"
+	"github.com/hollis-labs/fragments-engine/internal/legacycapture"
 	"github.com/hollis-labs/fragments-engine/internal/recall"
 	"github.com/hollis-labs/fragments-engine/internal/repository"
 )
@@ -30,6 +31,13 @@ type FragmentService struct {
 	vision      analyze.VisionAnalyzer
 	enricher    *ManualIntakeEnricher
 	corpus      *PinterestCorpusWriter
+	legacy      *legacycapture.Service
+}
+
+func (s *FragmentService) SetLegacyCaptureService(adapter *legacycapture.Service) {
+	if s != nil {
+		s.legacy = adapter
+	}
 }
 
 func NewFragmentService(repo *repository.FragmentRepository, entities *repository.EntityRepository, attachments *repository.AttachmentRepository, routes *repository.RoutingRepository, recallIndex recall.Indexer, pipeline *ingest.Pipeline, vision analyze.VisionAnalyzer, enricher *ManualIntakeEnricher, corpus *PinterestCorpusWriter) *FragmentService {
@@ -237,23 +245,24 @@ func (s *FragmentService) GetDetail(ctx context.Context, fragmentID string, rela
 	if err != nil {
 		return domain.FragmentDetail{}, err
 	}
-	entities, err := s.entities.ListByFragment(ctx, fragmentID)
+	canonicalID := fragment.ID
+	entities, err := s.entities.ListByFragment(ctx, canonicalID)
 	if err != nil {
 		return domain.FragmentDetail{}, err
 	}
-	attachments, err := s.attachments.ListByFragment(ctx, fragmentID)
+	attachments, err := s.attachments.ListByFragment(ctx, canonicalID)
 	if err != nil {
 		return domain.FragmentDetail{}, err
 	}
-	related, err := s.recall.Related(ctx, fragmentID, relatedLimit)
+	related, err := s.recall.Related(ctx, canonicalID, relatedLimit)
 	if err != nil {
 		return domain.FragmentDetail{}, err
 	}
-	relations, err := s.repo.ListRelations(ctx, fragmentID, relatedLimit)
+	relations, err := s.repo.ListRelations(ctx, canonicalID, relatedLimit)
 	if err != nil {
 		return domain.FragmentDetail{}, err
 	}
-	routeLog, err := s.routes.ListRouteLog(ctx, fragmentID)
+	routeLog, err := s.routes.ListRouteLog(ctx, canonicalID)
 	if err != nil {
 		return domain.FragmentDetail{}, err
 	}
@@ -278,7 +287,11 @@ func (s *FragmentService) ListBrowse(ctx context.Context, status string, limit, 
 }
 
 func (s *FragmentService) Related(ctx context.Context, fragmentID string, limit int) ([]domain.SearchResult, error) {
-	return s.recall.Related(ctx, fragmentID, limit)
+	canonicalID, err := s.repo.ResolveCanonicalFragmentID(ctx, fragmentID)
+	if err != nil {
+		return nil, err
+	}
+	return s.recall.Related(ctx, canonicalID, limit)
 }
 
 func (s *FragmentService) ListEntities(ctx context.Context, kind string, limit int) ([]repository.EntityRecord, error) {
@@ -290,11 +303,16 @@ func (s *FragmentService) FragmentsByEntity(ctx context.Context, kind, value str
 }
 
 func (s *FragmentService) ReanalyzeAttachments(ctx context.Context, fragmentID, attachmentID string) (domain.AttachmentReanalysisResult, error) {
-	result := domain.AttachmentReanalysisResult{FragmentID: fragmentID}
+	canonicalID, err := s.repo.ResolveCanonicalFragmentID(ctx, fragmentID)
+	if err != nil {
+		return domain.AttachmentReanalysisResult{}, err
+	}
+	fragmentID = canonicalID
+	result := domain.AttachmentReanalysisResult{FragmentID: canonicalID}
 	if s.vision == nil {
 		return result, fmt.Errorf("attachment vision analyzer is not configured")
 	}
-	items, err := s.attachments.ListByFragment(ctx, fragmentID)
+	items, err := s.attachments.ListByFragment(ctx, canonicalID)
 	if err != nil {
 		return result, err
 	}
@@ -364,6 +382,11 @@ type IntakeRequest struct {
 	// main content, stored as its own distinct metadata field
 	// (metadata["selection"]), never merged into Content.
 	Selection string
+	// Highlights is the additive multi-value form of Selection. Selection is
+	// retained as a compatibility alias and is appended without replacing it.
+	Highlights []string
+	// Notes are capture-time notes, distinct from the optimistic curated note.
+	Notes []string
 }
 
 // IntakeResult is returned after a successful intake.
@@ -402,6 +425,7 @@ func (s *FragmentService) UpdateManualFragment(ctx context.Context, req UpdateFr
 	if fragment.Source != "manual" {
 		return domain.FragmentDetail{}, fmt.Errorf("update fragment: only manual fragments are editable")
 	}
+	fragmentID = fragment.ID
 
 	meta, err := decodeEditableMetadata(fragment.MetadataJSON)
 	if err != nil {
@@ -564,14 +588,17 @@ func (s *FragmentService) Intake(ctx context.Context, req IntakeRequest) (Intake
 		return IntakeResult{}, fmt.Errorf("intake: content is required")
 	}
 
-	title := strings.TrimSpace(req.Title)
+	materialTitle := strings.TrimSpace(req.Title)
+	title := materialTitle
 	if title == "" {
 		title = deriveTitle(req.Content)
 	}
 
 	// Merge caller-supplied tags with any "#tag" tokens found inline in the
 	// content. Content itself is never mutated -- hashtags stay in place.
-	mergedTags := dedupeTagValues(append(append([]string{}, req.Tags...), ExtractHashtags(req.Content)...))
+	userTags := dedupeTagValues(req.Tags)
+	inlineTags := dedupeTagValues(ExtractHashtags(req.Content))
+	mergedTags := dedupeTagValues(append(append([]string{}, userTags...), inlineTags...))
 	hasLinkTag := containsTagFold(mergedTags, "link")
 
 	requestedSourceType := strings.TrimSpace(req.SourceType)
@@ -641,6 +668,7 @@ func (s *FragmentService) Intake(ctx context.Context, req IntakeRequest) (Intake
 		SourceType:    sourceType,
 		SourceID:      sourceID,
 		Title:         title,
+		Description:   req.Description,
 		Content:       req.Content,
 		CreatedAt:     now,
 		CanonicalPath: "fragments/manual/" + sourceType + "/" + sourceID,
@@ -655,33 +683,62 @@ func (s *FragmentService) Intake(ctx context.Context, req IntakeRequest) (Intake
 		candidate.Attachments = enriched.Attachments
 	}
 
-	fragment, err := repository.BuildFragment(candidate, "manual-intake", now)
-	if err != nil {
-		return IntakeResult{}, fmt.Errorf("intake: build fragment: %w", err)
+	materialMetadata := map[string]any{}
+	if sourceURL != "" {
+		materialMetadata["source_url"] = sourceURL
 	}
-
-	outcome, err := s.repo.Upsert(ctx, fragment)
-	if err != nil {
-		return IntakeResult{}, fmt.Errorf("intake: upsert: %w", err)
-	}
-
-	manualEntities := make([]domain.FragmentEntity, 0, len(mergedTags)+len(derivedEntities))
-	// Write manual entities immediately so they exist even if the fragment later skips.
-	if len(mergedTags) > 0 || len(derivedEntities) > 0 {
-		for _, t := range mergedTags {
-			t = strings.TrimSpace(t)
-			if t == "" {
-				continue
-			}
-			manualEntities = append(manualEntities, domain.FragmentEntity{
-				Kind:       "tag",
-				Value:      t,
-				Source:     "manual-intake",
-				Confidence: 1.0,
-			})
+	for _, key := range []string{"pin_id", "video_id"} {
+		if value, ok := enriched.Metadata[key]; ok {
+			materialMetadata[key] = value
 		}
-		manualEntities = append(manualEntities, derivedEntities...)
-		if err := s.entities.ReplaceFragmentEntities(ctx, fragment.ID, manualEntities); err != nil {
+	}
+	materialCandidate := candidate
+	materialCandidate.Title = materialTitle
+	materialCandidate.Metadata = materialMetadata
+	materialCandidate.Attachments = nil
+	if sourceURL != "" {
+		materialCandidate.SourceIdentity.SubmittedURL = sourceURL
+		materialCandidate.SourceIdentity.CanonicalURL = sourceURL
+	} else if linkURL != "" {
+		materialCandidate.SourceIdentity.SubmittedURL = linkURL
+		materialCandidate.SourceIdentity.CanonicalURL = linkURL
+	}
+	manualEntities := buildManualIntakeEntities(mergedTags, derivedEntities)
+
+	var fragment domain.Fragment
+	var outcome repository.UpsertOutcome
+	idempotentReplay := false
+	if s.legacy != nil {
+		highlights := append([]string(nil), req.Highlights...)
+		if selection := strings.TrimSpace(req.Selection); selection != "" && !containsExact(highlights, selection) {
+			highlights = append(highlights, selection)
+		}
+		accepted, acceptErr := s.legacy.Accept(ctx, legacycapture.Request{
+			IngestName: "manual-intake", Material: materialCandidate, Projection: candidate,
+			UserTags: userTags, DeterministicTags: inlineTags,
+			Highlights: highlights, Notes: req.Notes,
+			ActorID: "legacy:manual-intake", ProjectionEntities: manualEntities,
+		})
+		if acceptErr != nil {
+			return IntakeResult{}, fmt.Errorf("intake: accept legacy capture: %w", acceptErr)
+		}
+		fragment, outcome, idempotentReplay = accepted.Fragment, accepted.Outcome, accepted.IdempotentReplay
+	} else {
+		fragment, err = repository.BuildFragment(candidate, "manual-intake", now)
+		if err != nil {
+			return IntakeResult{}, fmt.Errorf("intake: build fragment: %w", err)
+		}
+		fragment, outcome, err = s.repo.UpsertResolved(ctx, fragment)
+		if err != nil {
+			return IntakeResult{}, fmt.Errorf("intake: upsert: %w", err)
+		}
+	}
+
+	// Add manual/derived entities without replacing observations owned by another
+	// capture or concurrent writer. Canonical user tags were already unioned in
+	// the acceptance transaction; these rows preserve older search behavior.
+	if s.legacy == nil && len(manualEntities) > 0 && !idempotentReplay {
+		if err := s.entities.AddFragmentEntities(ctx, fragment.ID, manualEntities); err != nil {
 			return IntakeResult{}, fmt.Errorf("intake: write tags: %w", err)
 		}
 	}
@@ -703,11 +760,12 @@ func (s *FragmentService) Intake(ctx context.Context, req IntakeRequest) (Intake
 
 	// Run through the ingest pipeline stages.
 	stageCtx := &ingest.StageContext{
-		IngestConfig: config.IngestConfig{Name: "manual-intake", Kind: "manual"},
-		Candidate:    candidate,
-		Fragment:     fragment,
-		Outcome:      outcome,
-		Now:          now,
+		IngestConfig:         config.IngestConfig{Name: "manual-intake", Kind: "manual"},
+		Candidate:            candidate,
+		Fragment:             fragment,
+		Outcome:              outcome,
+		Now:                  now,
+		LegacyCaptureApplied: s.legacy != nil,
 	}
 	for _, stage := range s.pipeline.Stages() {
 		if err := stage.Run(ctx, stageCtx); err != nil {
@@ -732,13 +790,8 @@ func (s *FragmentService) Intake(ctx context.Context, req IntakeRequest) (Intake
 			return IntakeResult{}, fmt.Errorf("intake: apply prefetched summary: %w", err)
 		}
 	}
-	if len(manualEntities) > 0 {
-		currentEntities, err := s.entities.ListByFragment(ctx, fragment.ID)
-		if err != nil {
-			return IntakeResult{}, fmt.Errorf("intake: read extracted entities: %w", err)
-		}
-		mergedEntities := mergeEntities(currentEntities, manualEntities)
-		if err := s.entities.ReplaceFragmentEntities(ctx, fragment.ID, mergedEntities); err != nil {
+	if s.legacy == nil && len(manualEntities) > 0 {
+		if err := s.entities.AddFragmentEntities(ctx, fragment.ID, manualEntities); err != nil {
 			return IntakeResult{}, fmt.Errorf("intake: merge entities: %w", err)
 		}
 	}
@@ -749,6 +802,29 @@ func (s *FragmentService) Intake(ctx context.Context, req IntakeRequest) (Intake
 		Status:     string(stageCtx.Fragment.Status),
 		LinkURL:    linkURL,
 	}, nil
+}
+
+func buildManualIntakeEntities(tags []string, derived []domain.FragmentEntity) []domain.FragmentEntity {
+	entities := make([]domain.FragmentEntity, 0, len(tags)+len(derived))
+	for _, tag := range tags {
+		tag = strings.TrimSpace(tag)
+		if tag == "" {
+			continue
+		}
+		entities = append(entities, domain.FragmentEntity{
+			Kind: "tag", Value: tag, Source: "manual-intake", Confidence: 1,
+		})
+	}
+	return append(entities, derived...)
+}
+
+func containsExact(values []string, target string) bool {
+	for _, value := range values {
+		if strings.TrimSpace(value) == target {
+			return true
+		}
+	}
+	return false
 }
 
 func decodeEditableMetadata(raw string) (map[string]any, error) {

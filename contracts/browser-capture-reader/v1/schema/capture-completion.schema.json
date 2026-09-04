@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.hollis-labs.dev/fragments-engine/browser-capture-reader/v1/capture-completion.schema.json",
+  "title": "CaptureCompletionRequest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "idempotency_key", "assets", "warnings"],
+  "properties": {
+    "schema_version": {
+      "const": "fe.capture.completion.v1"
+    },
+    "idempotency_key": {
+      "$ref": "common.schema.json#/$defs/Identifier"
+    },
+    "assets": {
+      "type": "array",
+      "items": {
+        "$ref": "media.schema.json#/$defs/AssetOutcome"
+      }
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "$ref": "common.schema.json#/$defs/ContractWarning"
+      }
+    }
+  }
+}

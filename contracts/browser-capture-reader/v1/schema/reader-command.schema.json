@@ -1,0 +1,153 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.hollis-labs.dev/fragments-engine/browser-capture-reader/v1/reader-command.schema.json",
+  "title": "ReaderCommand",
+  "description": "Closed semantic command union. Arbitrary metadata patches and inbox-disposition decisions are intentionally absent.",
+  "oneOf": [
+    {"$ref": "#/$defs/AddTag"},
+    {"$ref": "#/$defs/RemoveTag"},
+    {"$ref": "#/$defs/AppendCaptureNote"},
+    {"$ref": "#/$defs/UpdateCuratedNote"},
+    {"$ref": "#/$defs/SetReadingProgress"},
+    {"$ref": "#/$defs/MarkRead"},
+    {"$ref": "#/$defs/MarkUnread"},
+    {"$ref": "#/$defs/RequestAssetAcquisition"},
+    {"$ref": "#/$defs/Route"},
+    {"$ref": "#/$defs/Materialize"}
+  ],
+  "$defs": {
+    "AddTag": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "command", "command_id", "idempotency_key", "expected_revision", "tag"],
+      "properties": {
+        "schema_version": {"const": "fe.reader.command.v1"},
+        "command": {"const": "add_tag"},
+        "command_id": {"$ref": "common.schema.json#/$defs/Identifier"},
+        "idempotency_key": {"$ref": "common.schema.json#/$defs/Identifier"},
+        "expected_revision": {"type": "integer", "minimum": 0},
+        "tag": {"type": "string", "minLength": 1, "maxLength": 128}
+      }
+    },
+    "RemoveTag": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "command", "command_id", "idempotency_key", "expected_revision", "tag"],
+      "properties": {
+        "schema_version": {"const": "fe.reader.command.v1"},
+        "command": {"const": "remove_tag"},
+        "command_id": {"$ref": "common.schema.json#/$defs/Identifier"},
+        "idempotency_key": {"$ref": "common.schema.json#/$defs/Identifier"},
+        "expected_revision": {"type": "integer", "minimum": 0},
+        "tag": {"type": "string", "minLength": 1, "maxLength": 128}
+      }
+    },
+    "AppendCaptureNote": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "command", "command_id", "idempotency_key", "expected_revision", "annotation_id", "text"],
+      "properties": {
+        "schema_version": {"const": "fe.reader.command.v1"},
+        "command": {"const": "append_capture_note"},
+        "command_id": {"$ref": "common.schema.json#/$defs/Identifier"},
+        "idempotency_key": {"$ref": "common.schema.json#/$defs/Identifier"},
+        "expected_revision": {"type": "integer", "minimum": 0},
+        "annotation_id": {"$ref": "common.schema.json#/$defs/Identifier"},
+        "text": {"type": "string", "minLength": 1},
+        "selector": {"$ref": "common.schema.json#/$defs/TextQuoteSelector"}
+      }
+    },
+    "UpdateCuratedNote": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "command", "command_id", "idempotency_key", "expected_revision", "expected_note_revision", "body_markdown"],
+      "properties": {
+        "schema_version": {"const": "fe.reader.command.v1"},
+        "command": {"const": "update_curated_note"},
+        "command_id": {"$ref": "common.schema.json#/$defs/Identifier"},
+        "idempotency_key": {"$ref": "common.schema.json#/$defs/Identifier"},
+        "expected_revision": {"type": "integer", "minimum": 0},
+        "expected_note_revision": {"type": "integer", "minimum": 0},
+        "body_markdown": {"type": "string"}
+      }
+    },
+    "SetReadingProgress": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "command", "command_id", "idempotency_key", "expected_revision", "position"],
+      "properties": {
+        "schema_version": {"const": "fe.reader.command.v1"},
+        "command": {"const": "set_reading_progress"},
+        "command_id": {"$ref": "common.schema.json#/$defs/Identifier"},
+        "idempotency_key": {"$ref": "common.schema.json#/$defs/Identifier"},
+        "expected_revision": {"type": "integer", "minimum": 0},
+        "position": {"$ref": "reading-state.schema.json#/$defs/ReadingPosition"}
+      }
+    },
+    "MarkRead": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "command", "command_id", "idempotency_key", "expected_revision"],
+      "properties": {
+        "schema_version": {"const": "fe.reader.command.v1"},
+        "command": {"const": "mark_read"},
+        "command_id": {"$ref": "common.schema.json#/$defs/Identifier"},
+        "idempotency_key": {"$ref": "common.schema.json#/$defs/Identifier"},
+        "expected_revision": {"type": "integer", "minimum": 0}
+      }
+    },
+    "MarkUnread": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "command", "command_id", "idempotency_key", "expected_revision"],
+      "properties": {
+        "schema_version": {"const": "fe.reader.command.v1"},
+        "command": {"const": "mark_unread"},
+        "command_id": {"$ref": "common.schema.json#/$defs/Identifier"},
+        "idempotency_key": {"$ref": "common.schema.json#/$defs/Identifier"},
+        "expected_revision": {"type": "integer", "minimum": 0}
+      }
+    },
+    "RequestAssetAcquisition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "command", "command_id", "idempotency_key", "expected_revision", "media_asset_id", "variant_kind", "requested_custody"],
+      "properties": {
+        "schema_version": {"const": "fe.reader.command.v1"},
+        "command": {"const": "request_asset_acquisition"},
+        "command_id": {"$ref": "common.schema.json#/$defs/Identifier"},
+        "idempotency_key": {"$ref": "common.schema.json#/$defs/Identifier"},
+        "expected_revision": {"type": "integer", "minimum": 0},
+        "media_asset_id": {"$ref": "common.schema.json#/$defs/Identifier"},
+        "variant_kind": {"$ref": "media.schema.json#/$defs/VariantKind"},
+        "requested_custody": {"type": "string", "enum": ["cache", "mirror", "adopted"]}
+      }
+    },
+    "Route": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "command", "command_id", "idempotency_key", "expected_revision", "route_id"],
+      "properties": {
+        "schema_version": {"const": "fe.reader.command.v1"},
+        "command": {"const": "route"},
+        "command_id": {"$ref": "common.schema.json#/$defs/Identifier"},
+        "idempotency_key": {"$ref": "common.schema.json#/$defs/Identifier"},
+        "expected_revision": {"type": "integer", "minimum": 0},
+        "route_id": {"$ref": "common.schema.json#/$defs/Identifier"}
+      }
+    },
+    "Materialize": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "command", "command_id", "idempotency_key", "expected_revision", "destination_id"],
+      "properties": {
+        "schema_version": {"const": "fe.reader.command.v1"},
+        "command": {"const": "materialize"},
+        "command_id": {"$ref": "common.schema.json#/$defs/Identifier"},
+        "idempotency_key": {"$ref": "common.schema.json#/$defs/Identifier"},
+        "expected_revision": {"type": "integer", "minimum": 0},
+        "destination_id": {"$ref": "common.schema.json#/$defs/Identifier"}
+      }
+    }
+  }
+}

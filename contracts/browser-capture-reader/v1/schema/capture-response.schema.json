@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.hollis-labs.dev/fragments-engine/browser-capture-reader/v1/capture-response.schema.json",
+  "title": "CaptureManifestResponse",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "capture_id",
+    "fragment_id",
+    "fragment_revision_id",
+    "capture_attempt_id",
+    "completion",
+    "idempotent_replay",
+    "asset_instructions",
+    "warnings",
+    "reader_item"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "fe.capture.result.v1"
+    },
+    "capture_id": {
+      "$ref": "common.schema.json#/$defs/Identifier"
+    },
+    "fragment_id": {
+      "$ref": "common.schema.json#/$defs/Identifier"
+    },
+    "fragment_revision_id": {
+      "$ref": "common.schema.json#/$defs/Identifier"
+    },
+    "capture_attempt_id": {
+      "$ref": "common.schema.json#/$defs/Identifier"
+    },
+    "completion": {
+      "type": "string",
+      "enum": ["accepting", "transferring", "complete", "partial", "failed"]
+    },
+    "idempotent_replay": {
+      "type": "boolean"
+    },
+    "asset_instructions": {
+      "type": "array",
+      "items": {
+        "$ref": "media.schema.json#/$defs/AssetInstruction"
+      }
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "$ref": "common.schema.json#/$defs/ContractWarning"
+      }
+    },
+    "reader_item": {
+      "$ref": "reader-item.schema.json"
+    }
+  }
+}

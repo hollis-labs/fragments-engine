@@ -7,6 +7,8 @@ This is the operator and agent usage guide for Fragments Engine.
 - FE ingests source material into fragments.
 - FE keeps the canonical metadata, provenance, routing history, recall index, queue state, and entities.
 - FE can export fragments to external peer systems through `file`, `mcp`, `api`, and `cli`.
+- Browser capture and the Sysop Reader have a dedicated operator guide at
+  [`browser-capture-reader.md`](./browser-capture-reader.md).
 
 ## Common Flows
 
@@ -245,9 +247,9 @@ go run ./cmd/fragments-engine ingest run -config ./fragments.yaml
 
 `ingest run` executes every enabled ingest, not just this one — use `ingest preview` first to check just this source. Note `preview` still performs a real fetch of every URL in the manifest (it shares the same `Collect` path as a real run) — it just doesn't insert anything into FE's database. A blocked/failed URL within the batch does not abort the run; it lands as a placeholder fragment with `enrichment_status = "pending"` and gets picked up by the same inbox-reviewer retry cycle as the single-link path above, alongside every other blocked URL in the batch.
 
-**Pre-fetched content (browser clipper, or any client that already has the content in hand):**
+**Pre-fetched content (legacy compatibility clients):**
 
-For callers that already fetched/extracted a page client-side — the Chrome web clipper extension ([`apps/fe-clipper`](../../fe-clipper)) being the first such caller — `/v1/intake` also accepts `source_url`, `description`, and `selection` alongside `content`:
+For compatibility callers that already fetched/extracted a page client-side, `/v1/intake` also accepts `source_url`, `description`, `selection`, `highlights`, and `notes` alongside `content`:
 
 ```bash
 curl -s -X POST http://127.0.0.1:8091/v1/intake \
@@ -258,11 +260,15 @@ curl -s -X POST http://127.0.0.1:8091/v1/intake \
     "source_url": "https://example.com/some-article",
     "description": "<page'"'"'s own meta description, if the caller captured one>",
     "selection": "<text the user had highlighted at capture time, if any>",
+    "highlights": ["<additional independent highlight>", "<another highlight>"],
+    "notes": ["<capture-time note>"],
     "tags": ["link"]
   }'
 ```
 
-When `source_url` is present, FE never fetches the URL itself — the submitted `content` is treated as final. `description` takes the same precedence over a derived summary that the fetch-based path already uses; `selection` is stored separately in `metadata.selection`, never merged into `content`. No `enrichment_status`/retry applies to this path — there's nothing left to fetch, so it's never picked up by the inbox reviewer.
+When `source_url` is present, FE never fetches the URL itself — the submitted `content` is treated as final. `description` takes the same precedence over a derived summary that the fetch-based path already uses. `selection` is retained as a single-value compatibility alias and becomes an additive highlight without replacing `highlights`; highlights and notes never enter immutable source material. Exact semantic retries are read-only, new tags/notes/highlights merge additively, and changed content at the same stable source URL creates a new revision. Inline hashtags remain deterministic source-derived evidence, while only values in `tags` are attributed to the user.
+
+This endpoint is a legacy adapter, not an alternate browser-capture protocol. New browser integrations should use `POST /v1/captures` plus its capture-scoped upload, lookup, and completion routes. Prefetched intake initializes all twelve capability rows but marks only supplied typed source/user evidence as `provided`; legacy `enrichment_status`, derived summaries, provider display metadata, and attachment analysis flags do not manufacture coverage for capabilities that remain missing.
 
 ### 3e. Nil vault ingest
 

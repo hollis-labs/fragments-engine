@@ -1,0 +1,25 @@
+{
+  "schema_version": "fe.capture.v1",
+  "capture_id": "capture-invalid",
+  "captured_at": "2026-09-03T18:42:00Z",
+  "principal_id": "local-user",
+  "client": {"kind": "fe-clipper", "version": "1.0.0"},
+  "source": {
+    "submitted_url": "https://example.com/article",
+    "canonical_url": "https://example.com/article",
+    "provider": "web",
+    "source_item_key": "https://example.com/article",
+    "segment_key": "root"
+  },
+  "document": {"content": {"format": "markdown", "body": "Body"}},
+  "tags": [],
+  "annotations": [],
+  "media": [],
+  "extraction": {
+    "adapter": "generic",
+    "adapter_version": "1.0.0",
+    "observed_capabilities": ["body"],
+    "warnings": []
+  },
+  "extensions": {"youtube": {"raw_html": "<iframe></iframe>"}}
+}

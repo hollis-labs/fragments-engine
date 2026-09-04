@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"database/sql"
 	"encoding/base64"
 	"encoding/json"
 	"net/http"
@@ -14,6 +15,7 @@ import (
 	"github.com/hollis-labs/fragments-engine/internal/config"
 	"github.com/hollis-labs/fragments-engine/internal/domain"
 	"github.com/hollis-labs/fragments-engine/internal/ingest"
+	"github.com/hollis-labs/fragments-engine/internal/legacycapture"
 	"github.com/hollis-labs/fragments-engine/internal/recall"
 	"github.com/hollis-labs/fragments-engine/internal/repository"
 	"github.com/hollis-labs/fragments-engine/internal/store"
@@ -24,6 +26,7 @@ type manualTestServices struct {
 	reviewer   *InboxReviewerService
 	inbox      *InboxService
 	corpusRoot string
+	db         *sql.DB
 	close      func()
 }
 
@@ -49,11 +52,16 @@ func setupManualTestServices(t *testing.T) manualTestServices {
 		ingest.NewInboxStage(inboxRepo),
 		ingest.NewRecallStage(recallIndex),
 	})
+	legacyAdapter := legacycapture.NewService(repository.NewCaptureRepository(st.DB))
+	pipeline.SetLegacyCaptureService(legacyAdapter)
+	fragmentService := NewFragmentService(fragmentRepo, entityRepo, attachmentRepo, routingRepo, recallIndex, pipeline, nil, enricher, corpusWriter)
+	fragmentService.SetLegacyCaptureService(legacyAdapter)
 	return manualTestServices{
-		fragments:  NewFragmentService(fragmentRepo, entityRepo, attachmentRepo, routingRepo, recallIndex, pipeline, nil, enricher, corpusWriter),
+		fragments:  fragmentService,
 		reviewer:   NewInboxReviewerService(fragmentRepo, entityRepo, attachmentRepo, inboxRepo, enricher, corpusWriter, nil, ""),
 		inbox:      NewInboxService(inboxRepo),
 		corpusRoot: corpusRoot,
+		db:         st.DB,
 		close: func() {
 			_ = recallIndex.Close()
 			_ = st.Close()

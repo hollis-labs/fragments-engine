@@ -12,6 +12,7 @@ import (
 	queuesqlite "github.com/hollis-labs/go-queue/driver/sqlite"
 
 	"github.com/hollis-labs/fragments-engine/internal/analyze"
+	"github.com/hollis-labs/fragments-engine/internal/blobstore"
 	"github.com/hollis-labs/fragments-engine/internal/config"
 	"github.com/hollis-labs/fragments-engine/internal/ingest"
 	"github.com/hollis-labs/fragments-engine/internal/ingest/chatgpt"
@@ -20,6 +21,7 @@ import (
 	"github.com/hollis-labs/fragments-engine/internal/ingest/gitchanges"
 	"github.com/hollis-labs/fragments-engine/internal/ingest/nilvault"
 	"github.com/hollis-labs/fragments-engine/internal/ingest/urlsource"
+	"github.com/hollis-labs/fragments-engine/internal/legacycapture"
 	"github.com/hollis-labs/fragments-engine/internal/linkcontent"
 	"github.com/hollis-labs/fragments-engine/internal/recall"
 	"github.com/hollis-labs/fragments-engine/internal/repository"
@@ -35,16 +37,23 @@ const (
 )
 
 type App struct {
-	store           *store.Store
-	recall          recall.Indexer
-	Fragments       *service.FragmentService
-	Inbox           *service.InboxService
-	Routing         *service.RoutingService
-	Queue           *service.DeliveryQueueService
-	IngestQueue     queue.Queue
-	IngestSchedules *service.IngestScheduleService
-	InboxReviewer   *service.InboxReviewerService
-	Jobs            *service.JobsService
+	store            *store.Store
+	recall           recall.Indexer
+	Fragments        *service.FragmentService
+	Inbox            *service.InboxService
+	Routing          *service.RoutingService
+	Queue            *service.DeliveryQueueService
+	IngestQueue      queue.Queue
+	IngestSchedules  *service.IngestScheduleService
+	InboxReviewer    *service.InboxReviewerService
+	Jobs             *service.JobsService
+	Captures         *service.CaptureService
+	Enrichment       *service.EnrichmentService
+	AssetAcquisition *service.AssetAcquisitionService
+	ProviderMedia    *service.ProviderMediaCompletion
+	Reader           *service.ReaderService
+	ReaderResources  *service.ReaderResourceService
+	ReaderCommands   *service.ReaderCommandService
 }
 
 func Open(ctx context.Context, cfg config.Config) (*App, error) {
@@ -57,6 +66,19 @@ func Open(ctx context.Context, cfg config.Config) (*App, error) {
 		return nil, err
 	}
 	fragmentRepo := repository.NewFragmentRepository(st.DB)
+	captureRepo := repository.NewCaptureRepository(st.DB)
+	mediaRepo := repository.NewMediaRepository(st.DB)
+	blobRoot, err := captureBlobRoot(dbPath)
+	if err != nil {
+		_ = st.Close()
+		return nil, err
+	}
+	blobs, err := blobstore.NewFileStore(blobRoot)
+	if err != nil {
+		_ = st.Close()
+		return nil, fmt.Errorf("open capture blob store: %w", err)
+	}
+	mediaService := service.NewMediaService(mediaRepo, blobs)
 	entityRepo := repository.NewEntityRepository(st.DB)
 	attachmentRepo := repository.NewAttachmentRepository(st.DB)
 	inboxRepo := repository.NewInboxRepository(st.DB)
@@ -113,11 +135,17 @@ func Open(ctx context.Context, cfg config.Config) (*App, error) {
 		ingest.NewInboxStage(inboxRepo),
 		ingest.NewRecallStage(recallIndex),
 	}, claude.Source{}, chatgpt.Source{}, urlsource.Source{}, filesystemdocs.Source{}, gitchanges.Source{}, nilvault.Source{})
+	legacyCapture := legacycapture.NewService(captureRepo)
+	pipeline.SetLegacyCaptureService(legacyCapture)
+	fragmentService := service.NewFragmentService(fragmentRepo, entityRepo, attachmentRepo, routingRepo, recallIndex, pipeline, visionAnalyzer, manualEnricher, corpusWriter)
+	fragmentService.SetLegacyCaptureService(legacyCapture)
 	scheduleRepo := repository.NewIngestScheduleRepository(st.DB)
+	assetAcquisition := service.NewAssetAcquisitionService(mediaRepo)
+	readerService := service.NewReaderService(repository.NewReaderRepository(st.DB))
 	return &App{
 		store:           st,
 		recall:          recallIndex,
-		Fragments:       service.NewFragmentService(fragmentRepo, entityRepo, attachmentRepo, routingRepo, recallIndex, pipeline, visionAnalyzer, manualEnricher, corpusWriter),
+		Fragments:       fragmentService,
 		Inbox:           service.NewInboxService(inboxRepo),
 		Routing:         routingSvc,
 		Queue:           deliveryQueue,
@@ -139,7 +167,30 @@ func Open(ctx context.Context, cfg config.Config) (*App, error) {
 			fragmentRepo,
 			cfg,
 		),
+		Captures:         service.NewCaptureService(captureRepo, mediaService),
+		Enrichment:       service.NewEnrichmentService(repository.NewEnrichmentRepository(st.DB), nil),
+		AssetAcquisition: assetAcquisition,
+		ProviderMedia:    service.NewProviderMediaCompletion(mediaRepo, mediaService),
+		Reader:           readerService,
+		ReaderResources: service.NewReaderResourceService(
+			repository.NewReaderResourceRepository(st.DB), blobs, cfg.Reviewer.DownloadRoot,
+		),
+		ReaderCommands: service.NewReaderCommandService(
+			repository.NewReaderCommandRepository(st.DB), assetAcquisition, routingSvc, readerService,
+		),
 	}, nil
+}
+
+func captureBlobRoot(dbPath string) (string, error) {
+	dbPath = strings.TrimSpace(config.ExpandHome(dbPath))
+	if dbPath == "" || dbPath == ":memory:" || strings.HasPrefix(strings.ToLower(dbPath), "file:") {
+		return "", fmt.Errorf("capture blob store requires a filesystem database path")
+	}
+	abs, err := filepath.Abs(dbPath)
+	if err != nil {
+		return "", fmt.Errorf("resolve capture database path: %w", err)
+	}
+	return filepath.Join(filepath.Dir(abs), ".fragments-engine-blobs"), nil
 }
 
 func (a *App) Close() error {

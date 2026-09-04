@@ -1,0 +1,298 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Fragments Engine Browser Capture and Reader API",
+    "version": "1.0.0",
+    "description": "Canonical FE contract for manifest-first browser capture, media custody handoff, capability discovery, and Reader projections. Contract presence is distinct from runtime operation readiness reported by GET /v1/capabilities."
+  },
+  "jsonSchemaDialect": "https://json-schema.org/draft/2020-12/schema",
+  "servers": [
+    {"url": "http://127.0.0.1:8091"}
+  ],
+  "paths": {
+    "/v1/capabilities": {
+      "get": {
+        "operationId": "getCapabilities",
+        "summary": "Discover compatible contract versions and runtime-ready optional capabilities",
+        "responses": {
+          "200": {
+            "description": "Capability discovery",
+            "content": {
+              "application/json": {
+                "schema": {"$ref": "./schema/capabilities.schema.json"}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/captures": {
+      "post": {
+        "operationId": "createCapture",
+        "summary": "Atomically accept a capture manifest before optional asset transfer",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {"$ref": "./schema/capture-envelope.schema.json"}
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "New capture attempt accepted",
+            "content": {"application/json": {"schema": {"$ref": "./schema/capture-response.schema.json"}}}
+          },
+          "200": {
+            "description": "Idempotent replay of an accepted capture ID",
+            "content": {"application/json": {"schema": {"$ref": "./schema/capture-response.schema.json"}}}
+          },
+          "400": {"$ref": "#/components/responses/Problem"},
+          "409": {"$ref": "#/components/responses/Problem"},
+          "413": {"$ref": "#/components/responses/Problem"}
+        }
+      }
+    },
+    "/v1/captures/{captureId}": {
+      "get": {
+        "operationId": "getCapture",
+        "summary": "Get accepted manifest and per-asset client contribution status",
+        "parameters": [
+          {"$ref": "#/components/parameters/CaptureID"}
+        ],
+        "responses": {
+          "200": {
+            "description": "Capture status",
+            "content": {"application/json": {"schema": {"$ref": "./schema/capture-status.schema.json"}}}
+          },
+          "404": {"$ref": "#/components/responses/Problem"}
+        }
+      }
+    },
+    "/v1/captures/{captureId}/assets/{clientVariantId}/content": {
+      "put": {
+        "operationId": "putCaptureAssetContent",
+        "summary": "Idempotently transfer one requested asset variant",
+        "parameters": [
+          {"$ref": "#/components/parameters/CaptureID"},
+          {
+            "name": "clientVariantId",
+            "in": "path",
+            "required": true,
+            "schema": {"type": "string", "minLength": 1}
+          },
+          {
+            "name": "Digest",
+            "in": "header",
+            "required": true,
+            "description": "RFC 9530 content digest, restricted by this contract to sha-256",
+            "schema": {"type": "string", "pattern": "^sha-256=:[A-Za-z0-9+/]+=*:$"}
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/octet-stream": {
+              "schema": {"type": "string", "format": "binary"}
+            },
+            "image/*": {
+              "schema": {"type": "string", "format": "binary"}
+            },
+            "video/*": {
+              "schema": {"type": "string", "format": "binary"}
+            },
+            "audio/*": {
+              "schema": {"type": "string", "format": "binary"}
+            },
+            "text/*": {
+              "schema": {"type": "string", "format": "binary"}
+            }
+          }
+        },
+        "responses": {
+          "204": {"description": "Variant bytes accepted or already present with the same verified digest"},
+          "400": {"$ref": "#/components/responses/Problem"},
+          "404": {"$ref": "#/components/responses/Problem"},
+          "409": {"$ref": "#/components/responses/Problem"},
+          "413": {"$ref": "#/components/responses/Problem"}
+        }
+      }
+    },
+    "/v1/captures/{captureId}/complete": {
+      "post": {
+        "operationId": "completeCapture",
+        "summary": "Report the capture client's final per-asset contribution",
+        "parameters": [
+          {"$ref": "#/components/parameters/CaptureID"}
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {"$ref": "./schema/capture-completion.schema.json"}
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Final client contribution status; provider enrichment may continue",
+            "content": {"application/json": {"schema": {"$ref": "./schema/capture-status.schema.json"}}}
+          },
+          "400": {"$ref": "#/components/responses/Problem"},
+          "404": {"$ref": "#/components/responses/Problem"},
+          "409": {"$ref": "#/components/responses/Problem"},
+          "413": {"$ref": "#/components/responses/Problem"}
+        }
+      }
+    },
+    "/v1/reader/items": {
+      "get": {
+        "operationId": "listReaderItems",
+        "summary": "List batched, complete Reader card projections",
+        "parameters": [
+          {
+            "name": "scope",
+            "in": "query",
+            "required": true,
+            "schema": {"type": "string", "enum": ["inbox", "library", "all"]}
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {"type": "string", "minLength": 1}
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Batched Reader projections",
+            "content": {"application/json": {"schema": {"$ref": "./schema/reader-list.schema.json"}}}
+          },
+          "400": {"$ref": "#/components/responses/Problem"}
+        }
+      }
+    },
+    "/v1/reader/items/{fragmentId}": {
+      "get": {
+        "operationId": "getReaderItem",
+        "summary": "Get a canonical Reader projection, optionally pinned to an immutable revision",
+        "parameters": [
+          {"$ref": "#/components/parameters/FragmentID"},
+          {
+            "name": "revision_id",
+            "in": "query",
+            "required": false,
+            "schema": {"type": "string", "minLength": 1}
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Reader projection",
+            "content": {"application/json": {"schema": {"$ref": "./schema/reader-item.schema.json"}}}
+          },
+          "404": {"$ref": "#/components/responses/Problem"}
+        }
+      }
+    },
+    "/v1/reader/items/{fragmentId}/commands": {
+      "post": {
+        "operationId": "executeReaderCommand",
+        "summary": "Execute an advertised idempotent semantic Reader command",
+        "parameters": [
+          {"$ref": "#/components/parameters/FragmentID"}
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {"$ref": "./schema/reader-command.schema.json"}
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Reconciled Reader projection",
+            "content": {"application/json": {"schema": {"$ref": "./schema/reader-item.schema.json"}}}
+          },
+          "400": {"$ref": "#/components/responses/Problem"},
+          "404": {"$ref": "#/components/responses/Problem"},
+          "409": {"$ref": "#/components/responses/Problem"}
+        }
+      }
+    },
+    "/v1/reader/items/{fragmentId}/context": {
+      "get": {
+        "operationId": "getReaderContext",
+        "summary": "Get authorized revision-pinned references for an external agent/session system",
+        "parameters": [
+          {"$ref": "#/components/parameters/FragmentID"},
+          {
+            "name": "revision_id",
+            "in": "query",
+            "required": true,
+            "schema": {"type": "string", "minLength": 1}
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Revision-pinned Reader context",
+            "content": {"application/json": {"schema": {"$ref": "./schema/reader-context.schema.json"}}}
+          },
+          "404": {"$ref": "#/components/responses/Problem"}
+        }
+      }
+    },
+    "/v1/reader/items/{fragmentId}/conversations": {
+      "post": {
+        "operationId": "createConversationRef",
+        "summary": "Retain a reference to an externally owned conversation without storing messages",
+        "parameters": [
+          {"$ref": "#/components/parameters/FragmentID"}
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {"$ref": "./schema/conversation-ref.schema.json"}
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "External conversation reference retained",
+            "content": {"application/json": {"schema": {"$ref": "./schema/conversation-ref.schema.json"}}}
+          },
+          "400": {"$ref": "#/components/responses/Problem"},
+          "404": {"$ref": "#/components/responses/Problem"},
+          "409": {"$ref": "#/components/responses/Problem"}
+        }
+      }
+    }
+  },
+  "components": {
+    "parameters": {
+      "CaptureID": {
+        "name": "captureId",
+        "in": "path",
+        "required": true,
+        "schema": {"type": "string", "minLength": 1}
+      },
+      "FragmentID": {
+        "name": "fragmentId",
+        "in": "path",
+        "required": true,
+        "schema": {"type": "string", "minLength": 1}
+      }
+    },
+    "responses": {
+      "Problem": {
+        "description": "Standard FE problem response",
+        "content": {
+          "application/problem+json": {
+            "schema": {"$ref": "./schema/error.schema.json"}
+          }
+        }
+      }
+    }
+  }
+}

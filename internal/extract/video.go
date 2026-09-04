@@ -94,6 +94,7 @@ func ExtractVideoTranscript(ctx context.Context, rawURL string) (ExtractedConten
 		Metadata: map[string]any{
 			"extractor":         "yt-dlp",
 			"transcript_source": "yt-dlp",
+			"transcript_text":   text,
 			"subtitle_file":     filepath.Base(matches[0]),
 		},
 	}, nil

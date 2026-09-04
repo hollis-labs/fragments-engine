@@ -114,13 +114,28 @@ func (s *RoutingService) ListDestinations(ctx context.Context) ([]domain.Destina
 }
 
 func (s *RoutingService) MaterializeFragmentToDestination(ctx context.Context, fragmentID, destinationName string) (domain.FragmentMaterializeResult, error) {
+	destination, err := s.findDestinationByName(ctx, destinationName)
+	if err != nil {
+		return domain.FragmentMaterializeResult{FragmentID: strings.TrimSpace(fragmentID)}, err
+	}
+	return s.materializeFragmentToDestination(ctx, fragmentID, destination)
+}
+
+// MaterializeFragmentToDestinationID is the semantic Reader-command seam. It
+// retains the established destination execution and audit behavior while using
+// the stable destination identifier carried by the frozen Reader contract.
+func (s *RoutingService) MaterializeFragmentToDestinationID(ctx context.Context, fragmentID, destinationID string) (domain.FragmentMaterializeResult, error) {
+	destination, err := s.repo.GetDestination(ctx, strings.TrimSpace(destinationID))
+	if err != nil {
+		return domain.FragmentMaterializeResult{FragmentID: strings.TrimSpace(fragmentID)}, err
+	}
+	return s.materializeFragmentToDestination(ctx, fragmentID, destination)
+}
+
+func (s *RoutingService) materializeFragmentToDestination(ctx context.Context, fragmentID string, destination domain.Destination) (domain.FragmentMaterializeResult, error) {
 	result := domain.FragmentMaterializeResult{FragmentID: strings.TrimSpace(fragmentID)}
 	if result.FragmentID == "" {
 		return result, fmt.Errorf("fragment id is required")
-	}
-	destination, err := s.findDestinationByName(ctx, destinationName)
-	if err != nil {
-		return result, err
 	}
 	result.DestinationID = destination.ID
 	result.DestinationName = destination.Name
@@ -129,6 +144,7 @@ func (s *RoutingService) MaterializeFragmentToDestination(ctx context.Context, f
 	if err != nil {
 		return result, err
 	}
+	result.FragmentID = fragment.ID
 	var attachments []domain.FragmentAttachment
 	if s.attachments != nil {
 		attachments, err = s.attachments.ListByFragment(ctx, result.FragmentID)
@@ -188,6 +204,91 @@ func (s *RoutingService) MaterializeFragmentToDestination(ctx context.Context, f
 	}
 	result.WrittenPath = delivery.Ref
 	return result, nil
+}
+
+// RouteFragment applies one explicitly selected route to one fragment. It is a
+// narrow reuse seam for Reader commands and follows the same delivery, queue,
+// compatibility projection, inbox, and route-log behavior as manual routing.
+func (s *RoutingService) RouteFragment(ctx context.Context, fragmentID, routeID string) (domain.RouteApplyItem, error) {
+	item := domain.RouteApplyItem{FragmentID: strings.TrimSpace(fragmentID)}
+	if item.FragmentID == "" || strings.TrimSpace(routeID) == "" {
+		return item, fmt.Errorf("fragment and route ids are required")
+	}
+	route, err := s.repo.GetRoute(ctx, strings.TrimSpace(routeID))
+	if err != nil {
+		return item, err
+	}
+	destination, err := s.repo.GetDestination(ctx, route.DestinationID)
+	if err != nil {
+		return item, err
+	}
+	fragment, err := s.fragments.GetByID(ctx, item.FragmentID)
+	if err != nil {
+		return item, err
+	}
+	item.FragmentID = fragment.ID
+	var attachments []domain.FragmentAttachment
+	if s.attachments != nil {
+		attachments, err = s.attachments.ListByFragment(ctx, item.FragmentID)
+		if err != nil {
+			return item, err
+		}
+	}
+	now := time.Now().UTC()
+	if destination.Kind == "callback" {
+		status, reason, queueErr := s.enqueueCallbackApply(ctx, item.FragmentID, route.ID, destination)
+		_ = s.repo.LogDecision(ctx, domain.RouteLogEntry{FragmentID: item.FragmentID,
+			RouteID: route.ID, DestinationID: destination.ID, Decision: "inbox",
+			Reason: reason, CreatedAt: now})
+		item.Status = status
+		if queueErr != nil {
+			item.Error = queueErr.Error()
+		}
+		return item, queueErr
+	}
+	routed := fragment
+	routed.Status = domain.FragmentStatusRouted
+	delivery, err := ingest.ExecuteDestinationWithRetry(ctx, destination, routed, attachments)
+	if err != nil {
+		reason := ingest.EncodeManualRouteError("reader", route.ID, delivery.Attempts, err.Error())
+		item.Status = "failed"
+		item.Error = err.Error()
+		if s.delivery != nil {
+			retry := destinationRetryConfig(destination, s.cfg)
+			if queueErr := s.delivery.EnqueueDestinationRetry(ctx, item.FragmentID, route.ID, destination.ID, retry); queueErr == nil {
+				reason = ingest.EncodeDeliveryQueued(delivery.Attempts, err.Error())
+				item.Status = "queued"
+				item.Error = ""
+			}
+		}
+		_ = s.repo.LogDecision(ctx, domain.RouteLogEntry{FragmentID: item.FragmentID,
+			RouteID: route.ID, DestinationID: destination.ID, Decision: "inbox",
+			Reason: reason, CreatedAt: now})
+		if item.Status == "queued" {
+			return item, nil
+		}
+		return item, err
+	}
+	if err := s.fragments.UpdateStatus(ctx, item.FragmentID, domain.FragmentStatusRouted); err != nil {
+		return item, err
+	}
+	if s.attachments != nil && len(delivery.PublishedAttachments) > 0 {
+		if err := s.attachments.UpdateFragmentAttachmentStoragePaths(ctx, item.FragmentID, delivery.PublishedAttachments); err != nil {
+			return item, err
+		}
+	}
+	if err := s.inbox.Remove(ctx, item.FragmentID); err != nil {
+		return item, err
+	}
+	if err := s.repo.LogDecision(ctx, domain.RouteLogEntry{FragmentID: item.FragmentID,
+		RouteID: route.ID, DestinationID: destination.ID, Decision: "manual_route",
+		Reason:    ingest.EncodeManualRouteSuccess("reader", route.ID, delivery.Attempts, delivery.Ref),
+		CreatedAt: now}); err != nil {
+		return item, err
+	}
+	item.Status = "routed"
+	item.WrittenPath = delivery.Ref
+	return item, nil
 }
 
 func (s *RoutingService) UpdateDestinationRetry(ctx context.Context, destinationID string, retry domain.DeliveryRetryConfig) (domain.Destination, error) {
@@ -520,7 +621,11 @@ func (s *RoutingService) DeleteRoute(ctx context.Context, routeID string, force 
 }
 
 func (s *RoutingService) ListRouteLog(ctx context.Context, fragmentID string) ([]domain.RouteLogEntry, error) {
-	return s.repo.ListRouteLog(ctx, fragmentID)
+	fragment, err := s.fragments.GetByID(ctx, fragmentID)
+	if err != nil {
+		return nil, err
+	}
+	return s.repo.ListRouteLog(ctx, fragment.ID)
 }
 
 func (s *RoutingService) ApplyRouteByEntity(ctx context.Context, routeID, kind, value string, limit int) (domain.RouteApplyResult, error) {
@@ -1123,7 +1228,6 @@ func (s *RoutingService) findDestinationByName(ctx context.Context, destinationN
 	}
 	return domain.Destination{}, fmt.Errorf("destination %q not found", name)
 }
-
 
 func trimReasonPrefix(reason string, prefixes ...string) string {
 	for _, prefix := range prefixes {

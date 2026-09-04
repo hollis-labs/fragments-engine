@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.hollis-labs.dev/fragments-engine/browser-capture-reader/v1/reader-list.schema.json",
+  "title": "ReaderItemList",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "scope", "items"],
+  "properties": {
+    "schema_version": {
+      "const": "fe.reader.list.v1"
+    },
+    "scope": {
+      "type": "string",
+      "enum": ["inbox", "library", "all"]
+    },
+    "items": {
+      "type": "array",
+      "items": {
+        "$ref": "reader-item.schema.json"
+      }
+    },
+    "next_cursor": {
+      "type": "string",
+      "minLength": 1
+    }
+  }
+}

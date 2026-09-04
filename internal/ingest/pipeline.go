@@ -9,6 +9,7 @@ import (
 	"github.com/hollis-labs/fragments-engine/internal/config"
 	"github.com/hollis-labs/fragments-engine/internal/domain"
 	"github.com/hollis-labs/fragments-engine/internal/extract"
+	"github.com/hollis-labs/fragments-engine/internal/legacycapture"
 	"github.com/hollis-labs/fragments-engine/internal/repository"
 )
 
@@ -28,6 +29,11 @@ type StageContext struct {
 	Fragment     domain.Fragment
 	Outcome      repository.UpsertOutcome
 	Now          time.Time
+	// LegacyCaptureApplied means canonical media and the compatibility
+	// attachment projection were already committed atomically by the shared
+	// legacy capture adapter. AttachmentStage must not dual-write enriched
+	// display attachments into immutable source revision evidence.
+	LegacyCaptureApplied bool
 }
 
 type Pipeline struct {
@@ -36,6 +42,16 @@ type Pipeline struct {
 	stages  []Stage
 	now     func() time.Time
 	vision  analyze.VisionAnalyzer
+	legacy  *legacycapture.Service
+}
+
+// SetLegacyCaptureService installs the shared application adapter used by all
+// production non-browser ingests. NewPipeline retains its historical shape so
+// focused stage tests can continue to construct a pipeline without app wiring.
+func (p *Pipeline) SetLegacyCaptureService(service *legacycapture.Service) {
+	if p != nil {
+		p.legacy = service
+	}
 }
 
 func NewPipeline(repo *repository.FragmentRepository, vision analyze.VisionAnalyzer, stages []Stage, sources ...Source) *Pipeline {
@@ -91,28 +107,43 @@ func (p *Pipeline) RunOnce(ctx context.Context, ingestCfg config.IngestConfig) (
 		StartedAt: startedAt,
 	}
 	now := p.now().UTC()
-	for _, candidate := range collected {
-		candidate, err = EnrichAttachmentContent(ctx, candidate, p.vision)
+	for _, materialCandidate := range collected {
+		projectionCandidate, err := EnrichAttachmentContent(ctx, materialCandidate, p.vision)
 		if err != nil {
 			return domain.IngestRun{}, err
 		}
-		if err := validateEnrichedCandidate(candidate); err != nil {
+		if err := validateEnrichedCandidate(projectionCandidate); err != nil {
 			return domain.IngestRun{}, err
 		}
-		fragment, err := repository.BuildFragment(candidate, ingestCfg.Name, now)
-		if err != nil {
-			return domain.IngestRun{}, err
-		}
-		outcome, err := p.repo.Upsert(ctx, fragment)
-		if err != nil {
-			return domain.IngestRun{}, err
+		var fragment domain.Fragment
+		var outcome repository.UpsertOutcome
+		if p.legacy != nil {
+			accepted, acceptErr := p.legacy.Accept(ctx, legacycapture.Request{
+				IngestName: ingestCfg.Name, Material: materialCandidate,
+				Projection: projectionCandidate,
+				SourceTags: legacycapture.SourceTags(materialCandidate),
+			})
+			if acceptErr != nil {
+				return domain.IngestRun{}, acceptErr
+			}
+			fragment, outcome = accepted.Fragment, accepted.Outcome
+		} else {
+			fragment, err = repository.BuildFragment(projectionCandidate, ingestCfg.Name, now)
+			if err != nil {
+				return domain.IngestRun{}, err
+			}
+			fragment, outcome, err = p.repo.UpsertResolved(ctx, fragment)
+			if err != nil {
+				return domain.IngestRun{}, err
+			}
 		}
 		stageCtx := &StageContext{
-			IngestConfig: ingestCfg,
-			Candidate:    candidate,
-			Fragment:     fragment,
-			Outcome:      outcome,
-			Now:          now,
+			IngestConfig:         ingestCfg,
+			Candidate:            projectionCandidate,
+			Fragment:             fragment,
+			Outcome:              outcome,
+			Now:                  now,
+			LegacyCaptureApplied: p.legacy != nil,
 		}
 		for _, stage := range p.stages {
 			if err := stage.Run(ctx, stageCtx); err != nil {

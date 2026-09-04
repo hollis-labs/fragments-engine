@@ -1,0 +1,288 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.hollis-labs.dev/fragments-engine/browser-capture-reader/v1/common.schema.json",
+  "title": "Fragments Engine Browser Capture and Reader Common Types",
+  "$defs": {
+    "NonEmptyString": {
+      "type": "string",
+      "minLength": 1
+    },
+    "Identifier": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 255
+    },
+    "Timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^[0-9]{4}-(0[1-9]|1[0-2])-([0-2][0-9]|3[01])T([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9](\\.[0-9]+)?(Z|[+-]([01][0-9]|2[0-3]):[0-5][0-9])$"
+    },
+    "URL": {
+      "type": "string",
+      "format": "uri",
+      "pattern": "^https?://[^\\s]+$"
+    },
+    "MIMEType": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]*/[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]*$"
+    },
+    "Digest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["algorithm", "value"],
+      "properties": {
+        "algorithm": {
+          "type": "string",
+          "enum": ["sha256"]
+        },
+        "value": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        }
+      }
+    },
+    "ProviderExtensions": {
+      "description": "Provider-specific observations. Keys are namespaced as provider.<provider>; arbitrary fields are allowed only inside the namespaced value.",
+      "type": "object",
+      "propertyNames": {
+        "pattern": "^provider\\.[a-z0-9][a-z0-9_-]*$"
+      },
+      "additionalProperties": {
+        "type": "object"
+      }
+    },
+    "SourceIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["provider", "source_item_key", "segment_key"],
+      "properties": {
+        "source_registration_id": {
+          "$ref": "#/$defs/Identifier"
+        },
+        "submitted_url": {
+          "$ref": "#/$defs/URL"
+        },
+        "canonical_url": {
+          "$ref": "#/$defs/URL"
+        },
+        "provider": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]*$"
+        },
+        "provider_item_id": {
+          "$ref": "#/$defs/Identifier"
+        },
+        "source_item_key": {
+          "description": "Canonical source-adapter key used with source registration and segment key for stable fragment identity.",
+          "$ref": "#/$defs/Identifier"
+        },
+        "source_locator": {
+          "description": "Optional source-native locator such as a filesystem path, git object, chat session, or manual-note reference.",
+          "type": "string",
+          "minLength": 1
+        },
+        "segment_key": {
+          "$ref": "#/$defs/Identifier"
+        },
+        "canonicalizer": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["adapter", "version"],
+          "properties": {
+            "adapter": {
+              "$ref": "#/$defs/Identifier"
+            },
+            "version": {
+              "$ref": "#/$defs/Identifier"
+            }
+          }
+        }
+      }
+    },
+    "BrowserSourceIdentity": {
+      "description": "A browser capture source adds submitted and canonical HTTP URLs to the general stable source identity.",
+      "allOf": [
+        {"$ref": "#/$defs/SourceIdentity"},
+        {
+          "type": "object",
+          "required": ["submitted_url", "canonical_url"],
+          "properties": {
+            "submitted_url": {"$ref": "#/$defs/URL"},
+            "canonical_url": {"$ref": "#/$defs/URL"}
+          }
+        }
+      ]
+    },
+    "ClientInfo": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "version"],
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/Identifier"
+        },
+        "version": {
+          "$ref": "#/$defs/Identifier"
+        }
+      }
+    },
+    "DocumentContent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["format", "body"],
+      "properties": {
+        "format": {
+          "type": "string",
+          "enum": ["markdown", "plain_text"]
+        },
+        "body": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "DocumentObservation": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "title": {
+          "type": "string",
+          "minLength": 1
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1
+        },
+        "byline": {
+          "type": "string"
+        },
+        "published_at": {
+          "$ref": "#/$defs/Timestamp"
+        },
+        "language": {
+          "type": "string",
+          "pattern": "^[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8})*$"
+        },
+        "content": {
+          "$ref": "#/$defs/DocumentContent"
+        },
+        "extensions": {
+          "$ref": "#/$defs/ProviderExtensions"
+        }
+      }
+    },
+    "TextQuoteSelector": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["exact"],
+      "properties": {
+        "exact": {
+          "type": "string",
+          "minLength": 1
+        },
+        "prefix": {
+          "type": "string"
+        },
+        "suffix": {
+          "type": "string"
+        }
+      }
+    },
+    "DocumentPosition": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "block_anchor": {
+          "$ref": "#/$defs/Identifier"
+        },
+        "start_offset": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "end_offset": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "CaptureAnnotation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["annotation_id", "kind", "text"],
+      "properties": {
+        "annotation_id": {
+          "$ref": "#/$defs/Identifier"
+        },
+        "kind": {
+          "type": "string",
+          "enum": ["highlight", "capture_note"]
+        },
+        "text": {
+          "type": "string",
+          "minLength": 1
+        },
+        "selector": {
+          "$ref": "#/$defs/TextQuoteSelector"
+        },
+        "position": {
+          "$ref": "#/$defs/DocumentPosition"
+        }
+      }
+    },
+    "ContractWarning": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "message"],
+      "properties": {
+        "code": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_.-]*$"
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1
+        },
+        "subject_id": {
+          "$ref": "#/$defs/Identifier"
+        }
+      }
+    },
+    "CapabilityName": {
+      "type": "string",
+      "enum": [
+        "title",
+        "description",
+        "body",
+        "gallery_manifest",
+        "original_media",
+        "thumbnail_or_poster",
+        "transcript",
+        "OCR",
+        "vision",
+        "summary",
+        "tags",
+        "entities"
+      ]
+    },
+    "CapabilityCoverage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["capability", "state"],
+      "properties": {
+        "capability": {
+          "$ref": "#/$defs/CapabilityName"
+        },
+        "state": {
+          "type": "string",
+          "enum": ["provided", "missing", "pending", "failed", "stale", "not_applicable"]
+        },
+        "observation_id": {
+          "$ref": "#/$defs/Identifier"
+        },
+        "detail": {
+          "type": "string"
+        }
+      }
+    }
+  }
+}

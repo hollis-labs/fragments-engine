@@ -1,0 +1,67 @@
+{
+  "provider_id": "DExample01",
+  "kind": "post",
+  "canonical_url": "https://www.instagram.com/p/DExample01/",
+  "caption": "Three moments from the workshop.",
+  "author": "maker_account",
+  "tags": ["Workshop", "process", "workshop"],
+  "items": [
+    {
+      "media_id": "ig-image-alpha",
+      "kind": "image",
+      "alt_text": "A workbench before assembly",
+      "width": 1080,
+      "height": 1350,
+      "original": {
+        "source_url": "https://scontent.cdninstagram.com/image-alpha.jpg",
+        "mime_type": "image/jpeg",
+        "width": 1080,
+        "height": 1350
+      },
+      "thumbnail": {
+        "source_url": "https://scontent.cdninstagram.com/image-alpha-thumb.jpg",
+        "mime_type": "image/jpeg",
+        "width": 320,
+        "height": 400
+      }
+    },
+    {
+      "media_id": "ig-video-bravo",
+      "kind": "video",
+      "alt_text": "A short assembly demonstration",
+      "width": 1080,
+      "height": 1920,
+      "duration_seconds": 18.5,
+      "original": {
+        "source_url": "https://scontent.cdninstagram.com/video-bravo.mp4",
+        "mime_type": "video/mp4",
+        "width": 1080,
+        "height": 1920,
+        "duration_seconds": 18.5
+      },
+      "poster": {
+        "source_url": "https://scontent.cdninstagram.com/video-bravo-poster.jpg",
+        "mime_type": "image/jpeg",
+        "width": 1080,
+        "height": 1920
+      }
+    },
+    {
+      "media_id": "ig-image-charlie",
+      "kind": "image",
+      "width": 1080,
+      "height": 1350,
+      "unavailable": {"code": "cdn_expired", "retryable": true}
+    }
+  ],
+  "oembed": {
+    "provider_name": "Instagram",
+    "provider_url": "https://www.instagram.com/",
+    "title": "Fallback caption",
+    "author_name": "fallback_author",
+    "html": "<script>stealCredentials()</script><blockquote class='instagram-media'>unsafe embed</blockquote>",
+    "unrecognized_extension": {"token": "must-not-cross"}
+  },
+  "observed_at": "2026-09-03T18:42:00Z",
+  "confidence": 0.89
+}

@@ -11,6 +11,10 @@ import type {
   InboxItem,
   JsonObject,
   QueuePolicyConfig,
+  ReaderCommand,
+  ReaderItem,
+  ReaderItemList,
+  ReaderScope,
   Route,
   SearchResult,
 } from './types'
@@ -63,6 +67,21 @@ export interface FetchBrowseFragmentsParams {
   status?: string
   limit?: number
   offset?: number
+}
+
+export interface FetchReaderItemsParams {
+  scope: ReaderScope
+  cursor?: string
+}
+
+export interface FetchReaderItemParams {
+  fragmentId: string
+  revisionId?: string
+}
+
+export interface ExecuteReaderCommandParams {
+  fragmentId: string
+  command: ReaderCommand
 }
 
 export interface ReanalyzeFragmentAttachmentsInput {
@@ -845,6 +864,45 @@ export async function fetchBrowseFragments(
   }
 }
 
+/** GET /v1/reader/items — one schema-validated, server-batched Reader page. */
+export async function fetchReaderItems(
+  params: FetchReaderItemsParams,
+  options?: ApiRequestOptions,
+): Promise<ReaderItemList> {
+  return apiFetch<ReaderItemList>(
+    '/v1/reader/items',
+    { signal: options?.signal },
+    { scope: params.scope, cursor: params.cursor },
+  )
+}
+
+/** GET /v1/reader/items/{fragmentId} — current or immutable-revision projection. */
+export async function fetchReaderItem(
+  params: FetchReaderItemParams,
+  options?: ApiRequestOptions,
+): Promise<ReaderItem> {
+  return apiFetch<ReaderItem>(
+    `/v1/reader/items/${encodeURIComponent(params.fragmentId)}`,
+    { signal: options?.signal },
+    { revision_id: params.revisionId },
+  )
+}
+
+/** POST /v1/reader/items/{fragmentId}/commands — execute one frozen semantic command. */
+export async function executeReaderCommand(
+  params: ExecuteReaderCommandParams,
+  options?: ApiRequestOptions,
+): Promise<ReaderItem> {
+  return apiFetch<ReaderItem>(
+    `/v1/reader/items/${encodeURIComponent(params.fragmentId)}/commands`,
+    {
+      method: 'POST',
+      body: JSON.stringify(params.command),
+      signal: options?.signal,
+    },
+  )
+}
+
 export async function fetchRelatedFragments(params: FetchFragmentParams): Promise<SearchResult[]> {
   const data = await apiFetch<{ results: SearchResult[] }>('/v1/fragments/related', undefined, {
     'fragment-id': params.fragmentId,
@@ -1396,6 +1454,9 @@ export const apiClient = {
   fetchInboxEntities,
   fetchInboxEntityItems,
   fetchBrowseFragments,
+  fetchReaderItems,
+  fetchReaderItem,
+  executeReaderCommand,
   fetchFragment,
   updateFragment,
   materializeFragmentFFS,

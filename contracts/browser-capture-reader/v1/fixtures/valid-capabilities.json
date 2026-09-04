@@ -1,0 +1,42 @@
+{
+  "schema_version": "fe.capabilities.v1",
+  "server_version": "development",
+  "contracts": [
+    {
+      "name": "capture",
+      "accepted_versions": ["fe.capture.v1"],
+      "preferred_version": "fe.capture.v1",
+      "schema_id": "https://schemas.hollis-labs.dev/fragments-engine/browser-capture-reader/v1/capture-envelope.schema.json"
+    },
+    {
+      "name": "reader_item",
+      "accepted_versions": ["fe.reader.item.v1"],
+      "preferred_version": "fe.reader.item.v1",
+      "schema_id": "https://schemas.hollis-labs.dev/fragments-engine/browser-capture-reader/v1/reader-item.schema.json"
+    }
+  ],
+  "operations": {
+    "capture_manifest": false,
+    "asset_upload": false,
+    "capture_completion": false,
+    "reader_query": false,
+    "reader_commands": false,
+    "reader_context": false,
+    "conversation_reference": false
+  },
+  "capture": {
+    "media_kinds": ["image", "video", "audio", "document", "timed_text", "other"],
+    "variant_kinds": ["original", "preview", "thumbnail", "poster", "audio", "subtitles", "transcript"],
+    "custody_modes": ["reference", "cache", "mirror", "adopted"],
+    "transfer_preferences": ["browser_preferred", "server_preferred", "reference_only"]
+  },
+  "reader": {
+    "schema_versions": ["fe.reader.item.v1", "fe.reader.list.v1", "fe.reader.command.v1", "fe.reader.context.v1", "fe.reader.conversation-ref.v1"],
+    "scopes": ["inbox", "library", "all"],
+    "renderers": ["article", "image", "gallery", "video", "audio", "document", "text", "unknown"],
+    "playback_kinds": ["provider_embed", "blob_stream", "external_stream"],
+    "commands": ["add_tag", "remove_tag", "set_reading_progress", "mark_read", "mark_unread"]
+  },
+  "providers": [],
+  "optional_tools": []
+}

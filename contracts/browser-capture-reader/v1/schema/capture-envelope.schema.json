@@ -1,0 +1,137 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.hollis-labs.dev/fragments-engine/browser-capture-reader/v1/capture-envelope.schema.json",
+  "title": "CaptureEnvelope",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "capture_id",
+    "captured_at",
+    "principal_id",
+    "client",
+    "source",
+    "document",
+    "tags",
+    "annotations",
+    "media",
+    "extraction"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "fe.capture.v1"
+    },
+    "capture_id": {
+      "$ref": "common.schema.json#/$defs/Identifier"
+    },
+    "captured_at": {
+      "$ref": "common.schema.json#/$defs/Timestamp"
+    },
+    "principal_id": {
+      "$ref": "common.schema.json#/$defs/Identifier"
+    },
+    "client": {
+      "$ref": "common.schema.json#/$defs/ClientInfo"
+    },
+    "source": {
+      "$ref": "common.schema.json#/$defs/BrowserSourceIdentity"
+    },
+    "document": {
+      "$ref": "common.schema.json#/$defs/DocumentObservation"
+    },
+    "tags": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 128
+      },
+      "uniqueItems": true
+    },
+    "annotations": {
+      "type": "array",
+      "items": {
+        "$ref": "common.schema.json#/$defs/CaptureAnnotation"
+      }
+    },
+    "media": {
+      "type": "array",
+      "items": {
+        "$ref": "media.schema.json#/$defs/CaptureMediaItem"
+      }
+    },
+    "extraction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["adapter", "adapter_version", "observed_capabilities", "warnings"],
+      "properties": {
+        "adapter": {
+          "$ref": "common.schema.json#/$defs/Identifier"
+        },
+        "adapter_version": {
+          "$ref": "common.schema.json#/$defs/Identifier"
+        },
+        "observed_capabilities": {
+          "type": "array",
+          "items": {
+            "$ref": "common.schema.json#/$defs/CapabilityName"
+          },
+          "uniqueItems": true
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "$ref": "common.schema.json#/$defs/ContractWarning"
+          }
+        },
+        "extensions": {
+          "$ref": "common.schema.json#/$defs/ProviderExtensions"
+        }
+      }
+    },
+    "page_context": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "document_url": {
+          "$ref": "common.schema.json#/$defs/URL"
+        },
+        "document_title": {
+          "type": "string"
+        },
+        "selection_present": {
+          "type": "boolean"
+        }
+      }
+    },
+    "extensions": {
+      "$ref": "common.schema.json#/$defs/ProviderExtensions"
+    }
+  },
+  "anyOf": [
+    {
+      "type": "object",
+      "properties": {
+        "document": {
+          "anyOf": [
+            {"type": "object", "required": ["title"], "properties": {"title": {}}},
+            {"type": "object", "required": ["description"], "properties": {"description": {}}},
+            {"type": "object", "required": ["content"], "properties": {"content": {}}}
+          ]
+        }
+      }
+    },
+    {
+      "type": "object",
+      "properties": {
+        "annotations": {"type": "array", "minItems": 1}
+      }
+    },
+    {
+      "type": "object",
+      "properties": {
+        "media": {"type": "array", "minItems": 1}
+      }
+    }
+  ]
+}

@@ -1,0 +1,146 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.hollis-labs.dev/fragments-engine/browser-capture-reader/v1/reading-state.schema.json",
+  "title": "ReadingState",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["principal_id", "fragment_id", "state", "position", "revision"],
+  "properties": {
+    "principal_id": {
+      "$ref": "common.schema.json#/$defs/Identifier"
+    },
+    "fragment_id": {
+      "$ref": "common.schema.json#/$defs/Identifier"
+    },
+    "state": {
+      "type": "string",
+      "enum": ["unread", "in_progress", "read"]
+    },
+    "position": {
+      "$ref": "#/$defs/ReadingPosition"
+    },
+    "last_opened_at": {
+      "$ref": "common.schema.json#/$defs/Timestamp"
+    },
+    "completed_at": {
+      "$ref": "common.schema.json#/$defs/Timestamp"
+    },
+    "revision": {
+      "type": "integer",
+      "minimum": 0
+    }
+  },
+  "$defs": {
+    "ReadingPosition": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind"],
+          "properties": {
+            "kind": {
+              "const": "none"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "progress"],
+          "properties": {
+            "kind": {
+              "const": "article"
+            },
+            "progress": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "block_anchor": {
+              "$ref": "common.schema.json#/$defs/Identifier"
+            },
+            "local_offset": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "elapsed_seconds"],
+          "properties": {
+            "kind": {
+              "const": "video"
+            },
+            "elapsed_seconds": {
+              "type": "number",
+              "minimum": 0
+            },
+            "duration_seconds": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            "provider_media_id": {
+              "$ref": "common.schema.json#/$defs/Identifier"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "attachment_id", "index"],
+          "properties": {
+            "kind": {
+              "const": "gallery"
+            },
+            "attachment_id": {
+              "$ref": "common.schema.json#/$defs/Identifier"
+            },
+            "index": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "page"],
+          "properties": {
+            "kind": {
+              "const": "document"
+            },
+            "page": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "progress": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "elapsed_seconds"],
+          "properties": {
+            "kind": {
+              "const": "audio"
+            },
+            "elapsed_seconds": {
+              "type": "number",
+              "minimum": 0
+            },
+            "duration_seconds": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            }
+          }
+        }
+      ]
+    }
+  }
+}

@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	capturecontract "github.com/hollis-labs/fragments-engine/contracts/browser-capture-reader/v1"
 	"github.com/hollis-labs/fragments-engine/internal/app"
 	"github.com/hollis-labs/fragments-engine/internal/config"
 	"github.com/hollis-labs/fragments-engine/internal/domain"
@@ -24,6 +25,12 @@ type Server struct {
 	cfgPath string
 }
 
+const (
+	maxCaptureManifestBytes   int64 = 2 << 20
+	maxCaptureCompletionBytes int64 = 1 << 20
+	maxCaptureAssetBytes      int64 = 256 << 20
+)
+
 func NewServer(cfgPath string) *Server {
 	return &Server{cfgPath: cfgPath}
 }
@@ -31,6 +38,14 @@ func NewServer(cfgPath string) *Server {
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", s.handleHealth)
+	mux.HandleFunc("/v1/capabilities", s.handleCapabilities)
+	mux.HandleFunc("/v1/captures", s.handleCaptureManifest)
+	mux.HandleFunc("/v1/captures/", s.handleCaptureResource)
+	mux.HandleFunc("/v1/reader/items", localhostOnly(s.handleReaderItems))
+	mux.HandleFunc("/v1/reader/items/", localhostOnly(s.handleReaderItem))
+	mux.HandleFunc("GET /v1/reader/items/{fragmentId}/content", localhostOnly(s.handleReaderArticleContent))
+	mux.HandleFunc("POST /v1/reader/items/{fragmentId}/commands", localhostOnly(s.handleReaderCommand))
+	mux.HandleFunc("GET /v1/media/variants/{variantId}/content", localhostOnly(s.handleReaderMediaContent))
 	mux.Handle(sysopBasePath+"/", newSysopSPAHandler())
 	mux.HandleFunc("/v1/ingests", s.handleListIngests)
 	mux.HandleFunc("/v1/ingests/get", s.handleGetIngest)
@@ -94,6 +109,24 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/config", localhostOnly(s.handleConfigGet))
 	mux.HandleFunc("/v1/config/update", localhostOnly(s.handleConfigUpdate))
 	return mux
+}
+
+func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-cache")
+	capabilities := capturecontract.DefaultCapabilities("development")
+	capabilities.Operations.CaptureManifest = true
+	capabilities.Operations.AssetUpload = true
+	capabilities.Operations.CaptureCompletion = true
+	capabilities.Operations.ReaderQuery = true
+	capabilities.Operations.ReaderCommands = true
+	manifestLimit, assetLimit := maxCaptureManifestBytes, maxCaptureAssetBytes
+	capabilities.Capture.MaxManifestBytes = &manifestLimit
+	capabilities.Capture.MaxAssetBytes = &assetLimit
+	writeJSON(w, http.StatusOK, capabilities)
 }
 
 type routeApplyEntityRequest struct {
@@ -2039,9 +2072,11 @@ type intakeRequest struct {
 	// SourceURL is set, the server treats Content as final and complete and
 	// never re-fetches it -- see service.ManualIntakeEnricher.EnrichIntake's
 	// PrefetchedContent handling.
-	SourceURL   string `json:"source_url"`
-	Description string `json:"description"`
-	Selection   string `json:"selection"`
+	SourceURL   string   `json:"source_url"`
+	Description string   `json:"description"`
+	Selection   string   `json:"selection"`
+	Highlights  []string `json:"highlights"`
+	Notes       []string `json:"notes"`
 }
 
 func (s *Server) handleIntake(w http.ResponseWriter, r *http.Request) {
@@ -2077,6 +2112,8 @@ func (s *Server) handleIntake(w http.ResponseWriter, r *http.Request) {
 		SourceURL:   input.SourceURL,
 		Description: input.Description,
 		Selection:   input.Selection,
+		Highlights:  input.Highlights,
+		Notes:       input.Notes,
 	})
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
