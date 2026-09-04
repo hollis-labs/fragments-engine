@@ -32,8 +32,14 @@ func TestCapabilitiesAdvertisesContractsSeparatelyFromOperationReadiness(t *test
 	if len(got.Contracts) == 0 || got.Contracts[0].PreferredVersion != capturecontract.CaptureVersion {
 		t.Fatalf("capture contract was not advertised: %#v", got.Contracts)
 	}
-	if got.Operations.CaptureManifest || got.Operations.AssetUpload || got.Operations.CaptureCompletion || got.Operations.ReaderQuery || got.Operations.ReaderCommands || got.Operations.ReaderContext || got.Operations.ConversationReference {
-		t.Fatalf("later-wave operations must not be advertised ready: %#v", got.Operations)
+	if !got.Operations.CaptureManifest || !got.Operations.AssetUpload || !got.Operations.CaptureCompletion {
+		t.Fatalf("capture operations must be advertised ready: %#v", got.Operations)
+	}
+	if got.Operations.ReaderQuery || got.Operations.ReaderCommands || got.Operations.ReaderContext || got.Operations.ConversationReference {
+		t.Fatalf("later Reader operations must not be advertised ready: %#v", got.Operations)
+	}
+	if got.Capture.MaxManifestBytes == nil || got.Capture.MaxAssetBytes == nil {
+		t.Fatalf("capture payload limits were not advertised: %#v", got.Capture)
 	}
 }
 

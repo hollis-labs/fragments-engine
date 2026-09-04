@@ -699,6 +699,26 @@ UPDATE asset_variants SET acquisition_state = 'failed', failure_code = ?,
 	return item, nil
 }
 
+func (r *MediaRepository) MarkVariantFailedOn(ctx context.Context, q MediaWriteConn, variantID string, failure domain.AssetFailure, now time.Time) (domain.AssetVariant, error) {
+	if strings.TrimSpace(failure.Code) == "" || strings.TrimSpace(failure.Message) == "" {
+		return domain.AssetVariant{}, fmt.Errorf("mark variant failed: code and message are required")
+	}
+	current, err := loadAssetVariant(ctx, q, variantID)
+	if err != nil {
+		return domain.AssetVariant{}, err
+	}
+	if current.AcquisitionState == domain.AcquisitionAvailable {
+		return domain.AssetVariant{}, &MediaConflictError{Kind: "asset variant", Identity: current.ID, Reason: "available verified bytes cannot be degraded to failed"}
+	}
+	if _, err := q.ExecContext(ctx, `
+UPDATE asset_variants SET acquisition_state = 'failed', failure_code = ?,
+  failure_message = ?, failure_retryable = ?, updated_at = ? WHERE id = ?`,
+		failure.Code, failure.Message, boolInt(failure.Retryable), formatTime(now), variantID); err != nil {
+		return domain.AssetVariant{}, fmt.Errorf("mark variant failed: %w", err)
+	}
+	return loadAssetVariant(ctx, q, variantID)
+}
+
 func (r *MediaRepository) ListByRevision(ctx context.Context, revisionID string) ([]domain.MediaManifestItem, error) {
 	refs, err := listAttachmentRefs(ctx, r.db, revisionID)
 	if err != nil {
@@ -729,6 +749,29 @@ func (r *MediaRepository) BlobReferenceCountOn(ctx context.Context, q interface 
 	var count int
 	err := q.QueryRowContext(ctx, `SELECT COUNT(*) FROM asset_variants WHERE blob_digest = ?`, strings.TrimSpace(digest)).Scan(&count)
 	return count, err
+}
+
+func (r *MediaRepository) FindBlobByDigestOn(ctx context.Context, q interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}, digest string) (domain.MediaBlob, bool, error) {
+	digest = strings.TrimSpace(digest)
+	var blob domain.MediaBlob
+	var algorithm, retention, createdAt, verifiedAt string
+	err := q.QueryRowContext(ctx, `
+SELECT digest, algorithm, storage_handle, byte_size, retention, created_at, verified_at
+FROM media_blobs WHERE digest = ?`, digest).Scan(&blob.Digest.Value, &algorithm,
+		&blob.StorageHandle, &blob.ByteSize, &retention, &createdAt, &verifiedAt)
+	if err == sql.ErrNoRows {
+		return domain.MediaBlob{}, false, nil
+	}
+	if err != nil {
+		return domain.MediaBlob{}, false, err
+	}
+	blob.Digest.Algorithm = algorithm
+	blob.Retention = domain.RetentionPolicy(retention)
+	blob.CreatedAt = parseTime(createdAt)
+	blob.VerifiedAt = parseTime(verifiedAt)
+	return blob, true, nil
 }
 
 func findMediaAssetByIdentity(ctx context.Context, q MediaWriteConn, identity string) (domain.MediaAsset, bool, error) {
@@ -943,6 +986,26 @@ func listAssetVariants(ctx context.Context, q mediaQueryContext, assetID string)
 			return nil, err
 		}
 		out = append(out, item)
+	}
+	return out, nil
+}
+
+func listMediaByRevision(ctx context.Context, q mediaQueryContext, revisionID string) ([]domain.MediaManifestItem, error) {
+	refs, err := listAttachmentRefs(ctx, q, revisionID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]domain.MediaManifestItem, 0, len(refs))
+	for _, ref := range refs {
+		asset, err := loadMediaAsset(ctx, q, ref.MediaAssetID)
+		if err != nil {
+			return nil, err
+		}
+		variants, err := listAssetVariants(ctx, q, asset.ID)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, domain.MediaManifestItem{Asset: asset, Variants: variants, Attachment: ref})
 	}
 	return out, nil
 }

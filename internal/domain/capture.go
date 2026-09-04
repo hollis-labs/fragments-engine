@@ -159,5 +159,73 @@ type CaptureAcceptance struct {
 	Annotations      []CaptureAnnotation      `json:"annotations"`
 	Tags             []AttributedTag          `json:"tags"`
 	Descriptions     []DescriptionObservation `json:"descriptions"`
+	Media            []MediaManifestItem      `json:"media"`
+	AssetBindings    []CaptureAssetBinding    `json:"asset_bindings"`
 	IdempotentReplay bool                     `json:"idempotent_replay"`
+}
+
+type AssetInstructionAction string
+
+const (
+	AssetRequestUpload AssetInstructionAction = "request_upload"
+	AssetReuseBlob     AssetInstructionAction = "reuse_blob"
+	AssetServerAcquire AssetInstructionAction = "server_acquire"
+	AssetReferenceOnly AssetInstructionAction = "reference_only"
+	AssetRejected      AssetInstructionAction = "rejected"
+)
+
+func (a AssetInstructionAction) Valid() bool {
+	switch a {
+	case AssetRequestUpload, AssetReuseBlob, AssetServerAcquire, AssetReferenceOnly, AssetRejected:
+		return true
+	default:
+		return false
+	}
+}
+
+// CaptureAssetBinding pins a client correlation ID to the resolved immutable
+// revision and physical variant. MediaPosition and VariantIdentity are write-
+// time resolution hints and are not persisted.
+type CaptureAssetBinding struct {
+	CaptureID          string                 `json:"capture_id"`
+	FragmentRevisionID string                 `json:"fragment_revision_id"`
+	ClientVariantID    string                 `json:"client_variant_id"`
+	AssetVariantID     string                 `json:"asset_variant_id"`
+	Action             AssetInstructionAction `json:"action"`
+	ExpectedDigest     ContentDigest          `json:"expected_digest,omitempty"`
+	Digest             ContentDigest          `json:"digest,omitempty"`
+	Reason             string                 `json:"reason,omitempty"`
+	MediaPosition      int                    `json:"-"`
+	VariantIdentity    string                 `json:"-"`
+	CreatedAt          time.Time              `json:"created_at"`
+}
+
+type CaptureAssetOutcome string
+
+const (
+	AssetOutcomeUploaded         CaptureAssetOutcome = "uploaded"
+	AssetOutcomeAlreadyAvailable CaptureAssetOutcome = "already_available"
+	AssetOutcomeNotAvailable     CaptureAssetOutcome = "not_available"
+	AssetOutcomeFailed           CaptureAssetOutcome = "failed"
+	AssetOutcomeDeferred         CaptureAssetOutcome = "deferred"
+)
+
+func (o CaptureAssetOutcome) Valid() bool {
+	switch o {
+	case AssetOutcomeUploaded, AssetOutcomeAlreadyAvailable, AssetOutcomeNotAvailable, AssetOutcomeFailed, AssetOutcomeDeferred:
+		return true
+	default:
+		return false
+	}
+}
+
+type CaptureVariantOutcome struct {
+	CaptureID       string              `json:"capture_id"`
+	ClientVariantID string              `json:"client_variant_id"`
+	Outcome         CaptureAssetOutcome `json:"outcome"`
+	Digest          ContentDigest       `json:"digest,omitempty"`
+	ByteSize        int64               `json:"byte_size,omitempty"`
+	Reason          string              `json:"reason,omitempty"`
+	Retryable       bool                `json:"retryable,omitempty"`
+	UpdatedAt       time.Time           `json:"updated_at"`
 }

@@ -23,11 +23,21 @@ func NewCaptureRepository(db *sql.DB) *CaptureRepository {
 // service layer normalizes it and calculates the semantic digest before this
 // repository crosses the persistence boundary.
 type CaptureWrite struct {
-	Fragment     domain.Fragment
-	Attempt      domain.CaptureAttempt
-	Annotations  []domain.CaptureAnnotation
-	Tags         []domain.AttributedTag
-	Descriptions []domain.DescriptionObservation
+	Fragment            domain.Fragment
+	Attempt             domain.CaptureAttempt
+	Annotations         []domain.CaptureAnnotation
+	Tags                []domain.AttributedTag
+	Descriptions        []domain.DescriptionObservation
+	Media               []domain.MediaManifestItem
+	AssetBindings       []domain.CaptureAssetBinding
+	FollowUpKind        string
+	FollowUpPayloadJSON string
+	// BuildAcceptanceSnapshot runs after every row required by manifest
+	// acceptance has been written, but before COMMIT. It lets the application
+	// persist an exact transport response without moving transaction ownership
+	// out of the repository. A projection/validation failure therefore rolls
+	// back the fragment, context, media, bindings, and outbox together.
+	BuildAcceptanceSnapshot func(domain.CaptureAcceptance) (string, error)
 }
 
 // CaptureConflictError reports reuse of a capture ID, idempotency key, or
@@ -230,9 +240,65 @@ INSERT INTO fragment_description_observations (
 		}
 	}
 
+	var resolvedMedia []domain.MediaManifestItem
+	if write.Media != nil {
+		resolvedMedia, err = UpsertMediaManifest(ctx, conn, revisionID, write.Media, attempt.CreatedAt)
+		if err != nil {
+			return domain.CaptureAcceptance{}, fmt.Errorf("accept capture media: %w", err)
+		}
+	}
+	resolvedBindings, err := r.insertCaptureAssetBindings(ctx, conn, attempt, resolvedMedia, write.AssetBindings)
+	if err != nil {
+		return domain.CaptureAcceptance{}, err
+	}
+	// Known-digest reuse may have advanced variants to available while bindings
+	// were resolved. Re-read the revision projection before snapshotting so the
+	// optimistic ReaderItem and instructions describe one transaction state.
+	if write.Media != nil {
+		resolvedMedia, err = listMediaByRevision(ctx, conn, revisionID)
+		if err != nil {
+			return domain.CaptureAcceptance{}, fmt.Errorf("reload accepted capture media: %w", err)
+		}
+	}
+	if strings.TrimSpace(write.FollowUpKind) != "" {
+		payload := strings.TrimSpace(write.FollowUpPayloadJSON)
+		if payload == "" {
+			payload = "{}"
+		}
+		if !json.Valid([]byte(payload)) {
+			return domain.CaptureAcceptance{}, fmt.Errorf("accept capture follow-up: payload must be valid JSON")
+		}
+		outboxID := domain.DigestText("capture-followup\n" + attempt.CaptureID)
+		if _, err := conn.ExecContext(ctx, `
+INSERT INTO capture_followup_outbox (
+  id, capture_id, fragment_revision_id, kind, payload_json, state,
+  created_at, updated_at
+) VALUES (?, ?, ?, ?, ?, 'pending', ?, ?)`, outboxID, attempt.CaptureID,
+			revisionID, strings.TrimSpace(write.FollowUpKind), payload,
+			formatTime(attempt.CreatedAt), formatTime(attempt.UpdatedAt)); err != nil {
+			return domain.CaptureAcceptance{}, fmt.Errorf("insert capture follow-up intent: %w", err)
+		}
+	}
+
 	accepted, err := loadCaptureAcceptance(ctx, conn, attempt, false)
 	if err != nil {
 		return domain.CaptureAcceptance{}, err
+	}
+	accepted.Media = resolvedMedia
+	accepted.AssetBindings = resolvedBindings
+	if write.BuildAcceptanceSnapshot != nil {
+		raw, err := write.BuildAcceptanceSnapshot(accepted)
+		if err != nil {
+			return domain.CaptureAcceptance{}, fmt.Errorf("build capture acceptance snapshot: %w", err)
+		}
+		if strings.TrimSpace(raw) == "" || !json.Valid([]byte(raw)) {
+			return domain.CaptureAcceptance{}, fmt.Errorf("build capture acceptance snapshot: valid JSON is required")
+		}
+		if _, err := conn.ExecContext(ctx, `UPDATE capture_attempts SET acceptance_result_json = ? WHERE capture_id = ?`, raw, attempt.CaptureID); err != nil {
+			return domain.CaptureAcceptance{}, fmt.Errorf("store capture acceptance snapshot: %w", err)
+		}
+		attempt.AcceptanceResultJSON = raw
+		accepted.Attempt.AcceptanceResultJSON = raw
 	}
 	if _, err := conn.ExecContext(ctx, `COMMIT`); err != nil {
 		return domain.CaptureAcceptance{}, fmt.Errorf("commit capture acceptance: %w", err)
@@ -306,7 +372,79 @@ func validateCaptureWrite(write CaptureWrite) error {
 		}
 		seenDescriptions[description.ID] = struct{}{}
 	}
+	seenBindings := make(map[string]struct{}, len(write.AssetBindings))
+	for _, binding := range write.AssetBindings {
+		if strings.TrimSpace(binding.ClientVariantID) == "" || strings.TrimSpace(binding.VariantIdentity) == "" || !binding.Action.Valid() {
+			return fmt.Errorf("accept capture: asset binding client ID, variant identity, and action are required")
+		}
+		if _, exists := seenBindings[binding.ClientVariantID]; exists {
+			return fmt.Errorf("accept capture: duplicate client variant ID %q", binding.ClientVariantID)
+		}
+		seenBindings[binding.ClientVariantID] = struct{}{}
+	}
 	return nil
+}
+
+func (r *CaptureRepository) insertCaptureAssetBindings(ctx context.Context, conn *sql.Conn, attempt domain.CaptureAttempt, media []domain.MediaManifestItem, writes []domain.CaptureAssetBinding) ([]domain.CaptureAssetBinding, error) {
+	resolved := make([]domain.CaptureAssetBinding, 0, len(writes))
+	mediaByPosition := make(map[int]domain.MediaManifestItem, len(media))
+	for _, item := range media {
+		mediaByPosition[item.Attachment.Position] = item
+	}
+	mediaRepo := NewMediaRepository(r.db)
+	for _, binding := range writes {
+		item, ok := mediaByPosition[binding.MediaPosition]
+		if !ok {
+			return nil, fmt.Errorf("accept capture asset binding %q: media position %d was not resolved", binding.ClientVariantID, binding.MediaPosition)
+		}
+		var variant domain.AssetVariant
+		for _, candidate := range item.Variants {
+			if candidate.VariantIdentity == binding.VariantIdentity {
+				variant = candidate
+				break
+			}
+		}
+		if variant.ID == "" {
+			return nil, fmt.Errorf("accept capture asset binding %q: variant %q was not resolved", binding.ClientVariantID, binding.VariantIdentity)
+		}
+		binding.CaptureID = attempt.CaptureID
+		binding.FragmentRevisionID = attempt.FragmentRevisionID
+		binding.AssetVariantID = variant.ID
+		binding.CreatedAt = attempt.CreatedAt
+		if binding.ExpectedDigest.Empty() {
+			binding.ExpectedDigest = variant.ExpectedDigest
+		}
+		if variant.AcquisitionState == domain.AcquisitionAvailable && !variant.Digest.Empty() {
+			binding.Action = domain.AssetReuseBlob
+			binding.Digest = variant.Digest
+		} else if !binding.ExpectedDigest.Empty() && binding.Action != domain.AssetReferenceOnly && binding.Action != domain.AssetRejected {
+			blob, found, err := mediaRepo.FindBlobByDigestOn(ctx, conn, binding.ExpectedDigest.Value)
+			if err != nil {
+				return nil, fmt.Errorf("resolve known blob for %q: %w", binding.ClientVariantID, err)
+			}
+			if found {
+				variant, err = mediaRepo.AttachBlobOn(ctx, conn, variant.ID, blob, attempt.CreatedAt)
+				if err != nil {
+					return nil, fmt.Errorf("reuse known blob for %q: %w", binding.ClientVariantID, err)
+				}
+				binding.Action = domain.AssetReuseBlob
+				binding.Digest = variant.Digest
+			}
+		}
+		if _, err := conn.ExecContext(ctx, `
+INSERT INTO capture_asset_bindings (
+  capture_id, fragment_revision_id, client_variant_id, asset_variant_id,
+  instruction_action, expected_digest, reason, created_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, binding.CaptureID,
+			binding.FragmentRevisionID, binding.ClientVariantID,
+			binding.AssetVariantID, string(binding.Action),
+			binding.ExpectedDigest.Value, binding.Reason,
+			formatTime(binding.CreatedAt)); err != nil {
+			return nil, fmt.Errorf("insert capture asset binding %q: %w", binding.ClientVariantID, err)
+		}
+		resolved = append(resolved, binding)
+	}
+	return resolved, nil
 }
 
 func insertCaptureAttempt(ctx context.Context, conn *sql.Conn, attempt domain.CaptureAttempt) error {
@@ -498,9 +636,18 @@ FROM fragment_revisions WHERE id = ?`, attempt.FragmentRevisionID))
 	if err != nil {
 		return domain.CaptureAcceptance{}, err
 	}
+	media, err := listMediaByRevision(ctx, conn, attempt.FragmentRevisionID)
+	if err != nil {
+		return domain.CaptureAcceptance{}, err
+	}
+	bindings, err := listCaptureAssetBindings(ctx, conn, attempt.CaptureID)
+	if err != nil {
+		return domain.CaptureAcceptance{}, err
+	}
 	return domain.CaptureAcceptance{
 		Fragment: fragment, ObservedRevision: revision, Attempt: attempt,
 		Annotations: annotations, Tags: tags, Descriptions: descriptions,
+		Media: media, AssetBindings: bindings,
 		IdempotentReplay: replay,
 	}, nil
 }

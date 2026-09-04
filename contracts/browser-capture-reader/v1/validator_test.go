@@ -314,6 +314,12 @@ func TestOpenAPI31ReferencesPublishedSchemas(t *testing.T) {
 			t.Errorf("OpenAPI path %q is missing", required)
 		}
 	}
+	completionPath := paths["/v1/captures/{captureId}/complete"].(map[string]any)
+	completionPost := completionPath["post"].(map[string]any)
+	completionResponses := completionPost["responses"].(map[string]any)
+	if _, exists := completionResponses["413"]; !exists {
+		t.Fatal("capture completion does not declare its payload-too-large Problem response")
+	}
 	assertRawBinaryAssetBodies(t, paths)
 }
 

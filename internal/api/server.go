@@ -25,6 +25,12 @@ type Server struct {
 	cfgPath string
 }
 
+const (
+	maxCaptureManifestBytes   int64 = 2 << 20
+	maxCaptureCompletionBytes int64 = 1 << 20
+	maxCaptureAssetBytes      int64 = 256 << 20
+)
+
 func NewServer(cfgPath string) *Server {
 	return &Server{cfgPath: cfgPath}
 }
@@ -33,6 +39,8 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", s.handleHealth)
 	mux.HandleFunc("/v1/capabilities", s.handleCapabilities)
+	mux.HandleFunc("/v1/captures", s.handleCaptureManifest)
+	mux.HandleFunc("/v1/captures/", s.handleCaptureResource)
 	mux.Handle(sysopBasePath+"/", newSysopSPAHandler())
 	mux.HandleFunc("/v1/ingests", s.handleListIngests)
 	mux.HandleFunc("/v1/ingests/get", s.handleGetIngest)
@@ -104,7 +112,14 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Cache-Control", "no-cache")
-	writeJSON(w, http.StatusOK, capturecontract.DefaultCapabilities("development"))
+	capabilities := capturecontract.DefaultCapabilities("development")
+	capabilities.Operations.CaptureManifest = true
+	capabilities.Operations.AssetUpload = true
+	capabilities.Operations.CaptureCompletion = true
+	manifestLimit, assetLimit := maxCaptureManifestBytes, maxCaptureAssetBytes
+	capabilities.Capture.MaxManifestBytes = &manifestLimit
+	capabilities.Capture.MaxAssetBytes = &assetLimit
+	writeJSON(w, http.StatusOK, capabilities)
 }
 
 type routeApplyEntityRequest struct {

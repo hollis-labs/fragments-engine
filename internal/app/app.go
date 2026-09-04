@@ -12,6 +12,7 @@ import (
 	queuesqlite "github.com/hollis-labs/go-queue/driver/sqlite"
 
 	"github.com/hollis-labs/fragments-engine/internal/analyze"
+	"github.com/hollis-labs/fragments-engine/internal/blobstore"
 	"github.com/hollis-labs/fragments-engine/internal/config"
 	"github.com/hollis-labs/fragments-engine/internal/ingest"
 	"github.com/hollis-labs/fragments-engine/internal/ingest/chatgpt"
@@ -45,6 +46,7 @@ type App struct {
 	IngestSchedules *service.IngestScheduleService
 	InboxReviewer   *service.InboxReviewerService
 	Jobs            *service.JobsService
+	Captures        *service.CaptureService
 }
 
 func Open(ctx context.Context, cfg config.Config) (*App, error) {
@@ -57,6 +59,18 @@ func Open(ctx context.Context, cfg config.Config) (*App, error) {
 		return nil, err
 	}
 	fragmentRepo := repository.NewFragmentRepository(st.DB)
+	captureRepo := repository.NewCaptureRepository(st.DB)
+	mediaRepo := repository.NewMediaRepository(st.DB)
+	blobRoot, err := captureBlobRoot(dbPath)
+	if err != nil {
+		_ = st.Close()
+		return nil, err
+	}
+	blobs, err := blobstore.NewFileStore(blobRoot)
+	if err != nil {
+		_ = st.Close()
+		return nil, fmt.Errorf("open capture blob store: %w", err)
+	}
 	entityRepo := repository.NewEntityRepository(st.DB)
 	attachmentRepo := repository.NewAttachmentRepository(st.DB)
 	inboxRepo := repository.NewInboxRepository(st.DB)
@@ -139,7 +153,20 @@ func Open(ctx context.Context, cfg config.Config) (*App, error) {
 			fragmentRepo,
 			cfg,
 		),
+		Captures: service.NewCaptureService(captureRepo, service.NewMediaService(mediaRepo, blobs)),
 	}, nil
+}
+
+func captureBlobRoot(dbPath string) (string, error) {
+	dbPath = strings.TrimSpace(config.ExpandHome(dbPath))
+	if dbPath == "" || dbPath == ":memory:" || strings.HasPrefix(strings.ToLower(dbPath), "file:") {
+		return "", fmt.Errorf("capture blob store requires a filesystem database path")
+	}
+	abs, err := filepath.Abs(dbPath)
+	if err != nil {
+		return "", fmt.Errorf("resolve capture database path: %w", err)
+	}
+	return filepath.Join(filepath.Dir(abs), ".fragments-engine-blobs"), nil
 }
 
 func (a *App) Close() error {

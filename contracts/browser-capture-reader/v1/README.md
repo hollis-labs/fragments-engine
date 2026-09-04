@@ -32,8 +32,12 @@ and still requires both submitted and canonical URLs.
 Additive optional fields may be added within v1. Removing a field, changing a
 field's meaning, or changing a discriminator requires a new major contract.
 `GET /v1/capabilities` reports accepted versions separately from runtime
-operation readiness, so a client must check both. In this contract-only wave the
-later capture and Reader operations correctly report `false`.
+operation readiness, so a client must check both. Manifest acceptance, raw asset
+upload, capture lookup, and client completion are ready at `/v1/captures` and
+its capture-scoped subresources. Capability discovery reports
+`capture_manifest`, `asset_upload`, and `capture_completion` as `true`, while
+the later Reader operations remain `false`. It also advertises the 2 MiB
+manifest and 256 MiB asset limits; completion JSON is limited to 1 MiB.
 
 ## Go edge validation
 

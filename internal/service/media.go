@@ -37,6 +37,12 @@ func NewMediaService(repo *repository.MediaRepository, blobs MediaBlobStore) *Me
 }
 
 func (s *MediaService) StoreVariantContent(ctx context.Context, variantID string, expected domain.ContentDigest, src io.Reader) (domain.AssetVariant, error) {
+	return s.StoreVariantContentAtomic(ctx, variantID, expected, src, nil, nil)
+}
+
+// StoreVariantContentAtomic lets a higher-level service validate ownership and
+// persist related state inside the same SQLite transaction as the blob link.
+func (s *MediaService) StoreVariantContentAtomic(ctx context.Context, variantID string, expected domain.ContentDigest, src io.Reader, guard func(context.Context, repository.MediaWriteConn, domain.AssetVariant) error, finalize func(context.Context, repository.MediaWriteConn, domain.AssetVariant) error) (domain.AssetVariant, error) {
 	if s == nil || s.repo == nil || s.blobs == nil {
 		return domain.AssetVariant{}, fmt.Errorf("store variant content: media repository and blob store are required")
 	}
@@ -56,6 +62,11 @@ func (s *MediaService) StoreVariantContent(ctx context.Context, variantID string
 	}
 	if variant.Custody == domain.CustodyReference {
 		return domain.AssetVariant{}, &repository.MediaConflictError{Kind: "asset variant", Identity: variant.ID, Reason: "reference-only custody cannot accept bytes"}
+	}
+	if guard != nil {
+		if err := guard(ctx, tx.Conn(), variant); err != nil {
+			return domain.AssetVariant{}, err
+		}
 	}
 	if expected.Empty() {
 		expected = variant.ExpectedDigest
@@ -91,6 +102,16 @@ func (s *MediaService) StoreVariantContent(ctx context.Context, variantID string
 		active = false
 		_ = tx.Rollback()
 		return domain.AssetVariant{}, err
+	}
+	if finalize != nil {
+		if err := finalize(ctx, tx.Conn(), stored); err != nil {
+			if put.Created && preexistingRefs == 0 {
+				_ = s.blobs.Remove(put.Blob.StorageHandle)
+			}
+			active = false
+			_ = tx.Rollback()
+			return domain.AssetVariant{}, err
+		}
 	}
 	if err := s.commit(ctx, tx); err != nil {
 		if put.Created && preexistingRefs == 0 {
