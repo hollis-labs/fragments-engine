@@ -40,7 +40,7 @@ func TestReaderArticleHTTPNegotiatesSafeImmutableRepresentations(t *testing.T) {
 	}
 	path := "/v1/reader/items/" + url.PathEscape(accepted.FragmentID) + "/content?revision_id=" + url.QueryEscape(accepted.FragmentRevisionID)
 
-	htmlResponse := serveReaderRequest(server, http.MethodGet, path, map[string]string{"Accept": "text/html"})
+	htmlResponse := serveReaderResourceRequest(server, http.MethodGet, path, map[string]string{"Accept": "text/html"})
 	if htmlResponse.Code != http.StatusOK {
 		t.Fatalf("HTML status = %d body=%s", htmlResponse.Code, htmlResponse.Body.String())
 	}
@@ -62,7 +62,7 @@ func TestReaderArticleHTTPNegotiatesSafeImmutableRepresentations(t *testing.T) {
 		}
 	}
 
-	markdownResponse := serveReaderRequest(server, http.MethodGet, path+"&format=markdown", nil)
+	markdownResponse := serveReaderResourceRequest(server, http.MethodGet, path+"&format=markdown", nil)
 	if markdownResponse.Code != http.StatusOK || markdownResponse.Body.String() != envelope.Document.Content.Body {
 		t.Fatalf("Markdown response = %d %q", markdownResponse.Code, markdownResponse.Body.String())
 	}
@@ -73,20 +73,20 @@ func TestReaderArticleHTTPNegotiatesSafeImmutableRepresentations(t *testing.T) {
 		t.Fatal("Markdown response lacks CSP")
 	}
 
-	head := serveReaderRequest(server, http.MethodHead, path, map[string]string{"Accept": "text/markdown"})
+	head := serveReaderResourceRequest(server, http.MethodHead, path, map[string]string{"Accept": "text/markdown"})
 	if head.Code != http.StatusOK || head.Body.Len() != 0 || head.Header().Get("Content-Length") != strconv.Itoa(len(envelope.Document.Content.Body)) {
 		t.Fatalf("HEAD mismatch: status=%d len=%d headers=%v", head.Code, head.Body.Len(), head.Header())
 	}
-	unsupported := serveReaderRequest(server, http.MethodGet, path+"&format=xml", nil)
+	unsupported := serveReaderResourceRequest(server, http.MethodGet, path+"&format=xml", nil)
 	if unsupported.Code != http.StatusBadRequest {
 		t.Fatalf("unsupported format status = %d body=%s", unsupported.Code, unsupported.Body.String())
 	}
 	assertCaptureAPIContract(t, capturecontract.SchemaAPIProblem, unsupported.Body.Bytes())
-	emptyFormat := serveReaderRequest(server, http.MethodGet, path+"&format=", nil)
+	emptyFormat := serveReaderResourceRequest(server, http.MethodGet, path+"&format=", nil)
 	if emptyFormat.Code != http.StatusBadRequest {
 		t.Fatalf("empty format status = %d", emptyFormat.Code)
 	}
-	notAcceptable := serveReaderRequest(server, http.MethodGet, path, map[string]string{"Accept": "application/json"})
+	notAcceptable := serveReaderResourceRequest(server, http.MethodGet, path, map[string]string{"Accept": "application/json"})
 	if notAcceptable.Code != http.StatusNotAcceptable {
 		t.Fatalf("unsupported Accept status = %d", notAcceptable.Code)
 	}
@@ -132,7 +132,7 @@ func TestReaderMediaHTTPEnforcesOwnershipRangeMIMEAndConditionalRequests(t *test
 	query := "?fragment_id=" + url.QueryEscape(accepted.FragmentID) + "&revision_id=" + url.QueryEscape(accepted.FragmentRevisionID)
 	path := "/v1/media/variants/" + url.PathEscape(posterID) + "/content" + query
 
-	full := serveReaderRequest(server, http.MethodGet, path, nil)
+	full := serveReaderResourceRequest(server, http.MethodGet, path, nil)
 	if full.Code != http.StatusOK || !bytes.Equal(full.Body.Bytes(), payload) {
 		t.Fatalf("media response = %d %x", full.Code, full.Body.Bytes())
 	}
@@ -140,34 +140,34 @@ func TestReaderMediaHTTPEnforcesOwnershipRangeMIMEAndConditionalRequests(t *test
 		t.Fatalf("media headers = %v", full.Header())
 	}
 	etag := full.Header().Get("ETag")
-	conditional := serveReaderRequest(server, http.MethodGet, path, map[string]string{"If-None-Match": etag})
+	conditional := serveReaderResourceRequest(server, http.MethodGet, path, map[string]string{"If-None-Match": etag})
 	if conditional.Code != http.StatusNotModified || conditional.Body.Len() != 0 {
 		t.Fatalf("conditional response = %d %q", conditional.Code, conditional.Body.String())
 	}
-	ranged := serveReaderRequest(server, http.MethodGet, path, map[string]string{"Range": "bytes=0-3"})
+	ranged := serveReaderResourceRequest(server, http.MethodGet, path, map[string]string{"Range": "bytes=0-3"})
 	if ranged.Code != http.StatusPartialContent || !bytes.Equal(ranged.Body.Bytes(), payload[:4]) || ranged.Header().Get("Content-Range") == "" || ranged.Header().Get("Repr-Digest") == "" || ranged.Header().Get("Content-Digest") != "" {
 		t.Fatalf("range response = %d %x headers=%v", ranged.Code, ranged.Body.Bytes(), ranged.Header())
 	}
 	for _, value := range []string{"bytes=0-1,3-4", "bytes=999-1000", "units=0-1", "bytes=-0", "bytes=abc-def", "bytes=" + strings.Repeat("1", 200) + "-"} {
-		response := serveReaderRequest(server, http.MethodGet, path, map[string]string{"Range": value})
+		response := serveReaderResourceRequest(server, http.MethodGet, path, map[string]string{"Range": value})
 		if response.Code != http.StatusRequestedRangeNotSatisfiable {
 			t.Fatalf("range %q status = %d body=%s", value, response.Code, response.Body.String())
 		}
 		assertCaptureAPIContract(t, capturecontract.SchemaAPIProblem, response.Body.Bytes())
 	}
-	head := serveReaderRequest(server, http.MethodHead, path, map[string]string{"Range": "bytes=1-2"})
+	head := serveReaderResourceRequest(server, http.MethodHead, path, map[string]string{"Range": "bytes=1-2"})
 	if head.Code != http.StatusPartialContent || head.Body.Len() != 0 || head.Header().Get("Content-Length") != "2" {
 		t.Fatalf("media HEAD = %d len=%d headers=%v", head.Code, head.Body.Len(), head.Header())
 	}
 
-	wrongRevision := serveReaderRequest(server, http.MethodGet, "/v1/media/variants/"+url.PathEscape(posterID)+"/content?fragment_id="+url.QueryEscape(accepted.FragmentID)+"&revision_id=missing-revision", nil)
-	missingVariant := serveReaderRequest(server, http.MethodGet, "/v1/media/variants/missing/content"+query, nil)
+	wrongRevision := serveReaderResourceRequest(server, http.MethodGet, "/v1/media/variants/"+url.PathEscape(posterID)+"/content?fragment_id="+url.QueryEscape(accepted.FragmentID)+"&revision_id=missing-revision", nil)
+	missingVariant := serveReaderResourceRequest(server, http.MethodGet, "/v1/media/variants/missing/content"+query, nil)
 	for name, response := range map[string]*httptest.ResponseRecorder{"wrong revision": wrongRevision, "missing variant": missingVariant} {
 		if response.Code != http.StatusNotFound {
 			t.Fatalf("%s status = %d body=%s", name, response.Code, response.Body.String())
 		}
 	}
-	reference := serveReaderRequest(server, http.MethodGet, "/v1/media/variants/"+url.PathEscape(originalID)+"/content"+query, nil)
+	reference := serveReaderResourceRequest(server, http.MethodGet, "/v1/media/variants/"+url.PathEscape(originalID)+"/content"+query, nil)
 	if reference.Code != http.StatusConflict || strings.Contains(reference.Body.String(), "youtube.com") {
 		t.Fatalf("reference-only response = %d %s", reference.Code, reference.Body.String())
 	}
@@ -182,7 +182,7 @@ func TestReaderResourcePathsRejectEncodedTraversalAndRequireContext(t *testing.T
 		"/v1/media/variants/variant/content?revision_id=revision",
 		"/v1/media/variants/variant/content?fragment_id=fragment&fragment_id=other&revision_id=revision",
 	} {
-		response := serveReaderRequest(server, http.MethodGet, path, nil)
+		response := serveReaderResourceRequest(server, http.MethodGet, path, nil)
 		if response.Code != http.StatusBadRequest && response.Code != http.StatusNotFound {
 			t.Fatalf("unsafe path %q status = %d body=%s", path, response.Code, response.Body.String())
 		}
@@ -229,7 +229,7 @@ WHERE id = ?`, legacyPath, len(payload), posterID); err != nil {
 		t.Fatal(err)
 	}
 	path := "/v1/media/variants/" + url.PathEscape(posterID) + "/content?fragment_id=" + url.QueryEscape(accepted.FragmentID) + "&revision_id=" + url.QueryEscape(accepted.FragmentRevisionID)
-	response := serveReaderRequest(server, http.MethodGet, path, nil)
+	response := serveReaderResourceRequest(server, http.MethodGet, path, nil)
 	if response.Code != http.StatusOK || !bytes.Equal(response.Body.Bytes(), payload) || response.Header().Get("Cache-Control") != "no-store" {
 		t.Fatalf("legacy response = %d %x headers=%v", response.Code, response.Body.Bytes(), response.Header())
 	}
@@ -244,13 +244,13 @@ WHERE id = ?`, legacyPath, len(payload), posterID); err != nil {
 	if err := os.Symlink(outside, legacyPath); err != nil {
 		t.Fatal(err)
 	}
-	blocked := serveReaderRequest(server, http.MethodGet, path, nil)
+	blocked := serveReaderResourceRequest(server, http.MethodGet, path, nil)
 	if blocked.Code != http.StatusConflict || strings.Contains(blocked.Body.String(), outside) {
 		t.Fatalf("legacy symlink response = %d %s", blocked.Code, blocked.Body.String())
 	}
 }
 
-func serveReaderRequest(handler http.Handler, method, path string, headers map[string]string) *httptest.ResponseRecorder {
+func serveReaderResourceRequest(handler http.Handler, method, path string, headers map[string]string) *httptest.ResponseRecorder {
 	request := httptest.NewRequest(method, path, nil)
 	request.RemoteAddr = "127.0.0.1:43210"
 	for key, value := range headers {

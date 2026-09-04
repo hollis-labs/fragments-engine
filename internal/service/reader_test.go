@@ -182,6 +182,10 @@ func TestReaderMediaProjectsAvailableLegacyContentAsAResourceReference(t *testin
 	if strings.Contains(media[0].Variants[0].ContentHref, "/private/") || media[0].Variants[0].SourceURL != "" {
 		t.Fatalf("legacy filesystem path leaked through Reader: %+v", media[0].Variants[0])
 	}
+	if got, want := media[0].Variants[0].ContentHref,
+		"/v1/media/variants/legacy-variant/content?fragment_id=fragment&revision_id=revision"; got != want {
+		t.Fatalf("authorized media href = %q, want %q", got, want)
+	}
 }
 
 func TestReaderServiceUsesAggregateRevisionZeroAndOpaquePagination(t *testing.T) {
@@ -237,6 +241,25 @@ func TestCaptureOptimisticReaderUsesAggregateRevisionAndValidatedPlayback(t *tes
 	}
 	if accepted.ReaderItem.Revision != 0 || accepted.ReaderItem.Playback != nil {
 		t.Fatalf("optimistic Reader revision/playback = %d %+v", accepted.ReaderItem.Revision, accepted.ReaderItem.Playback)
+	}
+	assertContractJSON(t, capturecontract.SchemaCaptureResponse, accepted)
+}
+
+func TestCaptureOptimisticReaderRequiresVideoRendererForProviderPlayback(t *testing.T) {
+	_, captureService, _ := openManifestTestService(t, t.TempDir()+"/reader-no-video-playback.db")
+	envelope := decodeEnvelope(t, captureFixture(t))
+	envelope.CaptureID = "reader-valid-provider-without-video"
+	envelope.Source.ProviderItemID = "3RmtNXqnreI"
+	envelope.Source.SourceItemKey = "youtube:3RmtNXqnreI"
+	envelope.Source.SubmittedURL = "https://www.youtube.com/watch?v=3RmtNXqnreI"
+	envelope.Source.CanonicalURL = envelope.Source.SubmittedURL
+	envelope.Media = []capturecontract.CaptureMediaItem{}
+	accepted, err := captureService.AcceptManifest(context.Background(), encodeEnvelope(t, envelope))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if accepted.ReaderItem.Renderer == "video" || accepted.ReaderItem.Playback != nil {
+		t.Fatalf("non-video Reader advertised provider playback: renderer=%q playback=%+v", accepted.ReaderItem.Renderer, accepted.ReaderItem.Playback)
 	}
 	assertContractJSON(t, capturecontract.SchemaCaptureResponse, accepted)
 }
