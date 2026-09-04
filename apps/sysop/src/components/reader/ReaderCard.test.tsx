@@ -1,6 +1,9 @@
 import { fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { ReaderCard } from './ReaderCard'
+import { ReaderActions } from './ReaderActions'
+import { ApiProvider } from '@/contexts/ApiContext'
+import { apiClient } from '@/lib/api'
 import { readerItem } from '@/test/reader-fixture'
 
 describe('ReaderCard', () => {
@@ -86,5 +89,33 @@ describe('ReaderCard', () => {
     render(<ReaderCard item={item} onOpen={() => {}} />)
 
     expect(screen.queryByRole('link', { name: 'View source' })).toBeNull()
+  })
+
+  it('keeps the real Reader action tray inside the card interaction fence', () => {
+    const onOpen = vi.fn()
+    const item = readerItem({
+      actions: [
+        {
+          command: 'mark_read',
+          input_schema:
+            'https://schemas.hollis-labs.dev/fragments-engine/browser-capture-reader/v1/reader-command.schema.json#/$defs/MarkRead',
+          expected_revision_required: true,
+        },
+      ],
+    })
+    render(
+      <ApiProvider client={{ ...apiClient, executeReaderCommand: async () => item }}>
+        <ReaderCard
+          item={item}
+          onOpen={onOpen}
+          actionSlot={<ReaderActions item={item} onItemChange={() => {}} />}
+        />
+      </ApiProvider>,
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open Reader actions' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Mark read' }))
+
+    expect(onOpen).not.toHaveBeenCalled()
   })
 })

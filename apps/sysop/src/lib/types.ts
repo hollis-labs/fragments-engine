@@ -316,6 +316,61 @@ export interface ReaderReadingState {
   revision: number
 }
 
+export type ReaderCommandName =
+  | 'add_tag'
+  | 'remove_tag'
+  | 'append_capture_note'
+  | 'update_curated_note'
+  | 'set_reading_progress'
+  | 'mark_read'
+  | 'mark_unread'
+  | 'request_asset_acquisition'
+  | 'route'
+  | 'materialize'
+
+export interface ReaderCommandBase {
+  schema_version: 'fe.reader.command.v1'
+  command: ReaderCommandName
+  command_id: string
+  idempotency_key: string
+  expected_revision: number
+}
+
+export type ReaderCommand =
+  | (ReaderCommandBase & { command: 'add_tag'; tag: string })
+  | (ReaderCommandBase & { command: 'remove_tag'; tag: string })
+  | (ReaderCommandBase & {
+      command: 'append_capture_note'
+      annotation_id: string
+      text: string
+      selector?: { exact: string; prefix?: string; suffix?: string }
+    })
+  | (ReaderCommandBase & {
+      command: 'update_curated_note'
+      expected_note_revision: number
+      body_markdown: string
+    })
+  | (ReaderCommandBase & {
+      command: 'set_reading_progress'
+      position: ReaderReadingPosition
+    })
+  | (ReaderCommandBase & { command: 'mark_read' })
+  | (ReaderCommandBase & { command: 'mark_unread' })
+  | (ReaderCommandBase & {
+      command: 'request_asset_acquisition'
+      media_asset_id: string
+      variant_kind: ReaderAssetVariant['kind']
+      requested_custody: 'cache' | 'mirror' | 'adopted'
+    })
+  | (ReaderCommandBase & { command: 'route'; route_id: string })
+  | (ReaderCommandBase & { command: 'materialize'; destination_id: string })
+
+export interface ReaderCommandCapability {
+  command: ReaderCommandName
+  input_schema: string
+  expected_revision_required: boolean
+}
+
 export type ReaderEffectState = 'none' | 'pending' | 'succeeded' | 'partial' | 'failed'
 
 export interface ReaderEffectSummary {
@@ -436,21 +491,7 @@ export interface ReaderItem {
   capture_count: number
   reading_state: ReaderReadingState
   operations: ReaderOperationalSummaries
-  actions: Array<{
-    command:
-      | 'add_tag'
-      | 'remove_tag'
-      | 'append_capture_note'
-      | 'update_curated_note'
-      | 'set_reading_progress'
-      | 'mark_read'
-      | 'mark_unread'
-      | 'request_asset_acquisition'
-      | 'route'
-      | 'materialize'
-    input_schema: string
-    expected_revision_required: boolean
-  }>
+  actions: ReaderCommandCapability[]
 }
 
 export interface ReaderItemList {

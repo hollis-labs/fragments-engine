@@ -5,10 +5,7 @@ interface ReaderQuickActionSeamProps {
   children?: ReactNode
 }
 
-/**
- * Stable 0047 composition point. The default advertises the location without
- * executing or implying support for any Reader command.
- */
+/** Stable composition fence for card/detail actions and card navigation. */
 export function ReaderQuickActionSeam({ children }: ReaderQuickActionSeamProps) {
   return (
     <div data-reader-action-slot data-reader-nav-exclude>

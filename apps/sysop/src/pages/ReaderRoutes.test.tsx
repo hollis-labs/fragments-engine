@@ -243,4 +243,42 @@ describe('Reader routes', () => {
     expect(sidecar?.getAttribute('data-fragment-id')).toBe('fragment-1')
     expect(sidecar?.getAttribute('data-fragment-revision-id')).toBe('revision-pinned')
   })
+
+  it('wires the capability-driven action tray into Reader cards', async () => {
+    const item = readerItem({
+      actions: [
+        {
+          command: 'mark_read',
+          input_schema:
+            'https://schemas.hollis-labs.dev/fragments-engine/browser-capture-reader/v1/reader-command.schema.json#/$defs/MarkRead',
+          expected_revision_required: true,
+        },
+      ],
+    })
+    renderMemoryShell(
+      '/reader?scope=inbox',
+      clientWithReader({ fetchReaderItems: async () => readerList('inbox', [item]) }),
+    )
+
+    expect(await screen.findByRole('button', { name: 'Open Reader actions' })).not.toBeNull()
+  })
+
+  it('uses the real action tray by default on detail while retaining the injected seam', async () => {
+    const item = readerItem({
+      actions: [
+        {
+          command: 'mark_unread',
+          input_schema:
+            'https://schemas.hollis-labs.dev/fragments-engine/browser-capture-reader/v1/reader-command.schema.json#/$defs/MarkUnread',
+          expected_revision_required: true,
+        },
+      ],
+    })
+    renderMemoryShell(
+      '/reader/fragment-1',
+      clientWithReader({ fetchReaderItem: async () => item }),
+    )
+
+    expect(await screen.findByRole('button', { name: 'Open Reader actions' })).not.toBeNull()
+  })
 })

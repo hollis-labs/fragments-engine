@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { fetchReaderItem, fetchReaderItems } from './api'
+import { executeReaderCommand, fetchReaderItem, fetchReaderItems } from './api'
 import { readerItem, readerList } from '@/test/reader-fixture'
 
 function jsonResponse(value: unknown): Response {
@@ -34,5 +34,32 @@ describe('Reader API client', () => {
     expect(fetchMock.mock.calls[0]![0]).toBe(
       '/v1/reader/items/fragment%20alias?revision_id=revision-4',
     )
+  })
+
+  it('posts the exact frozen command and returns the reconciled Reader item', async () => {
+    const reconciled = readerItem({ revision: 3 })
+    const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse(reconciled))
+    vi.stubGlobal('fetch', fetchMock)
+    const command = {
+      schema_version: 'fe.reader.command.v1',
+      command: 'add_tag',
+      command_id: 'command-reader-api',
+      idempotency_key: 'intent-reader-api',
+      expected_revision: 2,
+      tag: 'durable',
+    } as const
+
+    await expect(
+      executeReaderCommand({ fragmentId: 'fragment alias', command }),
+    ).resolves.toEqual(reconciled)
+
+    const [url, init] = fetchMock.mock.calls[0]!
+    expect(url).toBe('/v1/reader/items/fragment%20alias/commands')
+    expect(init?.method).toBe('POST')
+    expect(init?.headers).toMatchObject({
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+    })
+    expect(init?.body).toBe(JSON.stringify(command))
   })
 })

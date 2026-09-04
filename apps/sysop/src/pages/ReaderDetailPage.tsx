@@ -8,6 +8,7 @@ import {
 } from '@hollis-labs/sysop-ui'
 import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { ReaderQuickActionSeam } from '@/components/reader/ReaderQuickActionSeam'
+import { ReaderActions } from '@/components/reader/ReaderActions'
 import { ReaderStateSummary } from '@/components/reader/ReaderStateSummary'
 import { ReaderDetailHeader } from '@/components/reader/ReaderDetailHeader'
 import { ReaderContentRenderer } from '@/features/reader'
@@ -139,7 +140,11 @@ export default function ReaderDetailPage({
         <>
           {item && pin && (
             <ReaderQuickActionSeam>
-              {renderActions ? renderActions(item, pin) : undefined}
+              {renderActions ? (
+                renderActions(item, pin)
+              ) : (
+                <ReaderActions key={item.fragment_id} item={item} onItemChange={setItem} />
+              )}
             </ReaderQuickActionSeam>
           )}
           <Button

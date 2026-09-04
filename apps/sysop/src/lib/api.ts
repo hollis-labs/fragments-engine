@@ -11,6 +11,7 @@ import type {
   InboxItem,
   JsonObject,
   QueuePolicyConfig,
+  ReaderCommand,
   ReaderItem,
   ReaderItemList,
   ReaderScope,
@@ -76,6 +77,11 @@ export interface FetchReaderItemsParams {
 export interface FetchReaderItemParams {
   fragmentId: string
   revisionId?: string
+}
+
+export interface ExecuteReaderCommandParams {
+  fragmentId: string
+  command: ReaderCommand
 }
 
 export interface ReanalyzeFragmentAttachmentsInput {
@@ -882,6 +888,21 @@ export async function fetchReaderItem(
   )
 }
 
+/** POST /v1/reader/items/{fragmentId}/commands — execute one frozen semantic command. */
+export async function executeReaderCommand(
+  params: ExecuteReaderCommandParams,
+  options?: ApiRequestOptions,
+): Promise<ReaderItem> {
+  return apiFetch<ReaderItem>(
+    `/v1/reader/items/${encodeURIComponent(params.fragmentId)}/commands`,
+    {
+      method: 'POST',
+      body: JSON.stringify(params.command),
+      signal: options?.signal,
+    },
+  )
+}
+
 export async function fetchRelatedFragments(params: FetchFragmentParams): Promise<SearchResult[]> {
   const data = await apiFetch<{ results: SearchResult[] }>('/v1/fragments/related', undefined, {
     'fragment-id': params.fragmentId,
@@ -1435,6 +1456,7 @@ export const apiClient = {
   fetchBrowseFragments,
   fetchReaderItems,
   fetchReaderItem,
+  executeReaderCommand,
   fetchFragment,
   updateFragment,
   materializeFragmentFFS,
