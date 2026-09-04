@@ -21,6 +21,7 @@ import (
 	"github.com/hollis-labs/fragments-engine/internal/ingest/gitchanges"
 	"github.com/hollis-labs/fragments-engine/internal/ingest/nilvault"
 	"github.com/hollis-labs/fragments-engine/internal/ingest/urlsource"
+	"github.com/hollis-labs/fragments-engine/internal/legacycapture"
 	"github.com/hollis-labs/fragments-engine/internal/linkcontent"
 	"github.com/hollis-labs/fragments-engine/internal/recall"
 	"github.com/hollis-labs/fragments-engine/internal/repository"
@@ -131,11 +132,15 @@ func Open(ctx context.Context, cfg config.Config) (*App, error) {
 		ingest.NewInboxStage(inboxRepo),
 		ingest.NewRecallStage(recallIndex),
 	}, claude.Source{}, chatgpt.Source{}, urlsource.Source{}, filesystemdocs.Source{}, gitchanges.Source{}, nilvault.Source{})
+	legacyCapture := legacycapture.NewService(captureRepo)
+	pipeline.SetLegacyCaptureService(legacyCapture)
+	fragmentService := service.NewFragmentService(fragmentRepo, entityRepo, attachmentRepo, routingRepo, recallIndex, pipeline, visionAnalyzer, manualEnricher, corpusWriter)
+	fragmentService.SetLegacyCaptureService(legacyCapture)
 	scheduleRepo := repository.NewIngestScheduleRepository(st.DB)
 	return &App{
 		store:           st,
 		recall:          recallIndex,
-		Fragments:       service.NewFragmentService(fragmentRepo, entityRepo, attachmentRepo, routingRepo, recallIndex, pipeline, visionAnalyzer, manualEnricher, corpusWriter),
+		Fragments:       fragmentService,
 		Inbox:           service.NewInboxService(inboxRepo),
 		Routing:         routingSvc,
 		Queue:           deliveryQueue,

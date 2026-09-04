@@ -50,6 +50,15 @@ func TestFragmentSearch(t *testing.T) {
 	}
 }
 
+func TestBuildFragmentRejectsEmptyMaterialWithOpaqueSourceID(t *testing.T) {
+	_, err := BuildFragment(domain.PipelineFragment{
+		Source: "legacy", SourceType: "unknown", SourceID: "opaque-item-id",
+	}, "legacy-test", time.Now().UTC())
+	if err == nil || err.Error() != "build fragment: source material is required" {
+		t.Fatalf("expected empty material rejection, got %v", err)
+	}
+}
+
 func TestFragmentList(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "fragments.db")
 	st, err := store.Open(dbPath)

@@ -2065,9 +2065,11 @@ type intakeRequest struct {
 	// SourceURL is set, the server treats Content as final and complete and
 	// never re-fetches it -- see service.ManualIntakeEnricher.EnrichIntake's
 	// PrefetchedContent handling.
-	SourceURL   string `json:"source_url"`
-	Description string `json:"description"`
-	Selection   string `json:"selection"`
+	SourceURL   string   `json:"source_url"`
+	Description string   `json:"description"`
+	Selection   string   `json:"selection"`
+	Highlights  []string `json:"highlights"`
+	Notes       []string `json:"notes"`
 }
 
 func (s *Server) handleIntake(w http.ResponseWriter, r *http.Request) {
@@ -2103,6 +2105,8 @@ func (s *Server) handleIntake(w http.ResponseWriter, r *http.Request) {
 		SourceURL:   input.SourceURL,
 		Description: input.Description,
 		Selection:   input.Selection,
+		Highlights:  input.Highlights,
+		Notes:       input.Notes,
 	})
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)

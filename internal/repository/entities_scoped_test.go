@@ -109,6 +109,49 @@ func TestReplaceFragmentEntitiesByKind_RejectsOutOfScopeEntity(t *testing.T) {
 	}
 }
 
+func TestReplaceFragmentEntitiesByKindAndSourcePreservesOtherProducer(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "fragments.db")
+	st, err := store.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	ctx := context.Background()
+	fragment, err := BuildFragment(domain.PipelineFragment{
+		Source: "manual", SourceType: "repo", SourceID: "source-scoped-entities",
+		Title: "repo", Content: "body", CreatedAt: time.Now().UTC(),
+	}, "manual-intake", time.Now().UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewFragmentRepository(st.DB).Upsert(ctx, fragment); err != nil {
+		t.Fatal(err)
+	}
+	repo := NewEntityRepository(st.DB)
+	if err := repo.AddFragmentEntities(ctx, fragment.ID, []domain.FragmentEntity{
+		{Kind: "repo", Value: "provider/repository", Source: "manual-intake", Confidence: 1},
+		{Kind: "repo", Value: "stale-deterministic", Source: "metadata.source_file", Confidence: .9},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.ReplaceFragmentEntitiesByKindAndSource(ctx, fragment.ID, []domain.FragmentEntity{
+		{Kind: "repo", Value: "current-deterministic", Source: "metadata.source_file", Confidence: .9},
+	}, []string{"repo"}, []string{"metadata.source_file"}); err != nil {
+		t.Fatal(err)
+	}
+	entities, err := repo.ListByFragment(ctx, fragment.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertHasEntity(t, entities, "repo", "provider/repository")
+	assertHasEntity(t, entities, "repo", "current-deterministic")
+	for _, entity := range entities {
+		if entity.Kind == "repo" && entity.Value == "stale-deterministic" {
+			t.Fatalf("source-scoped replacement retained stale owned row: %+v", entities)
+		}
+	}
+}
+
 func assertHasEntity(t *testing.T, entities []domain.FragmentEntity, kind, value string) {
 	t.Helper()
 	for _, e := range entities {

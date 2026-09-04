@@ -206,7 +206,7 @@ func (s *InboxReviewerService) applyEnrichment(
 	}
 	if len(enriched.Attachments) > 0 || len(currentAttachments) > 0 {
 		mergedAttachments := mergeAttachments(currentAttachments, enriched.Attachments)
-		if err := s.attachments.ReplaceFragmentAttachments(ctx, fragment.ID, mergedAttachments, s.now()); err != nil {
+		if err := s.attachments.ReplaceFragmentProjectionAttachments(ctx, fragment.ID, mergedAttachments, s.now()); err != nil {
 			return err
 		}
 		storage := map[string]domain.PublishedAttachmentInfo{}

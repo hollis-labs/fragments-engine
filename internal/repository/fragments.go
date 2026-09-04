@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"strings"
 	"time"
 
@@ -34,14 +35,17 @@ func BuildFragment(in domain.PipelineFragment, ingestName string, now time.Time)
 	if strings.TrimSpace(in.SourceID) == "" {
 		return domain.Fragment{}, fmt.Errorf("build fragment: source_id is required")
 	}
-	if strings.TrimSpace(in.Content) == "" {
-		return domain.Fragment{}, fmt.Errorf("build fragment: content is required")
-	}
 
 	if in.CreatedAt.IsZero() {
 		in.CreatedAt = now
 	}
 	identity := domain.NormalizeSourceIdentity(in, ingestName)
+	if strings.TrimSpace(in.Content) == "" && strings.TrimSpace(in.Title) == "" &&
+		strings.TrimSpace(in.Description) == "" && len(in.Attachments) == 0 &&
+		!validExplicitSourceURL(in.SourceIdentity.SubmittedURL) &&
+		!validExplicitSourceURL(in.SourceIdentity.CanonicalURL) {
+		return domain.Fragment{}, fmt.Errorf("build fragment: source material is required")
+	}
 	if identity.SourceRegistrationID == "" {
 		return domain.Fragment{}, fmt.Errorf("build fragment: source registration id is required")
 	}
@@ -100,6 +104,11 @@ func BuildFragment(in domain.PipelineFragment, ingestName string, now time.Time)
 			CommittedAt:        now.UTC(),
 		},
 	}, nil
+}
+
+func validExplicitSourceURL(raw string) bool {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	return err == nil && (parsed.Scheme == "http" || parsed.Scheme == "https") && parsed.Host != ""
 }
 
 func (r *FragmentRepository) Upsert(ctx context.Context, fragment domain.Fragment) (UpsertOutcome, error) {

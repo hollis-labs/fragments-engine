@@ -3,6 +3,7 @@ package ingest
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"path/filepath"
 	"strings"
 
@@ -129,8 +130,16 @@ func previewText(text string, limit int) string {
 }
 
 func validateEnrichedCandidate(candidate domain.PipelineFragment) error {
-	if strings.TrimSpace(candidate.Content) == "" {
-		return fmt.Errorf("enriched candidate content is empty")
+	if strings.TrimSpace(candidate.Content) == "" && strings.TrimSpace(candidate.Title) == "" &&
+		strings.TrimSpace(candidate.Description) == "" && len(candidate.Attachments) == 0 &&
+		!validEnrichedSourceURL(candidate.SourceIdentity.SubmittedURL) &&
+		!validEnrichedSourceURL(candidate.SourceIdentity.CanonicalURL) {
+		return fmt.Errorf("enriched candidate has no source material")
 	}
 	return nil
+}
+
+func validEnrichedSourceURL(raw string) bool {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	return err == nil && (parsed.Scheme == "http" || parsed.Scheme == "https") && parsed.Host != ""
 }

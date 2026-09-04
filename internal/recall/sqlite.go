@@ -36,7 +36,8 @@ func (s *SQLiteIndexer) IndexFragment(ctx context.Context, fragment domain.Fragm
 		// clobber entities other ingest stages wrote for this fragment
 		// earlier in the same pipeline run (e.g. DirectiveStage's
 		// Kind:"directive" rows, or manual intake's Kind:"tag" rows).
-		if err := s.entities.ReplaceFragmentEntitiesByKind(ctx, fragment.ID, fragmentEntities, extract.Kinds()...); err != nil {
+		if err := s.entities.ReplaceFragmentEntitiesByKindAndSource(ctx, fragment.ID, fragmentEntities,
+			extract.Kinds(), []string{"metadata.cwd", "metadata.source_file", "content.pattern", "content.keyword"}); err != nil {
 			return err
 		}
 	}

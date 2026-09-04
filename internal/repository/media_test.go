@@ -312,6 +312,40 @@ func TestLegacyReplaceCreatesNewRevisionAndPreservesOldAttachmentRefs(t *testing
 	}
 }
 
+func TestLegacyAttachmentRevisionUsesImmutableSourceFieldsAndPreservesDisplayProjection(t *testing.T) {
+	firstAttachments := []domain.PipelineAttachment{{Kind: "image", Role: "content", Name: "first.jpg", ExternalURL: "https://cdn.example/first.jpg", Source: "web"}}
+	st, fragment := mediaTestStoreAndFragment(t, "source-owned-attachment-revision", firstAttachments)
+	defer st.Close()
+	ctx := context.Background()
+	if _, err := st.DB.ExecContext(ctx, `
+UPDATE fragments SET title = 'provider display title', content = 'provider display body',
+  metadata_json = '{"provider_summary":"derived","user_note":"annotation"}'
+WHERE id = ?`, fragment.ID); err != nil {
+		t.Fatal(err)
+	}
+	changed := []domain.PipelineAttachment{{Kind: "image", Role: "content", Name: "second.jpg", ExternalURL: "https://cdn.example/second.jpg", Source: "web"}}
+	if err := NewAttachmentRepository(st.DB).ReplaceFragmentAttachments(ctx, fragment.ID, changed, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	current, err := NewFragmentRepository(st.DB).GetByID(ctx, fragment.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.Title != "provider display title" || current.Content != "provider display body" {
+		t.Fatalf("attachment revision overwrote mutable display projection: %+v", current)
+	}
+	wantMaterial := domain.NormalizeMaterial(
+		fragment.Revision.Title, fragment.Revision.Description, fragment.Revision.Content,
+		fragment.Revision.ContentFormat, changed,
+	)
+	if current.Revision.Title != fragment.Revision.Title || current.Revision.Content != fragment.Revision.Content || current.Revision.MaterialDigest != wantMaterial.Digest() {
+		t.Fatalf("attachment revision mixed display/provider state into source material: got=%+v want_digest=%s", current.Revision, wantMaterial.Digest())
+	}
+	if current.Revision.MetadataJSON != fragment.Revision.MetadataJSON {
+		t.Fatalf("attachment revision mixed mutable metadata into source evidence: got=%s want=%s", current.Revision.MetadataJSON, fragment.Revision.MetadataJSON)
+	}
+}
+
 func TestMediaManifestConcurrentAcrossDatabaseHandlesConverges(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "media.db")
 	st1, fragment := mediaTestStoreAndFragmentAt(t, dbPath, "concurrent", nil)

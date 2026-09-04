@@ -125,6 +125,24 @@ Migration 015 seeds only immutable legacy revision title, description, and body
 as source observations. It intentionally ignores mutable fragment summaries,
 metadata-level `enrichment_status`, and attachment analysis flags. Existing
 manual enrichment and inbox-review behavior continues to use those legacy flags
-unchanged; browser capture and new provider work never depends on them. The
-legacy intake/ingest adapter task is responsible for moving those paths onto
-this revision-aware model without rewriting historical observations.
+unchanged; browser capture and new provider work never depends on them.
+
+`POST /v1/intake` and all six configured ingest kinds (`claude_code`,
+`chatgpt_export`, `url_source`, `filesystem_docs`, `git_changes`, and
+`nil_vault`) now enter through one application-layer compatibility adapter.
+The adapter resolves the same stable identity and immutable source revision as
+browser capture, records a durable capture attempt, merges explicit user tags
+and capture-time annotations additively, and initializes all twelve coverage
+rows in the same transaction. Exact semantic retries are read-only; changed
+source material creates a new revision. Enriched titles/bodies, provider or
+user metadata, OCR/vision analysis, and expiring attachment locations remain
+mutable legacy projections and do not affect source material digests.
+
+Coverage is evidence-accurate. Source-adapter taxonomy values are source
+observations, inline hashtags found deterministically in manual content are
+deterministic observations, and only explicit intake `tags` are user
+observations. A transcript is provided only when an extractor supplies the
+exact typed `transcript_text`; a YouTube body containing description plus
+transcript or an unavailable-transcript placeholder is not itself transcript
+evidence. Prefetched `source_url + content` therefore supplies only the typed
+fields present and leaves absent provider/media capabilities eligible.

@@ -66,7 +66,47 @@ func (r *AttachmentRepository) ReplaceFragmentRevisionAttachments(ctx context.Co
 	return nil
 }
 
+// ReplaceFragmentProjectionAttachments updates only the mutable legacy
+// attachment projection for provider-/model-derived enrichment. It never
+// creates a source revision or changes an immutable revision-scoped manifest.
+func (r *AttachmentRepository) ReplaceFragmentProjectionAttachments(ctx context.Context, fragmentID string, attachments []domain.PipelineAttachment, now time.Time) error {
+	tx, err := NewMediaRepository(r.db).BeginImmediate(ctx, "replace fragment projection attachments")
+	if err != nil {
+		return fmt.Errorf("begin attachment projection tx: %w", err)
+	}
+	defer tx.Rollback()
+	canonicalID, err := resolveCanonicalFragmentID(ctx, tx.Conn(), fragmentID)
+	if err != nil {
+		return fmt.Errorf("resolve attachment projection fragment: %w", err)
+	}
+	var revisionID string
+	if err := tx.Conn().QueryRowContext(ctx, `SELECT current_revision_id FROM fragments WHERE id = ?`, canonicalID).Scan(&revisionID); err != nil {
+		return fmt.Errorf("resolve attachment projection revision: %w", err)
+	}
+	if _, err := replaceLegacyAttachmentRows(ctx, tx.Conn(), canonicalID, revisionID, attachments, now); err != nil {
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit attachment projection tx: %w", err)
+	}
+	return nil
+}
+
 func replaceFragmentRevisionAttachments(ctx context.Context, tx MediaWriteConn, fragmentID, revisionID string, attachments []domain.PipelineAttachment, now time.Time) error {
+	manifest, err := replaceLegacyAttachmentRows(ctx, tx, fragmentID, revisionID, attachments, now)
+	if err != nil {
+		return err
+	}
+	if _, err := UpsertMediaManifest(ctx, tx, revisionID, manifest, now); err != nil {
+		return fmt.Errorf("project attachment media manifest: %w", err)
+	}
+	return nil
+}
+
+// replaceLegacyAttachmentRows updates only the mutable compatibility tables.
+// Canonical media rows are installed separately by the capture transaction so
+// their foreign keys can safely refer back to these legacy attachment rows.
+func replaceLegacyAttachmentRows(ctx context.Context, tx MediaWriteConn, fragmentID, revisionID string, attachments []domain.PipelineAttachment, now time.Time) ([]domain.MediaManifestItem, error) {
 	var sourceRegistrationID, fragmentProvider string
 	if err := tx.QueryRowContext(ctx, `
 SELECT COALESCE(si.source_registration_id, NULLIF(f.ingest_name, ''), f.source),
@@ -74,12 +114,12 @@ SELECT COALESCE(si.source_registration_id, NULLIF(f.ingest_name, ''), f.source),
 FROM fragments f
 LEFT JOIN fragment_source_identities si ON si.fragment_id = f.id
 JOIN fragment_revisions fr ON fr.fragment_id = f.id AND fr.id = ?
-WHERE f.id = ?`, revisionID, fragmentID).Scan(&sourceRegistrationID, &fragmentProvider); err != nil {
-		return fmt.Errorf("load attachment source identity: %w", err)
+	WHERE f.id = ?`, revisionID, fragmentID).Scan(&sourceRegistrationID, &fragmentProvider); err != nil {
+		return nil, fmt.Errorf("load attachment source identity: %w", err)
 	}
 
 	if _, err := tx.ExecContext(ctx, `DELETE FROM fragment_attachments WHERE fragment_id = ?`, fragmentID); err != nil {
-		return fmt.Errorf("clear fragment attachments: %w", err)
+		return nil, fmt.Errorf("clear fragment attachments: %w", err)
 	}
 	manifest := make([]domain.MediaManifestItem, 0, len(attachments))
 	for _, item := range attachments {
@@ -92,7 +132,7 @@ WHERE f.id = ?`, revisionID, fragmentID).Scan(&sourceRegistrationID, &fragmentPr
 		if len(normalized.Metadata) > 0 {
 			raw, err := json.Marshal(normalized.Metadata)
 			if err != nil {
-				return fmt.Errorf("encode attachment metadata: %w", err)
+				return nil, fmt.Errorf("encode attachment metadata: %w", err)
 			}
 			metaJSON = string(raw)
 		}
@@ -119,7 +159,7 @@ ON CONFLICT(id) DO UPDATE SET
 			metaJSON,
 			now.Format(time.RFC3339),
 		); err != nil {
-			return fmt.Errorf("upsert attachment: %w", err)
+			return nil, fmt.Errorf("upsert attachment: %w", err)
 		}
 		if _, err := tx.ExecContext(ctx, `
 INSERT INTO fragment_attachments (
@@ -134,14 +174,46 @@ INSERT INTO fragment_attachments (
 			normalized.StoragePath,
 			now.Format(time.RFC3339),
 		); err != nil {
-			return fmt.Errorf("link fragment attachment: %w", err)
+			return nil, fmt.Errorf("link fragment attachment: %w", err)
 		}
 		manifest = append(manifest, LegacyPipelineMediaItem(fragmentID, revisionID, attachmentID, normalized, len(manifest), metaJSON, sourceRegistrationID, fragmentProvider, now))
 	}
-	if _, err := UpsertMediaManifest(ctx, tx, revisionID, manifest, now); err != nil {
-		return fmt.Errorf("project attachment media manifest: %w", err)
+	return manifest, nil
+}
+
+// BuildLegacyPipelineMediaManifest projects the source-owned portion of a
+// legacy PipelineFragment into the canonical media model. It performs no I/O;
+// callers can therefore include the result in a larger capture transaction.
+// The returned IDs are the same deterministic IDs UpsertMediaManifest resolves.
+func BuildLegacyPipelineMediaManifest(fragment domain.Fragment, attachments []domain.PipelineAttachment, now time.Time) []domain.MediaManifestItem {
+	manifest := make([]domain.MediaManifestItem, 0, len(attachments))
+	for _, item := range attachments {
+		normalized := normalizePipelineAttachment(item)
+		if normalized.Kind == "" {
+			continue
+		}
+		attachmentID := attachmentIdentity(normalized)
+		metaJSON := "{}"
+		if len(normalized.Metadata) > 0 {
+			if raw, err := json.Marshal(normalized.Metadata); err == nil {
+				metaJSON = string(raw)
+			}
+		}
+		projected := LegacyPipelineMediaItem(fragment.ID, fragment.Revision.ID,
+			attachmentID, normalized, len(manifest), metaJSON,
+			fragment.SourceIdentity.SourceRegistrationID,
+			fragment.SourceIdentity.Provider, now)
+		projected.Asset.ID, projected.Asset.IdentityKey = domain.StableMediaAssetID(
+			projected.Asset.SourceRegistrationID, projected.Asset.Provider,
+			projected.Asset.ProviderMediaID, projected.Asset.SourceMediaKey,
+			projected.Asset.SourceLocator)
+		for i := range projected.Variants {
+			projected.Variants[i].MediaAssetID = projected.Asset.ID
+			projected.Variants[i].ID = domain.StableAssetVariantID(projected.Asset.ID, projected.Variants[i].VariantIdentity)
+		}
+		manifest = append(manifest, projected)
 	}
-	return nil
+	return manifest
 }
 
 func (r *AttachmentRepository) ListByFragment(ctx context.Context, fragmentID string) ([]domain.FragmentAttachment, error) {
@@ -447,9 +519,9 @@ func ensureAttachmentManifestRevision(ctx context.Context, q MediaWriteConn, fra
 	var current domain.FragmentRevision
 	var normalizerAdapter, normalizerVersion, observedAt string
 	err := q.QueryRowContext(ctx, `
-SELECT fr.id, fr.ordinal, fr.material_digest, fr.content_digest, f.title,
-       fr.description, f.content, fr.content_format, fr.ordered_media_digest,
-       f.metadata_json, fr.normalizer_adapter, fr.normalizer_version,
+SELECT fr.id, fr.ordinal, fr.material_digest, fr.content_digest, fr.title,
+       fr.description, fr.content, fr.content_format, fr.ordered_media_digest,
+       fr.metadata_json, fr.normalizer_adapter, fr.normalizer_version,
        fr.observed_at
 FROM fragments f
 JOIN fragment_revisions fr ON fr.id = f.current_revision_id
@@ -493,9 +565,9 @@ INSERT INTO fragment_revisions (
 	}
 	if _, err := q.ExecContext(ctx, `
 UPDATE fragments SET accepted_revision_id = ?, current_revision_id = ?,
-  content_hash = ?, title = ?, content = ?, ingested_at = ? WHERE id = ?`,
-		revisionID, revisionID, domain.DigestText(material.Content), material.Title,
-		material.Content, formatTime(now), fragmentID); err != nil {
+  content_hash = ?, ingested_at = ? WHERE id = ?`,
+		revisionID, revisionID, domain.DigestText(material.Content),
+		formatTime(now), fragmentID); err != nil {
 		return "", fmt.Errorf("select attachment manifest revision: %w", err)
 	}
 	return revisionID, nil

@@ -168,6 +168,63 @@ func TestFragmentServiceIntake_MultipleHashtags(t *testing.T) {
 	assertEntityPresent(t, detail.Entities, "tag", "reading")
 }
 
+func TestFragmentServiceIntake_InlineTagsKeepDeterministicProvenance(t *testing.T) {
+	svcs := setupManualTestServices(t)
+	defer svcs.close()
+
+	result, err := svcs.fragments.Intake(context.Background(), IntakeRequest{
+		Content: "source body #inline-only #shared",
+		Tags:    []string{"user-only", "shared"},
+	})
+	if err != nil {
+		t.Fatalf("intake: %v", err)
+	}
+
+	rows, err := svcs.db.Query(`
+SELECT attribution_source, value_json
+FROM enrichment_observations
+WHERE fragment_id = ? AND capability = 'tags'
+ORDER BY attribution_source`, result.FragmentID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	observed := make(map[string]string)
+	for rows.Next() {
+		var attribution, value string
+		if err := rows.Scan(&attribution, &value); err != nil {
+			t.Fatal(err)
+		}
+		observed[attribution] = value
+	}
+	if !strings.Contains(observed["deterministic"], `"inline-only"`) || !strings.Contains(observed["deterministic"], `"shared"`) {
+		t.Fatalf("inline tags lost deterministic attribution: %v", observed)
+	}
+	if !strings.Contains(observed["user"], `"user-only"`) || !strings.Contains(observed["user"], `"shared"`) {
+		t.Fatalf("explicit tags lost user attribution: %v", observed)
+	}
+	if strings.Contains(observed["user"], `"inline-only"`) {
+		t.Fatalf("inline-only source tag was attributed to the user: %v", observed)
+	}
+
+	var inlineUserRows int
+	if err := svcs.db.QueryRow(`
+SELECT COUNT(*) FROM fragment_tag_observations
+WHERE fragment_id = ? AND normalized_value = 'inline-only' AND attribution_source = 'user'`, result.FragmentID).Scan(&inlineUserRows); err != nil {
+		t.Fatal(err)
+	}
+	if inlineUserRows != 0 {
+		t.Fatalf("inline-only tag persisted as a user observation: %d", inlineUserRows)
+	}
+	detail, err := svcs.fragments.GetDetail(context.Background(), result.FragmentID, 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertEntityPresent(t, detail.Entities, "tag", "inline-only")
+	assertEntityPresent(t, detail.Entities, "tag", "user-only")
+	assertEntityPresent(t, detail.Entities, "tag", "shared")
+}
+
 // TestFragmentServiceIntake_ContentNeverMutated is a focused check that
 // req.Content and the persisted Fragment.Content are byte-identical to the
 // input across a handful of hashtag/URL-bearing shapes.

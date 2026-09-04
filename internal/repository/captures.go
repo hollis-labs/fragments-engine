@@ -34,6 +34,10 @@ type CaptureWrite struct {
 	CapabilityCoverage     []domain.CapabilityCoverage
 	FollowUpKind           string
 	FollowUpPayloadJSON    string
+	// LegacyProjection is an optional, narrowly typed compatibility projection.
+	// The repository applies it after canonical resolution and before snapshot
+	// construction/commit. It cannot change identity or immutable revision rows.
+	LegacyProjection *LegacyProjectionWrite
 	// BuildAcceptanceSnapshot runs after every row required by manifest
 	// acceptance has been written, but before COMMIT. It lets the application
 	// persist an exact transport response without moving transaction ownership
@@ -241,9 +245,21 @@ INSERT INTO fragment_description_observations (
 			return domain.CaptureAcceptance{}, fmt.Errorf("insert description observation %q: %w", description.ID, err)
 		}
 	}
+	// Legacy rows must exist before canonical media inserts because the media
+	// compatibility foreign keys may point back to legacy attachment IDs.
+	if write.LegacyProjection != nil {
+		if err := applyLegacyProjectionOn(ctx, conn, fragment, *write.LegacyProjection, attempt.CreatedAt); err != nil {
+			return domain.CaptureAcceptance{}, fmt.Errorf("accept capture legacy projection: %w", err)
+		}
+	}
 
 	var resolvedMedia []domain.MediaManifestItem
 	if write.Media != nil {
+		for index := range write.Media {
+			if strings.TrimSpace(write.Media[index].Attachment.LegacyAttachmentID) != "" {
+				write.Media[index].Attachment.LegacyFragmentID = fragment.ID
+			}
+		}
 		resolvedMedia, err = UpsertMediaManifest(ctx, conn, revisionID, write.Media, attempt.CreatedAt)
 		if err != nil {
 			return domain.CaptureAcceptance{}, fmt.Errorf("accept capture media: %w", err)
@@ -289,7 +305,6 @@ INSERT INTO capture_followup_outbox (
 			return domain.CaptureAcceptance{}, fmt.Errorf("insert capture follow-up intent: %w", err)
 		}
 	}
-
 	accepted, err := loadCaptureAcceptance(ctx, conn, attempt, false)
 	if err != nil {
 		return domain.CaptureAcceptance{}, err

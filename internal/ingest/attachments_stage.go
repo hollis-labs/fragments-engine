@@ -20,6 +20,9 @@ func (s *AttachmentStage) Name() string {
 }
 
 func (s *AttachmentStage) Run(ctx context.Context, stageCtx *StageContext) error {
+	if stageCtx.LegacyCaptureApplied {
+		return nil
+	}
 	if stageCtx.Outcome == repository.UpsertSkipped {
 		return nil
 	}

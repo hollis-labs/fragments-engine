@@ -392,7 +392,7 @@ For `nil_vault`, FE reads `note`/`scratch` items (never `todo`) directly out of 
 - vault/taxonomy/section/priority/pin state all carry into fragment metadata
 - full rescan every run, relying on FE's existing content-hash dedup for idempotency
 
-Manual intake (`POST /v1/intake`) also accepts pre-fetched content from a client that already extracted a page itself — `source_url`, `description`, and `selection` fields alongside `content`. When `source_url` is present, FE never fetches the URL itself; the submitted `content` is treated as final and no `enrichment_status`/retry ever applies to it. `apps/fe-clipper` (a Chrome extension using Mozilla's Readability + Turndown to capture full-page content client-side, sidestepping bot-blocking entirely) is the first such client. See `docs/usage.md` §3d for the full request shape.
+Manual intake (`POST /v1/intake`) also accepts pre-fetched content from a client that already extracted a page itself — `source_url`, `description`, `selection`, `highlights`, and `notes` fields alongside `content`. When `source_url` is present, FE never re-fetches that body. The supplied source fields mark only their own capability coverage; a derived summary, legacy `enrichment_status`, or display metadata does not fabricate transcript, media, provider, OCR, or vision evidence, so missing capabilities remain eligible for later work. `/v1/intake` and the six configured ingest kinds are compatibility adapters over FE's stable identity, immutable revisions, additive context, and coverage model; browser clients should use the manifest-first `/v1/captures` protocol. See `docs/usage.md` §3d for the full legacy request shape.
 
 For embedded Vanta recall, FE currently supports:
 
