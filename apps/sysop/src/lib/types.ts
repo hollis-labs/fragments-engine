@@ -213,3 +213,249 @@ export interface Route {
   auto_route: boolean
   confidence_min: number
 }
+
+export type ReaderScope = 'inbox' | 'library' | 'all'
+
+export type ReaderRenderer =
+  | 'article'
+  | 'image'
+  | 'gallery'
+  | 'video'
+  | 'audio'
+  | 'document'
+  | 'text'
+  | 'unknown'
+
+export interface ReaderSourceIdentity {
+  source_registration_id?: string
+  submitted_url?: string
+  canonical_url?: string
+  provider: string
+  provider_item_id?: string
+  source_item_key: string
+  source_locator?: string
+  segment_key: string
+  canonicalizer?: {
+    adapter: string
+    version: string
+  }
+}
+
+export type ReaderResolvedTextSource = 'source' | 'user' | 'deterministic' | 'provider' | 'model'
+
+export interface ReaderResolvedText {
+  value: string
+  source: ReaderResolvedTextSource
+  observation_id?: string
+}
+
+export interface ReaderAssetFailure {
+  code: string
+  message: string
+  retryable: boolean
+}
+
+export type ReaderAcquisitionState = 'pending' | 'available' | 'reference_only' | 'failed'
+
+export interface ReaderAssetVariant {
+  asset_variant_id: string
+  kind: 'original' | 'preview' | 'thumbnail' | 'poster' | 'audio' | 'subtitles' | 'transcript'
+  custody: 'reference' | 'cache' | 'mirror' | 'adopted'
+  acquisition_state: ReaderAcquisitionState
+  mime_type?: string
+  width?: number
+  height?: number
+  duration_seconds?: number
+  byte_size?: number
+  digest?: {
+    algorithm: 'sha256'
+    value: string
+  }
+  content_href?: string
+  source_url?: string
+  failure?: ReaderAssetFailure
+}
+
+export interface ReaderMediaItem {
+  attachment: {
+    attachment_id: string
+    fragment_revision_id: string
+    media_asset_id: string
+    role: 'primary' | 'gallery_item' | 'hero' | 'inline' | 'poster' | 'transcript' | 'other'
+    position: number
+    caption?: string
+    source_context?: string
+  }
+  media_asset_id: string
+  provider_media_id?: string
+  kind: 'image' | 'video' | 'audio' | 'document' | 'timed_text' | 'other'
+  alt_text?: string
+  variants: ReaderAssetVariant[]
+}
+
+export type ReaderReadingPosition =
+  | { kind: 'none' }
+  | { kind: 'article'; progress: number; block_anchor?: string; local_offset?: number }
+  | {
+      kind: 'video'
+      elapsed_seconds: number
+      duration_seconds?: number
+      provider_media_id?: string
+    }
+  | { kind: 'gallery'; attachment_id: string; index: number }
+  | { kind: 'document'; page: number; progress?: number }
+  | { kind: 'audio'; elapsed_seconds: number; duration_seconds?: number }
+
+export interface ReaderReadingState {
+  principal_id: string
+  fragment_id: string
+  state: 'unread' | 'in_progress' | 'read'
+  position: ReaderReadingPosition
+  last_opened_at?: ISODateString
+  completed_at?: ISODateString
+  revision: number
+}
+
+export type ReaderEffectState = 'none' | 'pending' | 'succeeded' | 'partial' | 'failed'
+
+export interface ReaderEffectSummary {
+  state: ReaderEffectState
+  references: string[]
+}
+
+export type ReaderCapabilityState =
+  | 'provided'
+  | 'missing'
+  | 'pending'
+  | 'failed'
+  | 'stale'
+  | 'not_applicable'
+
+export type ReaderCapability =
+  | 'title'
+  | 'description'
+  | 'body'
+  | 'gallery_manifest'
+  | 'original_media'
+  | 'thumbnail_or_poster'
+  | 'transcript'
+  | 'OCR'
+  | 'vision'
+  | 'summary'
+  | 'tags'
+  | 'entities'
+
+export interface ReaderCapabilityCoverage {
+  capability: ReaderCapability
+  state: ReaderCapabilityState
+  observation_id?: string
+  detail?: string
+}
+
+export interface ReaderOperationalSummaries {
+  triage: {
+    case_ids: string[]
+    unresolved_count: number
+  }
+  routing: ReaderEffectSummary
+  materialization: ReaderEffectSummary
+  enrichment: ReaderCapabilityCoverage[]
+  acquisition: Record<ReaderAcquisitionState, number>
+}
+
+export interface ReaderItem {
+  schema_version: 'fe.reader.item.v1'
+  fragment_id: string
+  fragment_revision_id: string
+  revision: number
+  source: ReaderSourceIdentity
+  renderer: ReaderRenderer
+  display: {
+    title: ReaderResolvedText
+    description?: ReaderResolvedText
+    byline?: ReaderResolvedText
+    published_at?: ISODateString
+    summary: ReaderResolvedText
+  }
+  article: {
+    preview_markdown: string
+    full_content_available: boolean
+    full_content_href?: string
+  }
+  media: ReaderMediaItem[]
+  playback?:
+    | {
+        kind: 'provider_embed'
+        provider: 'youtube'
+        provider_item_id: string
+        start_seconds?: number
+      }
+    | {
+        kind: 'blob_stream'
+        asset_variant_id: string
+        mime_type: string
+        start_seconds?: number
+      }
+    | {
+        kind: 'external_stream'
+        url: string
+        mime_type: string
+        policy: 'allowlisted_provider' | 'signed_source'
+        start_seconds?: number
+      }
+  tags: {
+    combined: string[]
+    attributed: Array<{
+      value: string
+      source: 'user' | 'provider' | 'deterministic' | 'model'
+      observation_id?: string
+    }>
+  }
+  annotations: Array<{
+    annotation_id: string
+    capture_id: string
+    kind: 'highlight' | 'capture_note'
+    text: string
+    captured_at: ISODateString
+    selector?: {
+      exact: string
+      prefix?: string
+      suffix?: string
+    }
+    position?: {
+      block_anchor?: string
+      start_offset?: number
+      end_offset?: number
+    }
+  }>
+  curated_note?: {
+    body_markdown: string
+    revision: number
+    updated_at: ISODateString
+  }
+  capture_count: number
+  reading_state: ReaderReadingState
+  operations: ReaderOperationalSummaries
+  actions: Array<{
+    command:
+      | 'add_tag'
+      | 'remove_tag'
+      | 'append_capture_note'
+      | 'update_curated_note'
+      | 'set_reading_progress'
+      | 'mark_read'
+      | 'mark_unread'
+      | 'request_asset_acquisition'
+      | 'route'
+      | 'materialize'
+    input_schema: string
+    expected_revision_required: boolean
+  }>
+}
+
+export interface ReaderItemList {
+  schema_version: 'fe.reader.list.v1'
+  scope: ReaderScope
+  items: ReaderItem[]
+  next_cursor?: string
+}

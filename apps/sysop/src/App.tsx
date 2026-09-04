@@ -1,5 +1,15 @@
 import { BrowserRouter, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
-import { Activity, Cog, Download, Files, LayoutDashboard, Settings, Tags, Waypoints } from 'lucide-react'
+import {
+  Activity,
+  BookOpen,
+  Cog,
+  Download,
+  Files,
+  LayoutDashboard,
+  Settings,
+  Tags,
+  Waypoints,
+} from 'lucide-react'
 import { NavRail, type NavRailItem } from '@hollis-labs/sysop-ui'
 import OperationsPage from '@/pages/OperationsPage'
 import LibraryPage from '@/pages/LibraryPage'
@@ -8,6 +18,8 @@ import EntitiesPage from '@/pages/EntitiesPage'
 import RoutingPage from '@/pages/RoutingPage'
 import ActivityPage from '@/pages/ActivityPage'
 import SettingsPage from '@/pages/SettingsPage'
+import ReaderPage from '@/pages/ReaderPage'
+import ReaderDetailPage from '@/pages/ReaderDetailPage'
 
 interface NavDest {
   path: string
@@ -18,6 +30,7 @@ interface NavDest {
 
 const NAV_DESTS: NavDest[] = [
   { path: '/operations', label: 'Operations', icon: <LayoutDashboard className="h-4 w-4" /> },
+  { path: '/reader', label: 'Reader', icon: <BookOpen className="h-4 w-4" /> },
   { path: '/library', label: 'Library', icon: <Files className="h-4 w-4" /> },
   { path: '/ingest', label: 'Ingest', icon: <Download className="h-4 w-4" /> },
   { path: '/entities', label: 'Entities', icon: <Tags className="h-4 w-4" /> },
@@ -26,7 +39,7 @@ const NAV_DESTS: NavDest[] = [
   { path: '/settings', label: 'Settings', icon: <Settings className="h-4 w-4" />, footer: true },
 ]
 
-function AppShell() {
+export function AppShell() {
   const navigate = useNavigate()
   const location = useLocation()
 
@@ -48,6 +61,8 @@ function AppShell() {
           <Routes>
             <Route path="/" element={<Navigate to="/operations" replace />} />
             <Route path="/operations" element={<OperationsPage />} />
+            <Route path="/reader" element={<ReaderPage />} />
+            <Route path="/reader/:fragmentId" element={<ReaderDetailPage />} />
             <Route path="/library" element={<LibraryPage />} />
             <Route path="/ingest" element={<IngestPage />} />
             <Route path="/entities" element={<EntitiesPage />} />
