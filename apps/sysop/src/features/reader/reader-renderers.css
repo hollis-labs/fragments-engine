@@ -1,0 +1,16 @@
+.reader-control:focus-visible,
+.reader-frame:focus-visible {
+  outline: 2px solid var(--color-primary) !important;
+  outline-offset: 2px !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-reader-dialog],
+  [data-reader-dialog] *,
+  .reader-motion {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 0.001ms !important;
+  }
+}
