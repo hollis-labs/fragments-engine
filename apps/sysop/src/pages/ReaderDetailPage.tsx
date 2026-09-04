@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Copy, ExternalLink, RefreshCw } from 'lucide-react'
 import {
   Button,
@@ -8,14 +8,15 @@ import {
 } from '@hollis-labs/sysop-ui'
 import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { ReaderQuickActionSeam } from '@/components/reader/ReaderQuickActionSeam'
-import { ReaderActions } from '@/components/reader/ReaderActions'
+import { ReaderActionPill, ReaderEffectActions, ReaderReadingControls } from '@/components/reader/ReaderInlineActions'
+import { ReaderNotes } from '@/components/reader/ReaderNotes'
 import { ReaderStateSummary } from '@/components/reader/ReaderStateSummary'
+import { ReaderTags } from '@/components/reader/ReaderTags'
 import { ReaderDetailHeader } from '@/components/reader/ReaderDetailHeader'
 import { ReaderContentRenderer } from '@/features/reader'
 import { useApi } from '@/hooks/useApi'
 import {
   isReaderBodyBackedText,
-  readingStateLabel,
   readerPlainTextExcerpt,
   safeReaderSourceHref,
   sourceHost,
@@ -36,6 +37,12 @@ export interface ReaderDetailPageProps {
 
 interface ReaderReturnState {
   readerReturnPath?: string
+}
+
+interface ReaderNeighbors {
+  fragmentId?: string
+  previous?: string
+  next?: string
 }
 
 function detailErrorMessage(error: unknown): string {
@@ -69,6 +76,12 @@ export default function ReaderDetailPage({
   const [error, setError] = useState<string>()
   const [reload, setReload] = useState(0)
   const [copyStatus, setCopyStatus] = useState<string>()
+  const [neighbors, setNeighbors] = useState<ReaderNeighbors>({})
+  const scrollRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    scrollRef.current?.classList.add('reader-hide-scrollbar')
+  }, [])
 
   useEffect(() => {
     if (invalidRevision) {
@@ -107,6 +120,42 @@ export default function ReaderDetailPage({
     return () => controller.abort()
   }, [api, fragmentId, invalidRevision, location.search, location.state, navigate, reload, revisionId])
 
+  useEffect(() => {
+    if (!item?.fragment_id || revisionId) {
+      return
+    }
+    const controller = new AbortController()
+    void (async () => {
+      const ids: string[] = []
+      const seenIDs = new Set<string>()
+      const seenCursors = new Set<string>()
+      let cursor: string | undefined
+
+      for (let page = 0; page < 100; page += 1) {
+        const response = await api.fetchReaderItems({ scope: 'inbox', cursor }, { signal: controller.signal })
+        for (const candidate of response.items) {
+          if (seenIDs.has(candidate.fragment_id)) continue
+          seenIDs.add(candidate.fragment_id)
+          ids.push(candidate.fragment_id)
+        }
+        if (!response.next_cursor || seenCursors.has(response.next_cursor)) break
+        seenCursors.add(response.next_cursor)
+        cursor = response.next_cursor
+      }
+
+      if (controller.signal.aborted) return
+      const index = ids.indexOf(item.fragment_id)
+      setNeighbors(index < 0 ? {} : {
+        fragmentId: item.fragment_id,
+        previous: ids[index - 1],
+        next: ids[index + 1],
+      })
+    })().catch(() => {
+      if (!controller.signal.aborted) setNeighbors({})
+    })
+    return () => controller.abort()
+  }, [api, item?.fragment_id, revisionId])
+
   const pin = useMemo<ReaderRevisionPin | undefined>(
     () =>
       item
@@ -116,6 +165,7 @@ export default function ReaderDetailPage({
   )
   const sidecar = pin ? renderSidecar?.(pin) : undefined
   const sourceHref = item ? safeReaderSourceHref(item) : undefined
+  const activeNeighbors = !revisionId && neighbors.fragmentId === item?.fragment_id ? neighbors : {}
 
   function goBack() {
     const state = location.state as ReaderReturnState | null
@@ -125,6 +175,29 @@ export default function ReaderDetailPage({
     }
     navigate('/reader?scope=inbox')
   }
+
+  function openNeighbor(nextFragmentID: string | undefined) {
+    if (!nextFragmentID) return
+    navigate(`/reader/${encodeURIComponent(nextFragmentID)}`, { state: location.state })
+  }
+
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.defaultPrevented || event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return
+      if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
+      const target = event.target
+      if (
+        target instanceof Element &&
+        target.closest('input, textarea, select, [contenteditable="true"], [role="dialog"]')
+      ) return
+      const destination = event.key === 'ArrowLeft' ? activeNeighbors.previous : activeNeighbors.next
+      if (!destination) return
+      event.preventDefault()
+      openNeighbor(destination)
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  })
 
   async function copyLink() {
     try {
@@ -140,17 +213,19 @@ export default function ReaderDetailPage({
     <ReaderDetailHeader
       title={item?.display.title.value || (loading ? 'Loading fragment' : 'Reader item')}
       onBack={goBack}
-      readingState={item ? readingStateLabel(item.reading_state.state) : undefined}
+      onPrevious={() => openNeighbor(activeNeighbors.previous)}
+      onNext={() => openNeighbor(activeNeighbors.next)}
+      hasPrevious={Boolean(activeNeighbors.previous)}
+      hasNext={Boolean(activeNeighbors.next)}
+      readingState={item ? <ReaderReadingControls item={item} onItemChange={setItem} /> : undefined}
       actions={
         <>
           {item && pin && (
-            <ReaderQuickActionSeam>
-              {renderActions ? (
-                renderActions(item, pin)
-              ) : (
-                <ReaderActions key={item.fragment_id} item={item} onItemChange={setItem} />
-              )}
-            </ReaderQuickActionSeam>
+            renderActions ? (
+              <ReaderQuickActionSeam>{renderActions(item, pin)}</ReaderQuickActionSeam>
+            ) : (
+              <ReaderEffectActions key={item.fragment_id} item={item} onItemChange={setItem} />
+            )
           )}
           <Button
             variant="outline"
@@ -188,6 +263,7 @@ export default function ReaderDetailPage({
   return (
     <DetailPageLayout
       header={header}
+      scrollRef={scrollRef}
       aside={
         sidecar && pin ? (
           <aside
@@ -227,43 +303,8 @@ export default function ReaderDetailPage({
           pin={pin}
           sourceHref={sourceHref}
           renderContent={renderContent}
-        >
-
-          {(item.tags.combined.length > 0 || item.annotations.length > 0 || item.curated_note) && (
-            <section className="grid gap-7 border-t border-border-soft pt-6 lg:grid-cols-2">
-              <div>
-                <h2 className="text-[14px] font-semibold text-text">Tags</h2>
-                {item.tags.combined.length > 0 ? (
-                  <ul className="mt-3 flex flex-wrap gap-x-4 gap-y-2" aria-label="Tags">
-                    {item.tags.combined.map((tag) => (
-                      <li key={tag} className="text-[13px] text-text-muted">
-                        #{tag}
-                      </li>
-                    ))}
-                  </ul>
-                ) : (
-                  <p className="mt-2 text-[13px] text-text-subtle">No tags</p>
-                )}
-              </div>
-              <div>
-                <h2 className="text-[14px] font-semibold text-text">Capture context</h2>
-                {item.curated_note?.body_markdown ? (
-                  <p className="mt-3 whitespace-pre-wrap text-[13px] leading-5 text-text-muted">
-                    {readerPlainTextExcerpt(item.curated_note.body_markdown, 1000)}
-                  </p>
-                ) : item.annotations.length > 0 ? (
-                  <p className="mt-3 text-[13px] leading-5 text-text-muted">
-                    {item.annotations.length === 1
-                      ? '1 capture annotation is attached.'
-                      : `${item.annotations.length} capture annotations are attached.`}
-                  </p>
-                ) : (
-                  <p className="mt-2 text-[13px] text-text-subtle">No capture notes</p>
-                )}
-              </div>
-            </section>
-          )}
-        </ReaderDetailBody>
+          onItemChange={setItem}
+        />
       )}
     </DetailPageLayout>
   )
@@ -274,13 +315,13 @@ function ReaderDetailBody({
   pin,
   sourceHref,
   renderContent,
-  children,
+  onItemChange,
 }: {
   item: ReaderItem
   pin: ReaderRevisionPin
   sourceHref?: string
   renderContent?: ReaderDetailPageProps['renderContent']
-  children?: ReactNode
+  onItemChange: (item: ReaderItem) => void
 }) {
   const body = item.article.preview_markdown
   const summaryIsBody = isReaderBodyBackedText(item.display.summary.value, body)
@@ -329,6 +370,9 @@ function ReaderDetailBody({
           <p className="mt-3 text-[11px] text-text-subtle">
             Title from {item.display.title.source}; summary from {item.display.summary.source}
           </p>
+          <div className="mt-4">
+            <ReaderTags item={item} onItemChange={onItemChange} />
+          </div>
         </div>
 
         {sourceHref && (
@@ -345,6 +389,16 @@ function ReaderDetailBody({
       </section>
 
       <div className="w-full" data-reader-reading-stage>
+        {['image', 'gallery', 'video', 'audio', 'document'].includes(item.renderer) &&
+          item.operations.acquisition.available === 0 && (
+          <div className="mb-4 flex min-h-24 flex-wrap items-center justify-between gap-4 border-y border-border-soft py-4">
+            <div>
+              <p className="text-[13px] font-medium text-text">Captured media is not loaded</p>
+              <p className="mt-1 text-[12px] text-text-subtle">Load an available representation to preview it here.</p>
+            </div>
+            <ReaderActionPill item={item} onItemChange={onItemChange} command="request_asset_acquisition" />
+          </div>
+        )}
         {renderContent ? (
           renderContent(item, pin)
         ) : (
@@ -354,7 +408,9 @@ function ReaderDetailBody({
 
       <ReaderStateSummary item={item} />
 
-      {children}
+      <section className="border-t border-border-soft pt-6">
+        <ReaderNotes item={item} onItemChange={onItemChange} />
+      </section>
     </div>
   )
 }

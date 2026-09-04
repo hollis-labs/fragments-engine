@@ -1,13 +1,17 @@
-import { ImageIcon, Images, Video } from 'lucide-react'
+import { useRef, useState } from 'react'
+import { ImageIcon, Images, Play, Video } from 'lucide-react'
 import { cn } from '@hollis-labs/sysop-ui'
 
+import { readerControlClass, stopReaderNavigation } from './interaction'
 import {
   availableVariantHref,
   imageVariants,
   mediaState,
   orderedMedia,
+  trustedYouTubeEmbedURL,
   type ResourceState,
 } from './media'
+import { MediaDialog } from './media-dialog'
 import { ResourceStatePanel } from './resource-state'
 import type { ReaderMediaItem, ReaderRenderableItem } from './types'
 
@@ -15,6 +19,7 @@ const GALLERY_ROLES = new Set(['primary', 'gallery_item', 'hero', 'inline'])
 
 interface CardVisual {
   href?: string
+  largeHref?: string
   alt: string
   label: string
   state: ResourceState
@@ -55,9 +60,12 @@ function selectCardVisual(item: ReaderRenderableItem): CardVisual | undefined {
     if (!candidate) {
       return { alt: '', label: 'Image', state: 'unavailable' }
     }
-    const href = imageHref(candidate)
+    const variants = imageVariants(candidate)
+    const href = variants.preview && availableVariantHref(variants.preview)
+    const largeHref = variants.large && availableVariantHref(variants.large)
     return {
       href,
+      largeHref,
       alt: visualAlt(candidate, `${title} image`),
       label: 'Image',
       state: href ? 'available' : unavailableState([candidate]),
@@ -74,12 +82,20 @@ function selectCardVisual(item: ReaderRenderableItem): CardVisual | undefined {
       .map((candidate) => ({
         media: candidate,
         href: candidate.kind === 'image' ? imageHref(candidate) : posterHref(candidate),
+        largeHref:
+          candidate.kind === 'image'
+            ? (() => {
+                const large = imageVariants(candidate).large
+                return large && availableVariantHref(large)
+              })()
+            : posterHref(candidate),
       }))
       .find((candidate) => candidate.href)
     const selected = available?.media ?? candidates[0]
     const countLabel = candidates.length === 1 ? '1 item' : `${candidates.length} items`
     return {
       href: available?.href,
+      largeHref: available?.largeHref,
       alt: selected ? visualAlt(selected, `${title} gallery preview`) : '',
       label: `Gallery · ${countLabel}`,
       state: available?.href ? 'available' : unavailableState(candidates),
@@ -114,7 +130,7 @@ function VisualIcon({ renderer }: { renderer: string }) {
   return <ImageIcon className={className} aria-hidden="true" />
 }
 
-/** A non-interactive, authorized visual summary for Reader list cards. */
+/** An authorized card preview that opens media without navigating away from Reader. */
 export function ReaderCardVisual({
   item,
   className,
@@ -122,6 +138,8 @@ export function ReaderCardVisual({
   item: ReaderRenderableItem
   className?: string
 }) {
+  const [open, setOpen] = useState(false)
+  const triggerRef = useRef<HTMLButtonElement>(null)
   const visual = selectCardVisual(item)
   if (!visual) return null
 
@@ -137,25 +155,69 @@ export function ReaderCardVisual({
     )
   }
 
+  const embedURL = item.renderer === 'video' ? trustedYouTubeEmbedURL(item.playback) : undefined
+  const dialogHref = visual.largeHref ?? visual.href
+  const dialogTitle = item.display.title.value || (item.renderer === 'video' ? 'Captured video' : 'Captured image')
+
   return (
-    <figure
-      className={cn(
-        'relative aspect-[16/10] max-h-40 w-full overflow-hidden rounded-sm border border-border bg-panel-2',
-        className,
-      )}
-      data-reader-card-visual
-      aria-label={visual.label}
-    >
-      <img
-        src={visual.href}
-        alt={visual.alt}
-        loading="lazy"
-        className="pointer-events-none h-full w-full object-cover"
-      />
-      <figcaption className="absolute inset-x-0 bottom-0 flex items-center gap-1.5 bg-panel-overlay-strong/95 px-2.5 py-1.5 text-[11px] font-medium text-text">
-        <VisualIcon renderer={item.renderer} />
-        {visual.label}
-      </figcaption>
-    </figure>
+    <>
+      <button
+        ref={triggerRef}
+        type="button"
+        className={cn(
+          readerControlClass,
+          'group relative block aspect-[16/10] max-h-40 w-full overflow-hidden rounded-sm border border-border bg-panel-2 text-left',
+          className,
+        )}
+        data-reader-card-visual
+        data-reader-nav-exclude
+        aria-label={item.renderer === 'video' ? `Play video: ${dialogTitle}` : `View larger image: ${dialogTitle}`}
+        onClick={(event) => {
+          stopReaderNavigation(event)
+          setOpen(true)
+        }}
+        onKeyDown={stopReaderNavigation}
+      >
+        <img
+          src={visual.href}
+          alt={visual.alt}
+          loading="lazy"
+          className="pointer-events-none h-full w-full object-cover transition-opacity group-hover:opacity-90 motion-reduce:transition-none"
+        />
+        <span className="absolute inset-x-0 bottom-0 flex items-center gap-1.5 bg-panel-overlay-strong/95 px-2.5 py-1.5 text-[11px] font-medium text-text">
+          {item.renderer === 'video' ? <Play className="h-3.5 w-3.5" aria-hidden="true" /> : <VisualIcon renderer={item.renderer} />}
+          {item.renderer === 'video' ? 'Play video' : visual.label}
+        </span>
+      </button>
+
+      <MediaDialog
+        open={open}
+        onOpenChange={setOpen}
+        returnFocusRef={triggerRef}
+        title={dialogTitle}
+        description={item.renderer === 'video' ? 'Video player' : 'Larger image preview'}
+        minimal
+      >
+        <div className="flex max-h-[calc(100dvh-1rem)] min-h-0 items-center justify-center overflow-auto bg-bg">
+          {embedURL ? (
+            <iframe
+              className="reader-frame aspect-video max-h-[calc(100dvh-1rem)] w-full border-0 bg-bg"
+              src={embedURL}
+              title={`YouTube video: ${dialogTitle}`}
+              sandbox="allow-scripts allow-same-origin allow-presentation"
+              allow="encrypted-media; picture-in-picture; fullscreen"
+              allowFullScreen
+              referrerPolicy="strict-origin-when-cross-origin"
+            />
+          ) : (
+            <img
+              src={dialogHref}
+              alt={visual.alt}
+              className="max-h-[calc(100dvh-2rem)] max-w-full object-contain"
+            />
+          )}
+        </div>
+      </MediaDialog>
+    </>
   )
 }

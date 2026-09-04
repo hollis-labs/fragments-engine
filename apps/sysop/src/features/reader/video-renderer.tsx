@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react'
-import { Expand, FileText, Play } from 'lucide-react'
+import { Expand, FileText } from 'lucide-react'
 import { Button, cn } from '@hollis-labs/sysop-ui'
 
 import { ArticleRenderer } from './article-renderer'
@@ -93,7 +93,6 @@ export function VideoRenderer({ item, presentation, className }: ReaderRendererP
   const videoMedia = item.media.find((entry) => entry.kind === 'video')
   const playbackState = videoMedia ? mediaState(videoMedia) : 'unavailable'
   const transcript = transcriptResource(item.media)
-  const [playerLoaded, setPlayerLoaded] = useState(false)
   const [expanded, setExpanded] = useState(false)
   const expandRef = useRef<HTMLButtonElement>(null)
   const title = item.display.title.value || 'Untitled video'
@@ -106,9 +105,9 @@ export function VideoRenderer({ item, presentation, className }: ReaderRendererP
       data-reader-renderer="video"
       data-reader-presentation={presentation}
     >
-      <div className="overflow-hidden rounded-md border border-border bg-panel-2">
+      <div className="overflow-hidden">
         <div className="relative aspect-video w-full overflow-hidden bg-bg">
-          {embedURL && playerLoaded ? (
+          {embedURL ? (
             <YouTubePlayer src={embedURL} title={title} />
           ) : poster ? (
             <img src={poster} alt={`${title} poster`} className="h-full w-full object-contain" loading="lazy" />
@@ -118,24 +117,10 @@ export function VideoRenderer({ item, presentation, className }: ReaderRendererP
             </div>
           )}
 
-          {embedURL && !playerLoaded && (
-            <button
-              type="button"
-              className={`${readerControlClass} absolute inset-x-3 bottom-3 mx-auto flex w-fit items-center gap-2 border border-border-strong bg-panel-overlay-strong/95 px-4 text-sm font-medium text-text`}
-              onClick={(event) => {
-                stopReaderNavigation(event)
-                setPlayerLoaded(true)
-              }}
-              onKeyDown={stopReaderNavigation}
-            >
-              <Play className="h-4 w-4" aria-hidden="true" />
-              Load trusted YouTube player
-            </button>
-          )}
         </div>
 
         {embedURL && (
-          <div className="flex justify-end border-t border-border px-3 py-2">
+          <div className="flex justify-end py-2">
             <Button
               ref={expandRef}
               type="button"

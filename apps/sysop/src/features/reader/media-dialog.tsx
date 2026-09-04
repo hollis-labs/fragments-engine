@@ -19,6 +19,7 @@ interface MediaDialogProps {
   description: string
   children: React.ReactNode
   onKeyDown?: (event: KeyboardEvent<HTMLDivElement>) => void
+  minimal?: boolean
 }
 
 export function MediaDialog({
@@ -29,6 +30,7 @@ export function MediaDialog({
   description,
   children,
   onKeyDown,
+  minimal = false,
 }: MediaDialogProps) {
   const wasOpen = useRef(open)
 
@@ -49,22 +51,20 @@ export function MediaDialog({
         onClick={stopReaderNavigation}
         onKeyDown={onKeyDown}
       >
-        <div className="flex items-start gap-4 border-b border-border px-4 py-3 pr-16">
+        <div className={minimal ? 'sr-only' : 'flex items-start gap-4 border-b border-border px-4 py-3 pr-16'}>
           <div className="min-w-0">
-            <DialogTitle className="truncate text-base font-semibold leading-6 text-text">
-              {title}
-            </DialogTitle>
-            <DialogDescription className="mt-0.5 text-xs leading-5 text-text-subtle">
-              {description}
-            </DialogDescription>
+            <DialogTitle className="truncate text-base font-semibold leading-6 text-text">{title}</DialogTitle>
+            <DialogDescription className="mt-0.5 text-xs leading-5 text-text-subtle">{description}</DialogDescription>
           </div>
+        </div>
+        <div className={minimal ? 'absolute right-2 top-2 z-10' : ''}>
           <DialogClose
             render={
               <Button
                 type="button"
                 variant="ghost"
                 size="icon"
-                className={`${readerControlClass} absolute right-2 top-2`}
+                className={`${readerControlClass} ${minimal ? 'border border-border-strong bg-panel-overlay-strong/95' : 'absolute right-2 top-2'}`}
                 aria-label={`Close ${title}`}
               />
             }
