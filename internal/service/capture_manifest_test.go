@@ -64,6 +64,106 @@ func TestCaptureManifestAcceptReplayConflictAndAtomicFollowUp(t *testing.T) {
 	}
 }
 
+func TestCaptureManifestAnnotationConflictDoesNotAdvanceCaptureHistory(t *testing.T) {
+	ctx := context.Background()
+	st, svc, captureRepo := openManifestTestService(t, filepath.Join(t.TempDir(), "capture.db"))
+	firstEnvelope := decodeEnvelope(t, captureFixture(t))
+	first, err := svc.AcceptManifest(ctx, encodeEnvelope(t, firstEnvelope))
+	if err != nil {
+		t.Fatalf("accept initial manifest: %v", err)
+	}
+	if first.ReaderItem.CaptureCount != 1 {
+		t.Fatalf("initial capture_count = %d, want 1", first.ReaderItem.CaptureCount)
+	}
+
+	tables := []string{
+		"fragments", "fragment_source_identities", "fragment_revisions",
+		"fragment_identity_aliases",
+		"capture_attempts", "capture_annotations", "fragment_tag_observations",
+		"fragment_description_observations", "media_assets", "asset_variants",
+		"media_asset_identity_aliases", "media_blobs", "attachment_refs",
+		"capture_asset_bindings", "capture_asset_outcomes", "capture_followup_outbox",
+		"enrichment_observations", "fragment_capability_coverage",
+	}
+	wantRows := protocolTableRows(t, st.DB, tables)
+
+	conflicting := decodeEnvelope(t, captureFixture(t))
+	conflicting.CaptureID = "01KCAPTURE0000000000000001"
+	conflicting.CapturedAt = firstEnvelope.CapturedAt.Add(time.Minute)
+	if conflicting.PageContext == nil {
+		conflicting.PageContext = &capturecontract.PageContext{}
+	}
+	conflicting.PageContext.DocumentTitle = "Conflicting recapture context"
+	conflicting.Tags = append(conflicting.Tags, "must-roll-back")
+	conflicting.Annotations[0].Text = "A conflicting reuse must not be accepted."
+	conflicting.Annotations[0].Selector.Exact = conflicting.Annotations[0].Text
+	_, err = svc.AcceptManifest(ctx, encodeEnvelope(t, conflicting))
+	var conflict *repository.CaptureConflictError
+	if !errors.As(err, &conflict) || !strings.Contains(conflict.Reason, "annotation ID") {
+		t.Fatalf("conflicting annotation error = %T %v, want annotation capture conflict", err, err)
+	}
+
+	gotRows := protocolTableRows(t, st.DB, tables)
+	for _, table := range tables {
+		if gotRows[table] != wantRows[table] {
+			t.Fatalf("%s changed after rejected manifest\n got=%s\nwant=%s", table, gotRows[table], wantRows[table])
+		}
+	}
+	count, err := captureRepo.CaptureCount(ctx, first.FragmentID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("capture history count after rejected manifest = %d, want 1", count)
+	}
+	attempts, err := captureRepo.ListAttempts(ctx, first.FragmentID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(attempts) != 1 || attempts[0].CaptureID != first.CaptureID {
+		t.Fatalf("capture history changed after rejection: %+v", attempts)
+	}
+	if _, err := captureRepo.GetAttempt(ctx, conflicting.CaptureID); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("rejected capture attempt lookup error = %v, want sql.ErrNoRows", err)
+	}
+
+	valid := decodeEnvelope(t, captureFixture(t))
+	valid.CaptureID = conflicting.CaptureID
+	valid.CapturedAt = conflicting.CapturedAt
+	valid.PageContext = &capturecontract.PageContext{DocumentTitle: "Accepted recapture context"}
+	valid.Tags = append(valid.Tags, "accepted-recapture")
+	valid.Annotations[0].AnnotationID = "01KANNOTATION00000000000001"
+	valid.Annotations[0].Text = "A fresh observation is additive."
+	valid.Annotations[0].Selector.Exact = valid.Annotations[0].Text
+	second, err := svc.AcceptManifest(ctx, encodeEnvelope(t, valid))
+	if err != nil {
+		t.Fatalf("accept deliberate recapture: %v", err)
+	}
+	if second.IdempotentReplay || second.ReaderItem.CaptureCount != 2 {
+		t.Fatalf("deliberate recapture = %+v, want non-replay capture_count=2", second)
+	}
+	if second.FragmentID != first.FragmentID || second.FragmentRevisionID != first.FragmentRevisionID {
+		t.Fatalf("recapture changed stable material identity: first=%+v second=%+v", first, second)
+	}
+	attempts, err = captureRepo.ListAttempts(ctx, first.FragmentID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(attempts) != 2 {
+		t.Fatalf("successful capture history = %+v, want two attempts", attempts)
+	}
+	annotations, err := captureRepo.ListAnnotations(ctx, first.FragmentID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(annotations) != 2 || annotations[0].ID == annotations[1].ID {
+		t.Fatalf("successful recapture did not retain additive annotation context: %+v", annotations)
+	}
+	if !containsString(second.ReaderItem.Tags.Combined, "accepted-recapture") || containsString(second.ReaderItem.Tags.Combined, "must-roll-back") {
+		t.Fatalf("successful recapture tags include rejected context or omit accepted context: %+v", second.ReaderItem.Tags.Combined)
+	}
+}
+
 func TestCaptureManifestLateProjectionFailureRollsBackEverything(t *testing.T) {
 	st, svc, captureRepo := openManifestTestService(t, filepath.Join(t.TempDir(), "capture.db"))
 	envelope := decodeEnvelope(t, captureFixture(t))
@@ -772,13 +872,66 @@ func assertContractJSON(t *testing.T, schema capturecontract.SchemaName, value a
 
 func assertProtocolTableCount(t *testing.T, db interface{ QueryRow(string, ...any) *sql.Row }, table string, want int) {
 	t.Helper()
+	got := protocolTableCount(t, db, table)
+	if got != want {
+		t.Fatalf("%s count = %d, want %d", table, got, want)
+	}
+}
+
+func protocolTableCount(t *testing.T, db interface{ QueryRow(string, ...any) *sql.Row }, table string) int {
+	t.Helper()
 	var got int
 	if err := db.QueryRow("SELECT COUNT(*) FROM " + table).Scan(&got); err != nil {
 		t.Fatal(err)
 	}
-	if got != want {
-		t.Fatalf("%s count = %d, want %d", table, got, want)
+	return got
+}
+
+func protocolTableRows(t *testing.T, db *sql.DB, tables []string) map[string]string {
+	t.Helper()
+	snapshot := make(map[string]string, len(tables))
+	for _, table := range tables {
+		rows, err := db.Query("SELECT * FROM " + table + " ORDER BY rowid")
+		if err != nil {
+			t.Fatalf("snapshot %s: %v", table, err)
+		}
+		columns, err := rows.Columns()
+		if err != nil {
+			rows.Close()
+			t.Fatalf("snapshot %s columns: %v", table, err)
+		}
+		var records [][]any
+		for rows.Next() {
+			values := make([]any, len(columns))
+			destinations := make([]any, len(columns))
+			for i := range values {
+				destinations[i] = &values[i]
+			}
+			if err := rows.Scan(destinations...); err != nil {
+				rows.Close()
+				t.Fatalf("snapshot %s row: %v", table, err)
+			}
+			for i, value := range values {
+				if raw, ok := value.([]byte); ok {
+					values[i] = string(raw)
+				}
+			}
+			records = append(records, values)
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			t.Fatalf("snapshot %s rows: %v", table, err)
+		}
+		if err := rows.Close(); err != nil {
+			t.Fatalf("snapshot %s close: %v", table, err)
+		}
+		raw, err := json.Marshal(records)
+		if err != nil {
+			t.Fatalf("snapshot %s encode: %v", table, err)
+		}
+		snapshot[table] = string(raw)
 	}
+	return snapshot
 }
 
 func digestBytes(value []byte) domain.ContentDigest {

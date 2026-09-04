@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	capturecontract "github.com/hollis-labs/fragments-engine/contracts/browser-capture-reader/v1"
 )
@@ -87,6 +88,50 @@ func TestCaptureHTTPManifestLookupUploadCompletionAndReplay(t *testing.T) {
 	completedReplay := serveCaptureRequest(t, server, http.MethodPost, "/v1/captures/"+accepted.CaptureID+"/complete", "application/json", completionRaw, "")
 	if completedReplay.Body.String() != completed.Body.String() {
 		t.Fatalf("completion replay changed snapshot\nfirst=%s\nreplay=%s", completed.Body.String(), completedReplay.Body.String())
+	}
+}
+
+func TestCaptureHTTPRejectedAnnotationConflictDoesNotAdvanceCount(t *testing.T) {
+	server := NewServer(writeCaptureAPIConfig(t)).Handler()
+	var initial capturecontract.CaptureEnvelope
+	if err := json.Unmarshal(readCaptureAPIFixture(t, "valid-capture-youtube.json"), &initial); err != nil {
+		t.Fatal(err)
+	}
+	created := serveCaptureRequest(t, server, http.MethodPost, "/v1/captures", "application/json", encodeCaptureAPIEnvelope(t, initial), "")
+	if created.Code != http.StatusCreated {
+		t.Fatalf("initial manifest status = %d body=%s", created.Code, created.Body.String())
+	}
+	var first capturecontract.CaptureManifestResponse
+	if err := json.Unmarshal(created.Body.Bytes(), &first); err != nil {
+		t.Fatal(err)
+	}
+
+	conflicting := decodeCaptureAPIEnvelope(t, readCaptureAPIFixture(t, "valid-capture-youtube.json"))
+	conflicting.CaptureID = "01KCAPTURE0000000000000001"
+	conflicting.CapturedAt = initial.CapturedAt.Add(time.Minute)
+	conflicting.Tags = append(conflicting.Tags, "must-roll-back")
+	conflicting.Annotations[0].Text = "Conflicting reuse"
+	conflicting.Annotations[0].Selector.Exact = conflicting.Annotations[0].Text
+	rejected := serveCaptureRequest(t, server, http.MethodPost, "/v1/captures", "application/json", encodeCaptureAPIEnvelope(t, conflicting), "")
+	if rejected.Code != http.StatusConflict {
+		t.Fatalf("conflicting manifest status = %d body=%s", rejected.Code, rejected.Body.String())
+	}
+
+	valid := decodeCaptureAPIEnvelope(t, readCaptureAPIFixture(t, "valid-capture-youtube.json"))
+	valid.CaptureID = conflicting.CaptureID
+	valid.CapturedAt = conflicting.CapturedAt
+	valid.Tags = append(valid.Tags, "accepted-recapture")
+	valid.Annotations[0].AnnotationID = "01KANNOTATION00000000000001"
+	accepted := serveCaptureRequest(t, server, http.MethodPost, "/v1/captures", "application/json", encodeCaptureAPIEnvelope(t, valid), "")
+	if accepted.Code != http.StatusCreated {
+		t.Fatalf("valid recapture status = %d body=%s", accepted.Code, accepted.Body.String())
+	}
+	var second capturecontract.CaptureManifestResponse
+	if err := json.Unmarshal(accepted.Body.Bytes(), &second); err != nil {
+		t.Fatal(err)
+	}
+	if second.ReaderItem.CaptureCount != 2 || second.FragmentID != first.FragmentID || second.FragmentRevisionID != first.FragmentRevisionID {
+		t.Fatalf("valid recapture = %+v, want stable identity and capture_count=2", second)
 	}
 }
 
@@ -204,6 +249,24 @@ func readCaptureAPIFixture(t *testing.T, name string) []byte {
 		t.Fatal(err)
 	}
 	return raw
+}
+
+func encodeCaptureAPIEnvelope(t *testing.T, envelope capturecontract.CaptureEnvelope) []byte {
+	t.Helper()
+	raw, err := json.Marshal(envelope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return raw
+}
+
+func decodeCaptureAPIEnvelope(t *testing.T, raw []byte) capturecontract.CaptureEnvelope {
+	t.Helper()
+	var envelope capturecontract.CaptureEnvelope
+	if err := json.Unmarshal(raw, &envelope); err != nil {
+		t.Fatal(err)
+	}
+	return envelope
 }
 
 func assertCaptureAPIContract(t *testing.T, schema capturecontract.SchemaName, raw []byte) {
