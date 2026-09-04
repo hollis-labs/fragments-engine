@@ -83,6 +83,27 @@ export const mixedGalleryFixture = readerFixture({
     imageMedia(8),
     {
       attachment: {
+        ...attachment(1),
+        media_asset_id: 'gallery-video-asset',
+      },
+      media_asset_id: 'gallery-video-asset',
+      provider_media_id: 'gallery-video-provider-id',
+      kind: 'video',
+      alt_text: 'Gallery video 2',
+      variants: [
+        {
+          asset_variant_id: 'gallery-video-original',
+          kind: 'original',
+          custody: 'reference',
+          acquisition_state: 'reference_only',
+          mime_type: 'video/mp4',
+          source_url: 'https://untrusted.example/video.mp4',
+        },
+        availableImageVariant('gallery-video-poster', 'poster'),
+      ],
+    },
+    {
+      attachment: {
         ...attachment(3, 'poster'),
         attachment_id: 'poster-attachment',
         media_asset_id: 'poster-asset',
@@ -166,6 +187,7 @@ export const videoFixture = readerFixture({
         custody: 'mirror',
         acquisition_state: 'available',
         mime_type: 'text/vtt',
+        byte_size: 128,
         content_href: '/v1/media/variants/youtube-transcript/content?fragment_id=fragment-reader&revision_id=revision-reader-1',
       }],
     },

@@ -141,6 +141,17 @@ func TestReaderRendererUsesProviderNeutralMediaCapabilityPriority(t *testing.T) 
 	if got := readerRenderer(testReaderRevision("revision"), videoAndTranscript); got != "video" {
 		t.Fatalf("video + timed text renderer=%q, want video", got)
 	}
+	mixedCarousel := []capturecontract.ReaderMediaItem{
+		{Attachment: capturecontract.AttachmentRef{AttachmentID: "image-ref", FragmentRevisionID: "revision", MediaAssetID: "image-asset", Role: "gallery_item", Position: 0},
+			MediaAssetID: "image-asset", Kind: "image", Variants: usable},
+		{Attachment: capturecontract.AttachmentRef{AttachmentID: "video-ref", FragmentRevisionID: "revision", MediaAssetID: "video-asset", Role: "gallery_item", Position: 1},
+			MediaAssetID: "video-asset", Kind: "video", Variants: usable},
+		{Attachment: capturecontract.AttachmentRef{AttachmentID: "image-2-ref", FragmentRevisionID: "revision", MediaAssetID: "image-2-asset", Role: "gallery_item", Position: 2},
+			MediaAssetID: "image-2-asset", Kind: "image", Variants: usable},
+	}
+	if got := readerRenderer(testReaderRevision("revision"), mixedCarousel); got != "gallery" {
+		t.Fatalf("mixed image/video carousel renderer=%q, want gallery", got)
+	}
 	articleAndAuxiliary := []capturecontract.ReaderMediaItem{
 		{Attachment: capturecontract.AttachmentRef{AttachmentID: "transcript-ref", FragmentRevisionID: "revision", MediaAssetID: "transcript-asset", Role: "transcript", Position: 0},
 			MediaAssetID: "transcript-asset", Kind: "timed_text", Variants: usable},

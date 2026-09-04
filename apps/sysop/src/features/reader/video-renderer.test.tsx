@@ -93,4 +93,39 @@ describe('VideoRenderer', () => {
     expect(screen.getByText('This representation is still being acquired.')).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Load trusted YouTube player' })).toBeTruthy()
   })
+
+  it.each([
+    ['pending', undefined, 'pending'],
+    ['failed', undefined, 'failed'],
+    ['available', 0, 'unavailable'],
+  ] as const)('does not let an available poster promote %s subtitles to a useful transcript', (state, byteSize, expected) => {
+    const video = videoFixture.media[0]
+    const item = {
+      ...videoFixture,
+      media: [{
+        ...video,
+        variants: [
+          ...video.variants.filter((variant) => variant.kind === 'poster'),
+          {
+            asset_variant_id: `youtube-subtitles-${state}`,
+            kind: 'subtitles' as const,
+            custody: 'mirror' as const,
+            acquisition_state: state,
+            byte_size: byteSize,
+            content_href: state === 'available'
+              ? '/v1/media/variants/youtube-subtitles-empty/content?fragment_id=fragment-reader&revision_id=revision-reader-1'
+              : undefined,
+            failure: state === 'failed'
+              ? { code: 'captions_failed', message: 'Captions failed.', retryable: true }
+              : undefined,
+          },
+        ],
+      }],
+    }
+    const { container } = render(<VideoRenderer item={item} presentation="card" />)
+
+    expect(container.querySelector('[data-transcript-state]')?.getAttribute('data-transcript-state')).toBe(expected)
+    expect(screen.queryByRole('link', { name: 'Open transcript' })).toBeNull()
+    expect(screen.getByRole('button', { name: 'Load trusted YouTube player' })).toBeTruthy()
+  })
 })

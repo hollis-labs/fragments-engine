@@ -9,6 +9,7 @@ import {
   mediaState,
   orderedMedia,
   stateLabel,
+  type ResourceState,
 } from './media'
 import { MediaDialog } from './media-dialog'
 import { ResourceStatePanel } from './resource-state'
@@ -20,20 +21,48 @@ interface GallerySlot {
   largeHref?: string
 }
 
+function slotKind(slot: GallerySlot): 'Image' | 'Video' {
+  return slot.media.kind === 'video' ? 'Video' : 'Image'
+}
+
+function slotState(slot: GallerySlot): ResourceState {
+  if (slot.media.kind === 'image') return mediaState(slot.media)
+
+  const originals = slot.media.variants.filter((variant) => variant.kind === 'original')
+  if (originals.some((variant) => availableVariantHref(variant) !== undefined)) return 'available'
+  if (originals.some((variant) => variant.acquisition_state === 'pending')) return 'pending'
+  if (originals.some((variant) => variant.acquisition_state === 'failed')) return 'failed'
+  if (originals.some((variant) => variant.acquisition_state === 'reference_only')) return 'reference_only'
+  return 'unavailable'
+}
+
 function slotAlt(slot: GallerySlot, title: string, index: number): string {
   return (
     slot.media.alt_text?.trim() ||
     slot.media.attachment.caption?.trim() ||
-    `${title.trim() || 'Captured gallery'} image ${index + 1}`
+    `${title.trim() || 'Captured gallery'} ${slot.media.kind === 'video' ? 'video poster' : 'image'} ${index + 1}`
   )
 }
 
 function gallerySlots(media: ReaderMediaItem[]): GallerySlot[] {
   return orderedMedia(media).filter((item) =>
-    item.kind === 'image' &&
+    (item.kind === 'image' || item.kind === 'video') &&
     ['primary', 'gallery_item', 'hero', 'inline'].includes(item.attachment.role),
   ).map((item) => {
-    const variants = imageVariants(item)
+    const variants = item.kind === 'image'
+      ? imageVariants(item)
+      : {
+          preview: item.variants.find(
+            (variant) =>
+              ['poster', 'preview', 'thumbnail'].includes(variant.kind) &&
+              availableVariantHref(variant) !== undefined,
+          ),
+          large: item.variants.find(
+            (variant) =>
+              ['poster', 'preview', 'thumbnail'].includes(variant.kind) &&
+              availableVariantHref(variant) !== undefined,
+          ),
+        }
     return {
       media: item,
       previewHref: variants.preview && availableVariantHref(variants.preview),
@@ -60,8 +89,9 @@ export function GalleryRenderer({ item, presentation, className }: ReaderRendere
 
   const boundedSelected = Math.min(selected, slots.length - 1)
   const current = slots[boundedSelected]
-  const currentState = mediaState(current.media)
+  const currentState = slotState(current)
   const currentAlt = slotAlt(current, item.display.title.value, boundedSelected)
+  const currentKind = slotKind(current)
 
   function moveTo(index: number): void {
     setSelected(Math.max(0, Math.min(index, slots.length - 1)))
@@ -104,7 +134,7 @@ export function GalleryRenderer({ item, presentation, className }: ReaderRendere
               setOpen(true)
             }}
             onKeyDown={stopReaderNavigation}
-            aria-label={`Open gallery at image ${boundedSelected + 1} of ${slots.length}`}
+            aria-label={`Open gallery at item ${boundedSelected + 1} of ${slots.length}`}
           >
             <img
               src={stage}
@@ -116,12 +146,15 @@ export function GalleryRenderer({ item, presentation, className }: ReaderRendere
               <Expand className="h-4 w-4" aria-hidden="true" />
               View gallery
             </span>
+            <span className="absolute left-2 top-2 rounded bg-panel-overlay-strong/95 px-2 py-1 text-[10px] font-medium uppercase tracking-wide text-text">
+              {currentKind}
+            </span>
           </button>
         ) : (
           <ResourceStatePanel
             state={currentState === 'available' ? 'unavailable' : currentState}
             className={presentation === 'card' ? 'm-3 min-h-40' : 'm-4 min-h-56'}
-            label={`Image ${boundedSelected + 1} is ${stateLabel(currentState).toLowerCase()}`}
+            label={`${currentKind} ${boundedSelected + 1} is ${stateLabel(currentState).toLowerCase()}`}
           />
         )}
       </div>
@@ -131,17 +164,18 @@ export function GalleryRenderer({ item, presentation, className }: ReaderRendere
           {boundedSelected + 1} of {slots.length}
         </p>
         <p className="truncate text-xs text-text-subtle">
-          {current.media.attachment.caption || stateLabel(currentState)}
+          {current.media.attachment.caption || `${currentKind} · ${stateLabel(currentState)}`}
         </p>
       </div>
 
       <ol
         className="mt-3 flex snap-x gap-2 overflow-x-auto pb-1"
-        aria-label="Gallery images in source order"
+        aria-label="Gallery items in source order"
       >
         {slots.map((slot, index) => {
           const selectedSlot = index === boundedSelected
-          const state = mediaState(slot.media)
+          const state = slotState(slot)
+          const kind = slotKind(slot)
           return (
             <li key={slot.media.attachment.attachment_id} className="shrink-0 snap-start">
               <button
@@ -154,7 +188,7 @@ export function GalleryRenderer({ item, presentation, className }: ReaderRendere
                   moveTo(index)
                 }}
                 onKeyDown={stopReaderNavigation}
-                aria-label={`Select image ${index + 1} of ${slots.length}: ${stateLabel(state)}`}
+                aria-label={`Select item ${index + 1} of ${slots.length}: ${kind}, ${stateLabel(state)}`}
                 aria-current={selectedSlot ? 'true' : undefined}
               >
                 {slot.previewHref ? (
@@ -173,6 +207,11 @@ export function GalleryRenderer({ item, presentation, className }: ReaderRendere
                 <span className="absolute left-1 top-1 rounded bg-panel-overlay-strong/95 px-1.5 py-0.5 font-mono text-[10px] tabular-nums text-text">
                   {index + 1}
                 </span>
+                {slot.media.kind === 'video' && (
+                  <span className="absolute bottom-1 right-1 rounded bg-panel-overlay-strong/95 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wide text-text">
+                    Video
+                  </span>
+                )}
               </button>
             </li>
           )
@@ -184,7 +223,7 @@ export function GalleryRenderer({ item, presentation, className }: ReaderRendere
         onOpenChange={setOpen}
         returnFocusRef={triggerRef}
         title={item.display.title.value || 'Captured gallery'}
-        description={`Image ${boundedSelected + 1} of ${slots.length}`}
+        description={`${currentKind} ${boundedSelected + 1} of ${slots.length}`}
         onKeyDown={handleDialogKeyDown}
       >
         <div className="grid min-h-0 grid-rows-[1fr_auto] bg-bg">
@@ -198,7 +237,7 @@ export function GalleryRenderer({ item, presentation, className }: ReaderRendere
             ) : (
               <ResourceStatePanel
                 state={currentState === 'available' ? 'unavailable' : currentState}
-                label={`Image ${boundedSelected + 1} is unavailable`}
+                label={`${currentKind} ${boundedSelected + 1} is unavailable`}
               />
             )}
           </div>
@@ -209,7 +248,7 @@ export function GalleryRenderer({ item, presentation, className }: ReaderRendere
               className={readerControlClass}
               onClick={() => moveTo(boundedSelected - 1)}
               disabled={boundedSelected === 0}
-              aria-label="Previous gallery image"
+              aria-label="Previous gallery item"
             >
               <ChevronLeft className="h-4 w-4" aria-hidden="true" />
               Previous
@@ -223,7 +262,7 @@ export function GalleryRenderer({ item, presentation, className }: ReaderRendere
               className={readerControlClass}
               onClick={() => moveTo(boundedSelected + 1)}
               disabled={boundedSelected === slots.length - 1}
-              aria-label="Next gallery image"
+              aria-label="Next gallery item"
             >
               Next
               <ChevronRight className="h-4 w-4" aria-hidden="true" />

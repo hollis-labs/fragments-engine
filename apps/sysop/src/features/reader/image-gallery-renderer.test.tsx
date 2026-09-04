@@ -52,14 +52,20 @@ describe('ImageRenderer', () => {
 })
 
 describe('GalleryRenderer', () => {
-  it('preserves ordered renderable image slots while excluding auxiliary media', () => {
-    render(<GalleryRenderer item={mixedGalleryFixture} presentation="detail" />)
-    expect(screen.getAllByText('1 of 3').length).toBeGreaterThan(0)
-    expect(screen.getByRole('button', { name: /select image 1 of 3: available/i })).toBeTruthy()
-    expect(screen.getByRole('button', { name: /select image 2 of 3: media unavailable/i })).toBeTruthy()
-    expect(screen.getByRole('button', { name: /select image 3 of 3: available/i })).toBeTruthy()
-    expect(screen.queryByText('Auxiliary poster')).toBeNull()
+  it('preserves ordered renderable image and video slots while excluding auxiliary media', () => {
+    const { container } = render(<GalleryRenderer item={mixedGalleryFixture} presentation="detail" />)
+    expect(screen.getAllByText('1 of 4').length).toBeGreaterThan(0)
+    expect(screen.getByRole('button', { name: /select item 1 of 4: image, available/i })).toBeTruthy()
+    const video = screen.getByRole('button', { name: /select item 2 of 4: video, source reference only/i })
+    expect(video).toBeTruthy()
+    expect(screen.getByRole('button', { name: /select item 3 of 4: image, media unavailable/i })).toBeTruthy()
+    expect(screen.getByRole('button', { name: /select item 4 of 4: image, available/i })).toBeTruthy()
+    fireEvent.click(video)
+    expect(screen.getByRole('img', { name: 'Gallery video 2' })).toBeTruthy()
+    expect(screen.getByText('Video · Source reference only')).toBeTruthy()
+    expect(screen.queryByAltText('Auxiliary poster')).toBeNull()
     expect(screen.queryByText(/transcript available/i)).toBeNull()
+    expect(container.innerHTML).not.toContain('untrusted.example')
   })
 
   it('supports Arrow keys and Home/End, closes on Escape, and returns focus', async () => {
@@ -69,14 +75,16 @@ describe('GalleryRenderer', () => {
         <GalleryRenderer item={mixedGalleryFixture} presentation="detail" />
       </div>,
     )
-    const trigger = screen.getByRole('button', { name: 'Open gallery at image 1 of 3' })
+    const trigger = screen.getByRole('button', { name: 'Open gallery at item 1 of 4' })
     fireEvent.click(trigger)
     const dialog = await screen.findByRole('dialog')
     expect(parentNavigation).not.toHaveBeenCalled()
     await waitFor(() => expect(dialog.contains(document.activeElement)).toBe(true))
 
     fireEvent.keyDown(dialog, { key: 'ArrowRight', code: 'ArrowRight' })
-    expect(within(dialog).getByText('Image 2 is unavailable')).toBeTruthy()
+    expect(within(dialog).getByRole('img', { name: 'Gallery video 2' })).toBeTruthy()
+    fireEvent.keyDown(dialog, { key: 'ArrowRight', code: 'ArrowRight' })
+    expect(within(dialog).getByText('Image 3 is unavailable')).toBeTruthy()
     fireEvent.keyDown(dialog, { key: 'End', code: 'End' })
     expect(within(dialog).getByRole('img', { name: 'Gallery item 9' })).toBeTruthy()
     fireEvent.keyDown(dialog, { key: 'Home', code: 'Home' })
@@ -88,7 +96,7 @@ describe('GalleryRenderer', () => {
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
     await waitFor(() => {
       expect(document.activeElement?.isConnected).toBe(true)
-      expect(document.activeElement?.getAttribute('aria-label')).toBe('Open gallery at image 1 of 3')
+      expect(document.activeElement?.getAttribute('aria-label')).toBe('Open gallery at item 1 of 4')
     })
   })
 })

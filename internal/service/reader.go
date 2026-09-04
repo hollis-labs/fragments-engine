@@ -450,6 +450,15 @@ func readerMediaContentHref(fragmentID, revisionID, variantID string) string {
 }
 
 func readerRenderer(revision domain.FragmentRevision, media []capturecontract.ReaderMediaItem) string {
+	renderableVisuals := 0
+	for _, item := range media {
+		if (item.Kind == "image" || item.Kind == "video") && readerRenderableRole(item.Attachment.Role) {
+			renderableVisuals++
+		}
+	}
+	if renderableVisuals > 1 {
+		return "gallery"
+	}
 	for _, item := range media {
 		if item.Kind == "video" && readerRenderableRole(item.Attachment.Role) {
 			return "video"
@@ -460,9 +469,6 @@ func readerRenderer(revision domain.FragmentRevision, media []capturecontract.Re
 		if item.Kind == "image" && readerRenderableRole(item.Attachment.Role) {
 			images++
 		}
-	}
-	if images > 1 {
-		return "gallery"
 	}
 	if images == 1 {
 		return "image"

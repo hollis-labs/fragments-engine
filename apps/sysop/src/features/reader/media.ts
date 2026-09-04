@@ -157,34 +157,28 @@ export interface TranscriptResource {
 }
 
 export function transcriptResource(media: ReaderMediaItem[]): TranscriptResource {
-  const candidates = orderedMedia(media).filter(
-    (item) =>
-      item.kind === 'timed_text' ||
-      item.attachment.role === 'transcript' ||
-      item.variants.some((variant) => variant.kind === 'transcript' || variant.kind === 'subtitles'),
+  const candidates = orderedMedia(media).flatMap((item) =>
+    item.variants.filter(
+      (variant) => variant.kind === 'transcript' || variant.kind === 'subtitles',
+    ),
   )
   if (candidates.length === 0) {
     return { state: 'unavailable', label: 'No transcript was captured.' }
   }
 
-  for (const item of candidates) {
-    const variant = item.variants.find(
-      (entry) =>
-        (entry.kind === 'transcript' || entry.kind === 'subtitles') &&
-        availableVariantHref(entry) !== undefined,
-    )
-    const href = variant && availableVariantHref(variant)
-    if (href) return { state: 'available', href, label: 'Transcript available.' }
+  for (const variant of candidates) {
+    const href = availableVariantHref(variant)
+    if (href && (variant.byte_size ?? 0) > 0) {
+      return { state: 'available', href, label: 'Transcript available.' }
+    }
   }
 
-  const state = candidates.reduce<ResourceState>((current, item) => {
-    const next = mediaState(item)
-    if (next === 'pending') return 'pending'
-    if (current === 'pending') return current
-    if (next === 'failed') return 'failed'
-    if (current === 'failed') return current
-    if (next === 'reference_only') return 'reference_only'
-    return current
-  }, 'unavailable')
+  const state: ResourceState = candidates.some((variant) => variant.acquisition_state === 'pending')
+    ? 'pending'
+    : candidates.some((variant) => variant.acquisition_state === 'failed')
+      ? 'failed'
+      : candidates.some((variant) => variant.acquisition_state === 'reference_only')
+        ? 'reference_only'
+        : 'unavailable'
   return { state, label: stateDescription(state) }
 }

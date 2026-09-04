@@ -80,6 +80,55 @@ describe('media selection', () => {
     )
     expect(transcriptResource(media).state).toBe('reference_only')
   })
+
+  it.each([
+    ['pending', 'pending'],
+    ['failed', 'failed'],
+  ] as const)('keeps %s subtitles independent from an available poster', (acquisitionState, expected) => {
+    const video = videoFixture.media[0]
+    const media = [{
+      ...video,
+      variants: [
+        ...video.variants.filter((variant) => variant.kind === 'poster'),
+        {
+          asset_variant_id: `youtube-subtitles-${acquisitionState}`,
+          kind: 'subtitles' as const,
+          custody: 'mirror' as const,
+          acquisition_state: acquisitionState,
+          failure: acquisitionState === 'failed'
+            ? { code: 'captions_failed', message: 'Captions failed.', retryable: true }
+            : undefined,
+        },
+      ],
+    }]
+
+    expect(mediaState(media[0])).toBe('available')
+    expect(transcriptResource(media).state).toBe(expected)
+    expect(transcriptResource(media).href).toBeUndefined()
+  })
+
+  it('does not expose an empty available subtitle as a useful transcript', () => {
+    const video = videoFixture.media[0]
+    const media = [{
+      ...video,
+      variants: [
+        ...video.variants.filter((variant) => variant.kind === 'poster'),
+        {
+          asset_variant_id: 'youtube-subtitles-empty',
+          kind: 'subtitles' as const,
+          custody: 'mirror' as const,
+          acquisition_state: 'available' as const,
+          byte_size: 0,
+          content_href: '/v1/media/variants/youtube-subtitles-empty/content?fragment_id=fragment-reader&revision_id=revision-reader-1',
+        },
+      ],
+    }]
+
+    expect(transcriptResource(media)).toEqual({
+      state: 'unavailable',
+      label: 'Reader does not have an authorized representation for this item.',
+    })
+  })
 })
 
 describe('trustedYouTubeEmbedURL', () => {
