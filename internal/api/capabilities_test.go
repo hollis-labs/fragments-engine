@@ -35,8 +35,11 @@ func TestCapabilitiesAdvertisesContractsSeparatelyFromOperationReadiness(t *test
 	if !got.Operations.CaptureManifest || !got.Operations.AssetUpload || !got.Operations.CaptureCompletion {
 		t.Fatalf("capture operations must be advertised ready: %#v", got.Operations)
 	}
-	if got.Operations.ReaderQuery || got.Operations.ReaderCommands || got.Operations.ReaderContext || got.Operations.ConversationReference {
-		t.Fatalf("later Reader operations must not be advertised ready: %#v", got.Operations)
+	if !got.Operations.ReaderQuery {
+		t.Fatalf("Reader query must be advertised once list/detail endpoints are wired: %#v", got.Operations)
+	}
+	if got.Operations.ReaderCommands || got.Operations.ReaderContext || got.Operations.ConversationReference {
+		t.Fatalf("later Reader mutation/context operations must not be advertised ready: %#v", got.Operations)
 	}
 	if got.Capture.MaxManifestBytes == nil || got.Capture.MaxAssetBytes == nil {
 		t.Fatalf("capture payload limits were not advertised: %#v", got.Capture)

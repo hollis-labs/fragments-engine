@@ -580,7 +580,7 @@ func projectOptimisticReader(envelope capturecontract.CaptureEnvelope, accepted 
 	}
 	item := capturecontract.ReaderItem{
 		SchemaVersion: capturecontract.ReaderItemVersion, FragmentID: accepted.Fragment.ID,
-		FragmentRevisionID: accepted.ObservedRevision.ID, Revision: accepted.ObservedRevision.Ordinal,
+		FragmentRevisionID: accepted.ObservedRevision.ID, Revision: 0,
 		Source: source, Renderer: captureRenderer(envelope, accepted.Media),
 		Display: capturecontract.ReaderDisplay{Title: capturecontract.ResolvedText{Value: accepted.ObservedRevision.Title, Source: "source"},
 			Description: description, Summary: capturecontract.ResolvedText{Value: summary, Source: "deterministic"}},
@@ -597,10 +597,7 @@ func projectOptimisticReader(envelope capturecontract.CaptureEnvelope, accepted 
 		},
 		Actions: []capturecontract.CommandCapability{},
 	}
-	if source.Provider == "youtube" && source.ProviderItemID != "" {
-		zero := float64(0)
-		item.Playback = &capturecontract.PlaybackSpec{Kind: "provider_embed", Provider: "youtube", ProviderItemID: source.ProviderItemID, StartSeconds: &zero}
-	}
+	item.Playback = readerYouTubePlayback(item.Renderer, accepted.Fragment.SourceIdentity)
 	return item
 }
 

@@ -51,6 +51,7 @@ type App struct {
 	Enrichment       *service.EnrichmentService
 	AssetAcquisition *service.AssetAcquisitionService
 	ProviderMedia    *service.ProviderMediaCompletion
+	Reader           *service.ReaderService
 }
 
 func Open(ctx context.Context, cfg config.Config) (*App, error) {
@@ -166,6 +167,7 @@ func Open(ctx context.Context, cfg config.Config) (*App, error) {
 		Enrichment:       service.NewEnrichmentService(repository.NewEnrichmentRepository(st.DB), nil),
 		AssetAcquisition: service.NewAssetAcquisitionService(mediaRepo),
 		ProviderMedia:    service.NewProviderMediaCompletion(mediaRepo, mediaService),
+		Reader:           service.NewReaderService(repository.NewReaderRepository(st.DB)),
 	}, nil
 }
 

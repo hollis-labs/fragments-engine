@@ -41,6 +41,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/capabilities", s.handleCapabilities)
 	mux.HandleFunc("/v1/captures", s.handleCaptureManifest)
 	mux.HandleFunc("/v1/captures/", s.handleCaptureResource)
+	mux.HandleFunc("/v1/reader/items", localhostOnly(s.handleReaderItems))
+	mux.HandleFunc("/v1/reader/items/", localhostOnly(s.handleReaderItem))
 	mux.Handle(sysopBasePath+"/", newSysopSPAHandler())
 	mux.HandleFunc("/v1/ingests", s.handleListIngests)
 	mux.HandleFunc("/v1/ingests/get", s.handleGetIngest)
@@ -116,6 +118,7 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 	capabilities.Operations.CaptureManifest = true
 	capabilities.Operations.AssetUpload = true
 	capabilities.Operations.CaptureCompletion = true
+	capabilities.Operations.ReaderQuery = true
 	manifestLimit, assetLimit := maxCaptureManifestBytes, maxCaptureAssetBytes
 	capabilities.Capture.MaxManifestBytes = &manifestLimit
 	capabilities.Capture.MaxAssetBytes = &assetLimit
