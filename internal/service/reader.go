@@ -376,13 +376,12 @@ func projectReaderMedia(fragmentID, revisionID string, items []domain.MediaManif
 	return out, summary
 }
 
-// readerMediaContentHref centralizes the provisional v1 reference shape. Task
-// 0043 owns the resource handler and will replace this implementation with its
-// fragment/revision-authorized route without changing projection call sites.
 func readerMediaContentHref(fragmentID, revisionID, variantID string) string {
-	_ = fragmentID
-	_ = revisionID
-	return "/v1/media/variants/" + url.PathEscape(variantID) + "/content"
+	query := url.Values{
+		"fragment_id": {fragmentID},
+		"revision_id": {revisionID},
+	}
+	return "/v1/media/variants/" + url.PathEscape(variantID) + "/content?" + query.Encode()
 }
 
 func readerRenderer(revision domain.FragmentRevision, media []capturecontract.ReaderMediaItem) string {
@@ -491,17 +490,14 @@ func projectReaderAnnotations(items []domain.CaptureAnnotation) []capturecontrac
 }
 
 func readerYouTubePlayback(renderer string, source domain.SourceIdentity) *capturecontract.PlaybackSpec {
-	if renderer != "video" || !strings.EqualFold(source.Provider, "youtube") {
+	if renderer != "video" {
 		return nil
 	}
-	spec := provider.PlaybackSpec{Kind: provider.PlaybackProviderEmbed, Provider: "youtube",
-		ProviderItemID: source.ProviderItemID}
-	if provider.ValidatePlaybackSpec(spec) != nil {
+	spec, err := TrustedYouTubePlaybackSpec(source.Provider, source.ProviderItemID, 0)
+	if err != nil {
 		return nil
 	}
-	zero := float64(0)
-	return &capturecontract.PlaybackSpec{Kind: "provider_embed", Provider: "youtube",
-		ProviderItemID: source.ProviderItemID, StartSeconds: &zero}
+	return &spec
 }
 
 type effectState string

@@ -528,7 +528,11 @@ func projectOptimisticReader(envelope capturecontract.CaptureEnvelope, accepted 
 				Digest: contractDigest(variant.Digest), SourceURL: variant.SourceURL,
 			}
 			if variant.BlobDigest != "" {
-				out.ContentHref = "/v1/media/variants/" + url.PathEscape(variant.ID) + "/content"
+				query := url.Values{
+					"fragment_id": {accepted.Fragment.ID},
+					"revision_id": {accepted.ObservedRevision.ID},
+				}
+				out.ContentHref = "/v1/media/variants/" + url.PathEscape(variant.ID) + "/content?" + query.Encode()
 			}
 			if variant.Failure != nil {
 				out.Failure = &capturecontract.AssetFailure{Code: variant.Failure.Code, Message: variant.Failure.Message, Retryable: variant.Failure.Retryable}

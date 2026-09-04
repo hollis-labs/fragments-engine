@@ -43,6 +43,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/captures/", s.handleCaptureResource)
 	mux.HandleFunc("/v1/reader/items", localhostOnly(s.handleReaderItems))
 	mux.HandleFunc("/v1/reader/items/", localhostOnly(s.handleReaderItem))
+	mux.HandleFunc("GET /v1/reader/items/{fragmentId}/content", localhostOnly(s.handleReaderArticleContent))
+	mux.HandleFunc("GET /v1/media/variants/{variantId}/content", localhostOnly(s.handleReaderMediaContent))
 	mux.Handle(sysopBasePath+"/", newSysopSPAHandler())
 	mux.HandleFunc("/v1/ingests", s.handleListIngests)
 	mux.HandleFunc("/v1/ingests/get", s.handleGetIngest)

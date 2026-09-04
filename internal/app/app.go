@@ -52,6 +52,7 @@ type App struct {
 	AssetAcquisition *service.AssetAcquisitionService
 	ProviderMedia    *service.ProviderMediaCompletion
 	Reader           *service.ReaderService
+	ReaderResources  *service.ReaderResourceService
 }
 
 func Open(ctx context.Context, cfg config.Config) (*App, error) {
@@ -168,6 +169,9 @@ func Open(ctx context.Context, cfg config.Config) (*App, error) {
 		AssetAcquisition: service.NewAssetAcquisitionService(mediaRepo),
 		ProviderMedia:    service.NewProviderMediaCompletion(mediaRepo, mediaService),
 		Reader:           service.NewReaderService(repository.NewReaderRepository(st.DB)),
+		ReaderResources: service.NewReaderResourceService(
+			repository.NewReaderResourceRepository(st.DB), blobs, cfg.Reviewer.DownloadRoot,
+		),
 	}, nil
 }
 
