@@ -1,0 +1,39 @@
+kind: cerberus-project/v1
+owner: fragments-engine
+namespace: local
+project:
+  id: fragments-engine
+  name: Fragments Engine
+resources:
+  - id: fragments-engine-dev
+    name: Fragments Engine API (Dev)
+    type: process
+    project: fragments-engine
+    connector: local
+    config:
+      build_strategy:
+        kind: make_standard
+      command:
+        - ./fragments-engine
+        - serve-api
+        - --addr
+        - :8091
+        - --config
+        - fragments.yaml
+      dir: /Users/chrispian/dev/hollis-labs/apps/fragments-engine
+      env:
+        OPENAI_API_KEY: helper://mux-apikey-helper/openai/work
+        FIRECRAWL_API_KEY: keychain://firecrawl/default
+      mode: os_service
+      port: 8091
+      run_from: workspace
+      supervisor: launchd
+      url: http://127.0.0.1:8091/sysop/
+    tags:
+      - api
+      - go
+      - launchd
+      - dev
+      - fragments-engine
+      - v2
+registry_urn: msg://agent/agent-mux/prj_lz0xqw191m
