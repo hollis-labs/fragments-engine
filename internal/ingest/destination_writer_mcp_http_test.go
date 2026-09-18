@@ -2,14 +2,14 @@ package ingest
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"github.com/hollis-labs/fragments-engine/internal/domain"
-	"github.com/mark3labs/mcp-go/mcp"
-	mcpserver "github.com/mark3labs/mcp-go/server"
+	gomcpserver "github.com/hollis-labs/go-mcp/server"
+	httptransport "github.com/hollis-labs/go-mcp/transport/http"
 )
 
 // TestMCPDestinationExecutor_HTTPTransport_TangentHITL proves the "http"
@@ -23,17 +23,18 @@ func TestMCPDestinationExecutor_HTTPTransport_TangentHITL(t *testing.T) {
 		Arguments map[string]any
 	}
 
-	mcpSrv := mcpserver.NewMCPServer("fake-tangent", "0.0.1")
-	mcpSrv.AddTool(
-		mcp.NewTool("tangent.hitl_enqueue"),
-		func(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-			captured.Name = req.Params.Name
-			raw, _ := json.Marshal(req.Params.Arguments)
-			_ = json.Unmarshal(raw, &captured.Arguments)
-			return mcp.NewToolResultText(`{"item_id":"interaction_fake","item_url":"/hitl/items/interaction_fake"}`), nil
+	mcpSrv := gomcpserver.NewServer("fake-tangent", "0.0.1")
+	mcpSrv.RegisterTool(gomcpserver.Tool{
+		Name:        "tangent.hitl_enqueue",
+		Description: "fake",
+		InputSchema: gomcpserver.EmptyObjectSchema(),
+		Handler: func(_ context.Context, args map[string]any) (any, error) {
+			captured.Name = "tangent.hitl_enqueue"
+			captured.Arguments = args
+			return `{"item_id":"interaction_fake","item_url":"/hitl/items/interaction_fake"}`, nil
 		},
-	)
-	httpSrv := mcpserver.NewTestStreamableHTTPServer(mcpSrv)
+	})
+	httpSrv := httptest.NewServer(httptransport.NewHandler(mcpSrv, httptransport.HandlerOptions{}))
 	defer httpSrv.Close()
 
 	destination := domain.Destination{
@@ -93,17 +94,18 @@ func TestMCPDestinationExecutor_HTTPTransport_GenericProviderTemplatedArguments(
 		Arguments map[string]any
 	}
 
-	mcpSrv := mcpserver.NewMCPServer("fake-tesseract", "0.0.1")
-	mcpSrv.AddTool(
-		mcp.NewTool("tesseract.capture"),
-		func(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-			captured.Name = req.Params.Name
-			raw, _ := json.Marshal(req.Params.Arguments)
-			_ = json.Unmarshal(raw, &captured.Arguments)
-			return mcp.NewToolResultText(`{"ok":true}`), nil
+	mcpSrv := gomcpserver.NewServer("fake-tesseract", "0.0.1")
+	mcpSrv.RegisterTool(gomcpserver.Tool{
+		Name:        "tesseract.capture",
+		Description: "fake",
+		InputSchema: gomcpserver.EmptyObjectSchema(),
+		Handler: func(_ context.Context, args map[string]any) (any, error) {
+			captured.Name = "tesseract.capture"
+			captured.Arguments = args
+			return `{"ok":true}`, nil
 		},
-	)
-	httpSrv := mcpserver.NewTestStreamableHTTPServer(mcpSrv)
+	})
+	httpSrv := httptest.NewServer(httptransport.NewHandler(mcpSrv, httptransport.HandlerOptions{}))
 	defer httpSrv.Close()
 
 	destination := domain.Destination{

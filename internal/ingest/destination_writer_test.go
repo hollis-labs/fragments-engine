@@ -17,7 +17,6 @@ import (
 
 	"github.com/hollis-labs/fragments-engine/internal/config"
 	"github.com/hollis-labs/fragments-engine/internal/domain"
-	"github.com/mark3labs/mcp-go/mcp"
 )
 
 func TestAPIDestinationExecutor_NaniteMessaging(t *testing.T) {
@@ -614,14 +613,19 @@ func TestHelperProcessMCPServer(t *testing.T) {
 
 	type request struct {
 		JSONRPC string          `json:"jsonrpc"`
-		ID      *mcp.RequestId  `json:"id,omitempty"`
+		ID      json.RawMessage `json:"id,omitempty"`
 		Method  string          `json:"method"`
 		Params  json.RawMessage `json:"params"`
 	}
+	type rpcError struct {
+		Code    int    `json:"code"`
+		Message string `json:"message"`
+	}
 	type response struct {
-		JSONRPC string         `json:"jsonrpc"`
-		ID      *mcp.RequestId `json:"id,omitempty"`
-		Result  map[string]any `json:"result,omitempty"`
+		JSONRPC string          `json:"jsonrpc"`
+		ID      json.RawMessage `json:"id,omitempty"`
+		Result  map[string]any  `json:"result,omitempty"`
+		Error   *rpcError       `json:"error,omitempty"`
 	}
 
 	reader := bufio.NewReader(os.Stdin)
@@ -639,15 +643,17 @@ func TestHelperProcessMCPServer(t *testing.T) {
 			continue
 		}
 
-		rsp := response{
-			JSONRPC: "2.0",
-			ID:      req.ID,
-			Result:  map[string]any{},
-		}
+		rsp := response{JSONRPC: "2.0", ID: req.ID}
 		switch req.Method {
 		case "initialize":
+			// Echo back whatever protocolVersion the client asked for, so
+			// this fixture never needs to track the SDK's own supported set.
+			var params struct {
+				ProtocolVersion string `json:"protocolVersion"`
+			}
+			_ = json.Unmarshal(req.Params, &params)
 			rsp.Result = map[string]any{
-				"protocolVersion": mcp.LATEST_PROTOCOL_VERSION,
+				"protocolVersion": params.ProtocolVersion,
 				"serverInfo": map[string]any{
 					"name":    "fe-test-mcp",
 					"version": "1.0.0",
@@ -673,7 +679,11 @@ func TestHelperProcessMCPServer(t *testing.T) {
 				},
 			}
 		default:
-			rsp.Result = map[string]any{}
+			// Notably "server/discover" (SEP-2575): this fixture only speaks
+			// the legacy initialize/initialized handshake, so refusing an
+			// unknown method here is what makes the real client fall back
+			// to it.
+			rsp.Error = &rpcError{Code: -32601, Message: "method not found: " + req.Method}
 		}
 
 		out, _ := json.Marshal(rsp)

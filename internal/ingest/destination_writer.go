@@ -17,8 +17,7 @@ import (
 	"github.com/hollis-labs/fragments-engine/internal/config"
 	"github.com/hollis-labs/fragments-engine/internal/domain"
 	"github.com/hollis-labs/fragments-engine/internal/ffs"
-	mcpclient "github.com/mark3labs/mcp-go/client"
-	"github.com/mark3labs/mcp-go/mcp"
+	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 type FileDestinationExecutor struct{}
@@ -362,47 +361,17 @@ func (MCPDestinationExecutor) Execute(ctx context.Context, destination domain.De
 	callCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	var c *mcpclient.Client
-	switch transport := strings.TrimSpace(cfg.Transport); transport {
-	case "", "stdio":
-		command := strings.TrimSpace(cfg.Command)
-		if command == "" {
-			return DeliveryResult{}, fmt.Errorf("mcp destination %q missing command", destination.Name)
-		}
-		c, err = mcpclient.NewStdioMCPClient(command, cfg.Env, cfg.Args...)
-		if err != nil {
-			return DeliveryResult{}, markRetryable(fmt.Errorf("start mcp client: %w", err))
-		}
-	case "http":
-		// Streamable HTTP: a long-running peer's own MCP server (e.g.
-		// Tangent on :7842), not a subprocess FE spawns. Start is required
-		// here -- NewStdioMCPClient auto-starts for backward compatibility,
-		// NewStreamableHttpClient does not.
-		baseURL := strings.TrimSpace(cfg.BaseURL)
-		if baseURL == "" {
-			return DeliveryResult{}, fmt.Errorf("mcp destination %q missing base_url for http transport", destination.Name)
-		}
-		c, err = mcpclient.NewStreamableHttpClient(baseURL)
-		if err != nil {
-			return DeliveryResult{}, markRetryable(fmt.Errorf("build mcp http client: %w", err))
-		}
-		if err := c.Start(callCtx); err != nil {
-			return DeliveryResult{}, markRetryable(fmt.Errorf("start mcp http client: %w", err))
-		}
-	default:
-		return DeliveryResult{}, fmt.Errorf("unsupported mcp transport %q", transport)
+	transport, err := mcpDestinationTransport(cfg)
+	if err != nil {
+		return DeliveryResult{}, fmt.Errorf("mcp destination %q %s", destination.Name, err)
 	}
-	defer c.Close()
 
-	initReq := mcp.InitializeRequest{}
-	initReq.Params.ProtocolVersion = mcp.LATEST_PROTOCOL_VERSION
-	initReq.Params.ClientInfo = mcp.Implementation{
-		Name:    "fragments-engine",
-		Version: "0.1.0",
+	client := mcpsdk.NewClient(&mcpsdk.Implementation{Name: "fragments-engine", Version: "0.1.0"}, nil)
+	session, err := client.Connect(callCtx, transport, nil)
+	if err != nil {
+		return DeliveryResult{}, markRetryable(fmt.Errorf("connect mcp client: %w", err))
 	}
-	if _, err := c.Initialize(callCtx, initReq); err != nil {
-		return DeliveryResult{}, markRetryable(fmt.Errorf("initialize mcp client: %w", err))
-	}
+	defer session.Close()
 
 	toolName := strings.TrimSpace(cfg.Tool)
 	args := map[string]any{}
@@ -428,10 +397,7 @@ func (MCPDestinationExecutor) Execute(ctx context.Context, destination domain.De
 		args, _ = rendered.(map[string]any)
 	}
 
-	req := mcp.CallToolRequest{}
-	req.Params.Name = toolName
-	req.Params.Arguments = args
-	result, err := c.CallTool(callCtx, req)
+	result, err := session.CallTool(callCtx, &mcpsdk.CallToolParams{Name: toolName, Arguments: args})
 	if err != nil {
 		return DeliveryResult{}, markRetryable(fmt.Errorf("call mcp tool %q: %w", toolName, err))
 	}
@@ -867,12 +833,12 @@ func expandConfigValue(v string) string {
 	return os.ExpandEnv(strings.TrimSpace(v))
 }
 
-func firstToolResultText(result *mcp.CallToolResult) string {
+func firstToolResultText(result *mcpsdk.CallToolResult) string {
 	if result == nil {
 		return "ok"
 	}
 	for _, item := range result.Content {
-		if text, ok := item.(mcp.TextContent); ok {
+		if text, ok := item.(*mcpsdk.TextContent); ok {
 			return strings.TrimSpace(text.Text)
 		}
 	}

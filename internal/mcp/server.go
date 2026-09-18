@@ -2,7 +2,6 @@ package mcpserver
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -11,8 +10,7 @@ import (
 	"github.com/hollis-labs/fragments-engine/internal/config"
 	"github.com/hollis-labs/fragments-engine/internal/domain"
 	"github.com/hollis-labs/fragments-engine/internal/service"
-	"github.com/mark3labs/mcp-go/mcp"
-	"github.com/mark3labs/mcp-go/server"
+	gomcpserver "github.com/hollis-labs/go-mcp/server"
 )
 
 func Serve(ctx context.Context, cfgPath string) error {
@@ -20,1086 +18,975 @@ func Serve(ctx context.Context, cfgPath string) error {
 	defer cancel()
 	go app.RunQueueDrainer(ctx, cfgPath)
 
-	s := server.NewMCPServer("fragments-engine", "0.1.0")
+	s := gomcpserver.NewServer("fragments-engine", "0.1.0")
 
-	s.AddTool(
-		mcp.NewTool("list_ingests",
-			mcp.WithDescription("List configured FE ingest definitions and chat-archive policies."),
-		),
-		func(ctx context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-			items, err := service.NewIngestAdminService(cfgPath).List(ctx)
-			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
-			}
-			raw, _ := json.MarshalIndent(items, "", "  ")
-			return mcp.NewToolResultText(string(raw)), nil
+	s.RegisterTool(gomcpserver.Tool{
+		Name:         "list_ingests",
+		Description:  "List configured FE ingest definitions and chat-archive policies.",
+		InputSchema:  gomcpserver.EmptyObjectSchema(),
+		ReadOnlyHint: true,
+		Handler: func(ctx context.Context, _ map[string]any) (any, error) {
+			return service.NewIngestAdminService(cfgPath).List(ctx)
 		},
-	)
+	})
 
-	s.AddTool(
-		mcp.NewTool("run_ingests",
-			mcp.WithDescription("Run enabled ingest pipelines from the Fragments Engine config."),
-		),
-		func(ctx context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	s.RegisterTool(gomcpserver.Tool{
+		Name:        "run_ingests",
+		Description: "Run enabled ingest pipelines from the Fragments Engine config.",
+		InputSchema: gomcpserver.EmptyObjectSchema(),
+		Handler: func(ctx context.Context, _ map[string]any) (any, error) {
 			cfg, err := config.Load(cfgPath)
 			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
+				return nil, err
 			}
 			instance, err := app.Open(ctx, cfg)
 			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
+				return nil, err
 			}
 			defer instance.Close()
-
-			runs, err := instance.Fragments.RunAllIngests(ctx, cfg)
-			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
-			}
-			raw, _ := json.MarshalIndent(runs, "", "  ")
-			return mcp.NewToolResultText(string(raw)), nil
+			return instance.Fragments.RunAllIngests(ctx, cfg)
 		},
-	)
+	})
 
-	s.AddTool(
-		mcp.NewTool("validate_ingest",
-			mcp.WithDescription("Validate a configured FE ingest without writing to the database."),
-			mcp.WithString("name", mcp.Required(), mcp.Description("Ingest name.")),
+	s.RegisterTool(gomcpserver.Tool{
+		Name:        "validate_ingest",
+		Description: "Validate a configured FE ingest without writing to the database.",
+		InputSchema: inputSchema(
+			strProp("name", "Ingest name.", true),
 		),
-		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-			name, err := req.RequireString("name")
+		ReadOnlyHint: true,
+		Handler: func(ctx context.Context, args map[string]any) (any, error) {
+			name, err := requiredString(args, "name")
 			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
+				return nil, err
 			}
-			result, err := service.NewIngestAdminService(cfgPath).Validate(ctx, name)
-			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
-			}
-			raw, _ := json.MarshalIndent(result, "", "  ")
-			return mcp.NewToolResultText(string(raw)), nil
+			return service.NewIngestAdminService(cfgPath).Validate(ctx, name)
 		},
-	)
+	})
 
-	s.AddTool(
-		mcp.NewTool("preview_ingest",
-			mcp.WithDescription("Preview FE ingest items without writing to the database or copying source files."),
-			mcp.WithString("name", mcp.Required(), mcp.Description("Ingest name.")),
-			mcp.WithNumber("limit", mcp.Description("Maximum preview items to include. Defaults to 10.")),
+	s.RegisterTool(gomcpserver.Tool{
+		Name:        "preview_ingest",
+		Description: "Preview FE ingest items without writing to the database or copying source files.",
+		InputSchema: inputSchema(
+			strProp("name", "Ingest name.", true),
+			numProp("limit", "Maximum preview items to include. Defaults to 10.", false),
 		),
-		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-			name, err := req.RequireString("name")
+		ReadOnlyHint: true,
+		Handler: func(ctx context.Context, args map[string]any) (any, error) {
+			name, err := requiredString(args, "name")
 			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
+				return nil, err
 			}
-			limit := int(req.GetFloat("limit", 10))
+			limit := int(argFloat(args, "limit", 10))
 			if limit <= 0 {
 				limit = 10
 			}
-			result, err := service.NewIngestAdminService(cfgPath).Preview(ctx, name, limit)
-			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
-			}
-			raw, _ := json.MarshalIndent(result, "", "  ")
-			return mcp.NewToolResultText(string(raw)), nil
+			return service.NewIngestAdminService(cfgPath).Preview(ctx, name, limit)
 		},
-	)
+	})
 
-	s.AddTool(
-		mcp.NewTool("set_ingest_archive_policy",
-			mcp.WithDescription("Update the chat-history archive/copy policy for a configured ingest."),
-			mcp.WithString("name", mcp.Required(), mcp.Description("Ingest name.")),
-			mcp.WithString("archive_root", mcp.Required(), mcp.Description("Archive root for copied text exports.")),
-			mcp.WithBoolean("copy_text_exports", mcp.Description("Copy text export files into archive_root before parsing.")),
-			mcp.WithBoolean("delete_copied_source", mcp.Description("Delete copied source text files after archive copy.")),
+	s.RegisterTool(gomcpserver.Tool{
+		Name:        "set_ingest_archive_policy",
+		Description: "Update the chat-history archive/copy policy for a configured ingest.",
+		InputSchema: inputSchema(
+			strProp("name", "Ingest name.", true),
+			strProp("archive_root", "Archive root for copied text exports.", true),
+			boolProp("copy_text_exports", "Copy text export files into archive_root before parsing.", false),
+			boolProp("delete_copied_source", "Delete copied source text files after archive copy.", false),
 		),
-		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-			name, err := req.RequireString("name")
+		IdempotentHint: true,
+		Handler: func(ctx context.Context, args map[string]any) (any, error) {
+			name, err := requiredString(args, "name")
 			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
+				return nil, err
 			}
-			archiveRoot, err := req.RequireString("archive_root")
+			archiveRoot, err := requiredString(args, "archive_root")
 			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
+				return nil, err
 			}
-			result, err := service.NewIngestAdminService(cfgPath).UpdateArchivePolicy(
+			return service.NewIngestAdminService(cfgPath).UpdateArchivePolicy(
 				ctx,
 				name,
 				archiveRoot,
-				req.GetBool("copy_text_exports", true),
-				req.GetBool("delete_copied_source", false),
+				argBool(args, "copy_text_exports", true),
+				argBool(args, "delete_copied_source", false),
 			)
-			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
-			}
-			raw, _ := json.MarshalIndent(result, "", "  ")
-			return mcp.NewToolResultText(string(raw)), nil
 		},
-	)
+	})
 
-	s.AddTool(
-		mcp.NewTool("write_doc",
-			mcp.WithDescription("Write a finished document — an ADR, report, procedure, architecture note, or similar — into Fragments Engine for Chrispian to triage: keep, move, edit, delete, or route further, on his own schedule. Use once a document like that is done, not for code or task-tracking work, and not for durable factual/decision knowledge, which belongs in Tesseract's capture-* skills instead."),
-			mcp.WithString("file_path", mcp.Description("Path to a file already written to disk (preferred). FE reads its content for review; the file itself is left exactly where it is. Use this or content, not both.")),
-			mcp.WithString("content", mcp.Description("The document content directly, when there's no local file yet. A leading YAML frontmatter block (title/tags/doc_type/publication_path/notify_now) is parsed server-side and merged into the fields below.")),
-			mcp.WithString("title", mcp.Description("Optional title override; otherwise taken from frontmatter or derived from content.")),
-			mcp.WithString("doc_type", mcp.Description("What kind of document this is, e.g. \"adr\", \"report\", \"procedure\", \"architecture\", \"investigation\", \"note\". Free text, not a fixed list -- becomes part of the corpus path and is available to route matching.")),
-			mcp.WithArray("tags", mcp.Description("Tags this document should carry, merged with any frontmatter tags and inline #hashtags. These decide routing: a tag with no configured route just sits in FE's own review queue, unnotified -- check `list_routes` before inventing a new one; see the write-doc skill for how to observe real conventions."), mcp.Items(map[string]any{"type": "string"})),
-			mcp.WithString("publication_path", mcp.Description("Where this should ultimately live once Chrispian processes it -- a repo path, a docs/ location. Not auto-written there; visible to him at review time.")),
-			mcp.WithBoolean("notify_now", mcp.Description("Force this into Chrispian's Tangent review right now, regardless of what routes its tags/doc_type would otherwise match. Offer this explicitly when producing a document he'd want to see immediately, rather than defaulting it either way.")),
-			mcp.WithString("source", mcp.Description("Fragment source. Defaults to \"agent\" -- this tool exists for agent callers.")),
+	s.RegisterTool(gomcpserver.Tool{
+		Name:        "write_doc",
+		Description: "Write a finished document — an ADR, report, procedure, architecture note, or similar — into Fragments Engine for Chrispian to triage: keep, move, edit, delete, or route further, on his own schedule. Use once a document like that is done, not for code or task-tracking work, and not for durable factual/decision knowledge, which belongs in Tesseract's capture-* skills instead.",
+		InputSchema: inputSchema(
+			strProp("file_path", "Path to a file already written to disk (preferred). FE reads its content for review; the file itself is left exactly where it is. Use this or content, not both.", false),
+			strProp("content", "The document content directly, when there's no local file yet. A leading YAML frontmatter block (title/tags/doc_type/publication_path/notify_now) is parsed server-side and merged into the fields below.", false),
+			strProp("title", "Optional title override; otherwise taken from frontmatter or derived from content.", false),
+			strProp("doc_type", "What kind of document this is, e.g. \"adr\", \"report\", \"procedure\", \"architecture\", \"investigation\", \"note\". Free text, not a fixed list -- becomes part of the corpus path and is available to route matching.", false),
+			arrProp("tags", "Tags this document should carry, merged with any frontmatter tags and inline #hashtags. These decide routing: a tag with no configured route just sits in FE's own review queue, unnotified -- check `list_routes` before inventing a new one; see the write-doc skill for how to observe real conventions.", false),
+			strProp("publication_path", "Where this should ultimately live once Chrispian processes it -- a repo path, a docs/ location. Not auto-written there; visible to him at review time.", false),
+			boolProp("notify_now", "Force this into Chrispian's Tangent review right now, regardless of what routes its tags/doc_type would otherwise match. Offer this explicitly when producing a document he'd want to see immediately, rather than defaulting it either way.", false),
+			strProp("source", "Fragment source. Defaults to \"agent\" -- this tool exists for agent callers.", false),
 		),
-		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-			filePath := strings.TrimSpace(req.GetString("file_path", ""))
-			content := req.GetString("content", "")
+		Handler: func(ctx context.Context, args map[string]any) (any, error) {
+			filePath := strings.TrimSpace(argString(args, "file_path", ""))
+			content := argString(args, "content", "")
 			if filePath == "" && strings.TrimSpace(content) == "" {
-				return mcp.NewToolResultError("write_doc: one of file_path or content is required"), nil
+				return nil, fmt.Errorf("write_doc: one of file_path or content is required")
 			}
 			if filePath != "" {
 				raw, err := os.ReadFile(filePath)
 				if err != nil {
-					return mcp.NewToolResultError(fmt.Sprintf("write_doc: read file_path: %v", err)), nil
+					return nil, fmt.Errorf("write_doc: read file_path: %w", err)
 				}
 				content = string(raw)
 			}
-			source := req.GetString("source", "agent")
+			source := argString(args, "source", "agent")
 			cfg, err := config.Load(cfgPath)
 			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
+				return nil, err
 			}
 			instance, err := app.Open(ctx, cfg)
 			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
+				return nil, err
 			}
 			defer instance.Close()
 			result, err := instance.Fragments.Intake(ctx, service.IntakeRequest{
 				Content:         content,
-				Title:           req.GetString("title", ""),
-				SourceType:      req.GetString("doc_type", ""),
-				Tags:            req.GetStringSlice("tags", nil),
+				Title:           argString(args, "title", ""),
+				SourceType:      argString(args, "doc_type", ""),
+				Tags:            argStringSlice(args, "tags"),
 				Source:          source,
 				SourceFilePath:  filePath,
-				PublicationPath: req.GetString("publication_path", ""),
-				NotifyNow:       req.GetBool("notify_now", false),
+				PublicationPath: argString(args, "publication_path", ""),
+				NotifyNow:       argBool(args, "notify_now", false),
 			})
 			if err != nil {
-				return mcp.NewToolResultError(fmt.Sprintf("submit fragment: %v", err)), nil
+				return nil, fmt.Errorf("submit fragment: %w", err)
 			}
-			raw, _ := json.MarshalIndent(result, "", "  ")
-			return mcp.NewToolResultText(string(raw)), nil
+			return result, nil
 		},
-	)
+	})
 
-	s.AddTool(
-		mcp.NewTool("search_fragments",
-			mcp.WithDescription("Search stored fragments with the active FE recall backend."),
-			mcp.WithString("query", mcp.Description("Optional full-text query.")),
-			mcp.WithString("entity_kind", mcp.Description("Optional entity kind filter.")),
-			mcp.WithString("entity_value", mcp.Description("Optional entity value filter.")),
+	s.RegisterTool(gomcpserver.Tool{
+		Name:        "search_fragments",
+		Description: "Search stored fragments with the active FE recall backend.",
+		InputSchema: inputSchema(
+			strProp("query", "Optional full-text query.", false),
+			strProp("entity_kind", "Optional entity kind filter.", false),
+			strProp("entity_value", "Optional entity value filter.", false),
 		),
-		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-			query := req.GetString("query", "")
-			entityKind := req.GetString("entity_kind", "")
-			entityValue := req.GetString("entity_value", "")
+		ReadOnlyHint: true,
+		Handler: func(ctx context.Context, args map[string]any) (any, error) {
+			query := argString(args, "query", "")
+			entityKind := argString(args, "entity_kind", "")
+			entityValue := argString(args, "entity_value", "")
 			if query == "" && (entityKind == "" || entityValue == "") {
-				return mcp.NewToolResultError("search requires query or both entity_kind and entity_value"), nil
+				return nil, fmt.Errorf("search requires query or both entity_kind and entity_value")
 			}
 			cfg, err := config.Load(cfgPath)
 			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
+				return nil, err
 			}
 			instance, err := app.Open(ctx, cfg)
 			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
+				return nil, err
 			}
 			defer instance.Close()
-			results, err := instance.Fragments.SearchFiltered(ctx, query, entityKind, entityValue, 10)
-			if err != nil {
-				return mcp.NewToolResultError(fmt.Sprintf("search: %v", err)), nil
-			}
-			raw, _ := json.MarshalIndent(results, "", "  ")
-			return mcp.NewToolResultText(string(raw)), nil
+			return instance.Fragments.SearchFiltered(ctx, query, entityKind, entityValue, 10)
 		},
-	)
+	})
 
-	s.AddTool(
-		mcp.NewTool("get_fragment_detail",
-			mcp.WithDescription("Get FE fragment detail including route log and related fragments."),
-			mcp.WithString("fragment_id", mcp.Required(), mcp.Description("Fragment id to inspect.")),
+	s.RegisterTool(gomcpserver.Tool{
+		Name:        "get_fragment_detail",
+		Description: "Get FE fragment detail including route log and related fragments.",
+		InputSchema: inputSchema(
+			strProp("fragment_id", "Fragment id to inspect.", true),
 		),
-		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-			fragmentID, err := req.RequireString("fragment_id")
+		ReadOnlyHint: true,
+		Handler: func(ctx context.Context, args map[string]any) (any, error) {
+			fragmentID, err := requiredString(args, "fragment_id")
 			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
+				return nil, err
 			}
 			cfg, err := config.Load(cfgPath)
 			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
+				return nil, err
 			}
 			instance, err := app.Open(ctx, cfg)
 			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
+				return nil, err
 			}
 			defer instance.Close()
-			detail, err := instance.Fragments.GetDetail(ctx, fragmentID, 10)
-			if err != nil {
-				return mcp.NewToolResultError(fmt.Sprintf("fragment detail: %v", err)), nil
-			}
-			raw, _ := json.MarshalIndent(detail, "", "  ")
-			return mcp.NewToolResultText(string(raw)), nil
+			return instance.Fragments.GetDetail(ctx, fragmentID, 10)
 		},
-	)
+	})
 
-	s.AddTool(
-		mcp.NewTool("reanalyze_fragment_attachments",
-			mcp.WithDescription("Rerun FE attachment analysis for a stored fragment without full reingest."),
-			mcp.WithString("fragment_id", mcp.Required(), mcp.Description("Fragment id to reanalyze.")),
-			mcp.WithString("attachment_id", mcp.Description("Optional specific attachment id.")),
+	s.RegisterTool(gomcpserver.Tool{
+		Name:        "reanalyze_fragment_attachments",
+		Description: "Rerun FE attachment analysis for a stored fragment without full reingest.",
+		InputSchema: inputSchema(
+			strProp("fragment_id", "Fragment id to reanalyze.", true),
+			strProp("attachment_id", "Optional specific attachment id.", false),
 		),
-		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-			fragmentID, err := req.RequireString("fragment_id")
+		IdempotentHint: true,
+		Handler: func(ctx context.Context, args map[string]any) (any, error) {
+			fragmentID, err := requiredString(args, "fragment_id")
 			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
+				return nil, err
 			}
 			cfg, err := config.Load(cfgPath)
 			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
+				return nil, err
 			}
 			instance, err := app.Open(ctx, cfg)
 			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
+				return nil, err
 			}
 			defer instance.Close()
-			result, err := instance.Fragments.ReanalyzeAttachments(ctx, fragmentID, req.GetString("attachment_id", ""))
-			if err != nil {
-				return mcp.NewToolResultError(fmt.Sprintf("reanalyze attachments: %v", err)), nil
-			}
-			raw, _ := json.MarshalIndent(result, "", "  ")
-			return mcp.NewToolResultText(string(raw)), nil
+			return instance.Fragments.ReanalyzeAttachments(ctx, fragmentID, argString(args, "attachment_id", ""))
 		},
-	)
+	})
 
-	s.AddTool(
-		mcp.NewTool("list_related_fragments",
-			mcp.WithDescription("List related fragments for a fragment id."),
-			mcp.WithString("fragment_id", mcp.Required(), mcp.Description("Fragment id to inspect.")),
+	s.RegisterTool(gomcpserver.Tool{
+		Name:        "list_related_fragments",
+		Description: "List related fragments for a fragment id.",
+		InputSchema: inputSchema(
+			strProp("fragment_id", "Fragment id to inspect.", true),
 		),
-		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-			fragmentID, err := req.RequireString("fragment_id")
+		ReadOnlyHint: true,
+		Handler: func(ctx context.Context, args map[string]any) (any, error) {
+			fragmentID, err := requiredString(args, "fragment_id")
 			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
+				return nil, err
 			}
 			cfg, err := config.Load(cfgPath)
 			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
+				return nil, err
 			}
 			instance, err := app.Open(ctx, cfg)
 			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
+				return nil, err
 			}
 			defer instance.Close()
-			results, err := instance.Fragments.Related(ctx, fragmentID, 10)
-			if err != nil {
-				return mcp.NewToolResultError(fmt.Sprintf("related fragments: %v", err)), nil
-			}
-			raw, _ := json.MarshalIndent(results, "", "  ")
-			return mcp.NewToolResultText(string(raw)), nil
+			return instance.Fragments.Related(ctx, fragmentID, 10)
 		},
-	)
+	})
 
-	s.AddTool(
-		mcp.NewTool("list_entities",
-			mcp.WithDescription("List persisted FE entities."),
-			mcp.WithString("kind", mcp.Description("Optional entity kind filter.")),
+	s.RegisterTool(gomcpserver.Tool{
+		Name:        "list_entities",
+		Description: "List persisted FE entities.",
+		InputSchema: inputSchema(
+			strProp("kind", "Optional entity kind filter.", false),
 		),
-		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-			kind := req.GetString("kind", "")
+		ReadOnlyHint: true,
+		Handler: func(ctx context.Context, args map[string]any) (any, error) {
 			cfg, err := config.Load(cfgPath)
 			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
+				return nil, err
 			}
 			instance, err := app.Open(ctx, cfg)
 			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
+				return nil, err
 			}
 			defer instance.Close()
-			items, err := instance.Fragments.ListEntities(ctx, kind, 50)
-			if err != nil {
-				return mcp.NewToolResultError(fmt.Sprintf("list entities: %v", err)), nil
-			}
-			raw, _ := json.MarshalIndent(items, "", "  ")
-			return mcp.NewToolResultText(string(raw)), nil
+			return instance.Fragments.ListEntities(ctx, argString(args, "kind", ""), 50)
 		},
-	)
+	})
 
-	s.AddTool(
-		mcp.NewTool("list_entity_fragments",
-			mcp.WithDescription("List fragments tagged with a persisted FE entity."),
-			mcp.WithString("kind", mcp.Required(), mcp.Description("Entity kind.")),
-			mcp.WithString("value", mcp.Required(), mcp.Description("Entity value.")),
+	s.RegisterTool(gomcpserver.Tool{
+		Name:        "list_entity_fragments",
+		Description: "List fragments tagged with a persisted FE entity.",
+		InputSchema: inputSchema(
+			strProp("kind", "Entity kind.", true),
+			strProp("value", "Entity value.", true),
 		),
-		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-			kind, err := req.RequireString("kind")
+		ReadOnlyHint: true,
+		Handler: func(ctx context.Context, args map[string]any) (any, error) {
+			kind, err := requiredString(args, "kind")
 			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
+				return nil, err
 			}
-			value, err := req.RequireString("value")
+			value, err := requiredString(args, "value")
 			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
+				return nil, err
 			}
 			cfg, err := config.Load(cfgPath)
 			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
+				return nil, err
 			}
 			instance, err := app.Open(ctx, cfg)
 			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
+				return nil, err
 			}
 			defer instance.Close()
-			results, err := instance.Fragments.FragmentsByEntity(ctx, kind, value, 20)
-			if err != nil {
-				return mcp.NewToolResultError(fmt.Sprintf("entity fragments: %v", err)), nil
-			}
-			raw, _ := json.MarshalIndent(results, "", "  ")
-			return mcp.NewToolResultText(string(raw)), nil
+			return instance.Fragments.FragmentsByEntity(ctx, kind, value, 20)
 		},
-	)
+	})
 
-	s.AddTool(
-		mcp.NewTool("get_recall_status",
-			mcp.WithDescription("Get the active FE recall backend and embedding status."),
-		),
-		func(ctx context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	s.RegisterTool(gomcpserver.Tool{
+		Name:         "get_recall_status",
+		Description:  "Get the active FE recall backend and embedding status.",
+		InputSchema:  gomcpserver.EmptyObjectSchema(),
+		ReadOnlyHint: true,
+		Handler: func(ctx context.Context, _ map[string]any) (any, error) {
 			cfg, err := config.Load(cfgPath)
 			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
+				return nil, err
 			}
 			instance, err := app.Open(ctx, cfg)
 			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
+				return nil, err
 			}
 			defer instance.Close()
-			raw, _ := json.MarshalIndent(instance.RecallStatus(), "", "  ")
-			return mcp.NewToolResultText(string(raw)), nil
+			return instance.RecallStatus(), nil
 		},
-	)
+	})
 
-	s.AddTool(
-		mcp.NewTool("list_inbox",
-			mcp.WithDescription("List staged inbox items awaiting manual routing."),
-		),
-		func(ctx context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	s.RegisterTool(gomcpserver.Tool{
+		Name:         "list_inbox",
+		Description:  "List staged inbox items awaiting manual routing.",
+		InputSchema:  gomcpserver.EmptyObjectSchema(),
+		ReadOnlyHint: true,
+		Handler: func(ctx context.Context, _ map[string]any) (any, error) {
 			cfg, err := config.Load(cfgPath)
 			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
+				return nil, err
 			}
 			instance, err := app.Open(ctx, cfg)
 			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
+				return nil, err
 			}
 			defer instance.Close()
-			items, err := instance.Inbox.List(ctx, 50)
-			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
-			}
-			raw, _ := json.MarshalIndent(items, "", "  ")
-			return mcp.NewToolResultText(string(raw)), nil
+			return instance.Inbox.List(ctx, 50)
 		},
-	)
+	})
 
-	s.AddTool(
-		mcp.NewTool("get_queue_status",
-			mcp.WithDescription("Get FE external delivery queue status."),
-		),
-		func(ctx context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	s.RegisterTool(gomcpserver.Tool{
+		Name:         "get_queue_status",
+		Description:  "Get FE external delivery queue status.",
+		InputSchema:  gomcpserver.EmptyObjectSchema(),
+		ReadOnlyHint: true,
+		Handler: func(ctx context.Context, _ map[string]any) (any, error) {
 			cfg, err := config.Load(cfgPath)
 			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
+				return nil, err
 			}
 			instance, err := app.Open(ctx, cfg)
 			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
+				return nil, err
 			}
 			defer instance.Close()
-			stats, err := instance.Queue.Stats(ctx)
-			if err != nil {
-				return mcp.NewToolResultError(fmt.Sprintf("queue status: %v", err)), nil
-			}
-			raw, _ := json.MarshalIndent(stats, "", "  ")
-			return mcp.NewToolResultText(string(raw)), nil
+			return instance.Queue.Stats(ctx)
 		},
-	)
+	})
 
-	s.AddTool(
-		mcp.NewTool("list_queue_destinations",
-			mcp.WithDescription("List queue health and counters grouped by external destination."),
-			mcp.WithNumber("limit", mcp.Description("Maximum destination summaries to list. Defaults to 100.")),
+	s.RegisterTool(gomcpserver.Tool{
+		Name:        "list_queue_destinations",
+		Description: "List queue health and counters grouped by external destination.",
+		InputSchema: inputSchema(
+			numProp("limit", "Maximum destination summaries to list. Defaults to 100.", false),
 		),
-		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		ReadOnlyHint: true,
+		Handler: func(ctx context.Context, args map[string]any) (any, error) {
 			cfg, err := config.Load(cfgPath)
 			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
+				return nil, err
 			}
 			instance, err := app.Open(ctx, cfg)
 			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
+				return nil, err
 			}
 			defer instance.Close()
 			limit := 100
-			if rawLimit := req.GetFloat("limit", 100); rawLimit > 0 {
+			if rawLimit := argFloat(args, "limit", 100); rawLimit > 0 {
 				limit = int(rawLimit)
 			}
-			items, err := instance.Queue.ListDestinationSummaries(ctx, limit)
-			if err != nil {
-				return mcp.NewToolResultError(fmt.Sprintf("list queue destinations: %v", err)), nil
-			}
-			raw, _ := json.MarshalIndent(items, "", "  ")
-			return mcp.NewToolResultText(string(raw)), nil
+			return instance.Queue.ListDestinationSummaries(ctx, limit)
 		},
-	)
+	})
 
-	s.AddTool(
-		mcp.NewTool("list_queue_events",
-			mcp.WithDescription("List FE queue audit events, optionally filtered by destination."),
-			mcp.WithString("destination_id", mcp.Description("Optional destination id filter.")),
-			mcp.WithNumber("limit", mcp.Description("Maximum queue events to list. Defaults to 50.")),
+	s.RegisterTool(gomcpserver.Tool{
+		Name:        "list_queue_events",
+		Description: "List FE queue audit events, optionally filtered by destination.",
+		InputSchema: inputSchema(
+			strProp("destination_id", "Optional destination id filter.", false),
+			numProp("limit", "Maximum queue events to list. Defaults to 50.", false),
 		),
-		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		ReadOnlyHint: true,
+		Handler: func(ctx context.Context, args map[string]any) (any, error) {
 			cfg, err := config.Load(cfgPath)
 			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
+				return nil, err
 			}
 			instance, err := app.Open(ctx, cfg)
 			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
+				return nil, err
 			}
 			defer instance.Close()
 			limit := 50
-			if rawLimit := req.GetFloat("limit", 50); rawLimit > 0 {
+			if rawLimit := argFloat(args, "limit", 50); rawLimit > 0 {
 				limit = int(rawLimit)
 			}
-			items, err := instance.Queue.ListEvents(ctx, req.GetString("destination_id", ""), limit)
-			if err != nil {
-				return mcp.NewToolResultError(fmt.Sprintf("list queue events: %v", err)), nil
-			}
-			raw, _ := json.MarshalIndent(items, "", "  ")
-			return mcp.NewToolResultText(string(raw)), nil
+			return instance.Queue.ListEvents(ctx, argString(args, "destination_id", ""), limit)
 		},
-	)
+	})
 
-	s.AddTool(
-		mcp.NewTool("list_pending_queue_jobs",
-			mcp.WithDescription("List pending FE external delivery queue jobs."),
-			mcp.WithString("destination_id", mcp.Description("Optional destination id filter.")),
-			mcp.WithNumber("limit", mcp.Description("Maximum pending jobs to list. Defaults to 50.")),
+	s.RegisterTool(gomcpserver.Tool{
+		Name:        "list_pending_queue_jobs",
+		Description: "List pending FE external delivery queue jobs.",
+		InputSchema: inputSchema(
+			strProp("destination_id", "Optional destination id filter.", false),
+			numProp("limit", "Maximum pending jobs to list. Defaults to 50.", false),
 		),
-		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		ReadOnlyHint: true,
+		Handler: func(ctx context.Context, args map[string]any) (any, error) {
 			cfg, err := config.Load(cfgPath)
 			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
+				return nil, err
 			}
 			instance, err := app.Open(ctx, cfg)
 			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
+				return nil, err
 			}
 			defer instance.Close()
 			limit := 50
-			if rawLimit := req.GetFloat("limit", 50); rawLimit > 0 {
+			if rawLimit := argFloat(args, "limit", 50); rawLimit > 0 {
 				limit = int(rawLimit)
 			}
-			items, err := instance.Queue.ListPending(ctx, req.GetString("destination_id", ""), limit)
-			if err != nil {
-				return mcp.NewToolResultError(fmt.Sprintf("list pending queue jobs: %v", err)), nil
-			}
-			raw, _ := json.MarshalIndent(items, "", "  ")
-			return mcp.NewToolResultText(string(raw)), nil
+			return instance.Queue.ListPending(ctx, argString(args, "destination_id", ""), limit)
 		},
-	)
+	})
 
-	s.AddTool(
-		mcp.NewTool("drain_queue",
-			mcp.WithDescription("Drain FE external delivery queue jobs."),
-			mcp.WithNumber("limit", mcp.Description("Maximum queued jobs to process. Defaults to 100.")),
+	s.RegisterTool(gomcpserver.Tool{
+		Name:        "drain_queue",
+		Description: "Drain FE external delivery queue jobs.",
+		InputSchema: inputSchema(
+			numProp("limit", "Maximum queued jobs to process. Defaults to 100.", false),
 		),
-		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		Handler: func(ctx context.Context, args map[string]any) (any, error) {
 			cfg, err := config.Load(cfgPath)
 			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
+				return nil, err
 			}
 			instance, err := app.Open(ctx, cfg)
 			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
+				return nil, err
 			}
 			defer instance.Close()
 			limit := 100
-			if rawLimit := req.GetFloat("limit", 100); rawLimit > 0 {
+			if rawLimit := argFloat(args, "limit", 100); rawLimit > 0 {
 				limit = int(rawLimit)
 			}
 			processed, err := instance.Queue.Drain(ctx, limit)
 			if err != nil {
-				return mcp.NewToolResultError(fmt.Sprintf("drain queue: %v", err)), nil
+				return nil, fmt.Errorf("drain queue: %w", err)
 			}
 			stats, err := instance.Queue.Stats(ctx)
 			if err != nil {
-				return mcp.NewToolResultError(fmt.Sprintf("queue status: %v", err)), nil
+				return nil, fmt.Errorf("queue status: %w", err)
 			}
-			raw, _ := json.MarshalIndent(map[string]any{
-				"processed": processed,
-				"stats":     stats,
-			}, "", "  ")
-			return mcp.NewToolResultText(string(raw)), nil
+			return map[string]any{"processed": processed, "stats": stats}, nil
 		},
-	)
+	})
 
-	s.AddTool(
-		mcp.NewTool("list_failed_queue_jobs",
-			mcp.WithDescription("List failed FE external delivery queue jobs."),
-			mcp.WithString("destination_id", mcp.Description("Optional destination id filter.")),
-			mcp.WithNumber("limit", mcp.Description("Maximum failed jobs to list. Defaults to 50.")),
+	s.RegisterTool(gomcpserver.Tool{
+		Name:        "list_failed_queue_jobs",
+		Description: "List failed FE external delivery queue jobs.",
+		InputSchema: inputSchema(
+			strProp("destination_id", "Optional destination id filter.", false),
+			numProp("limit", "Maximum failed jobs to list. Defaults to 50.", false),
 		),
-		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		ReadOnlyHint: true,
+		Handler: func(ctx context.Context, args map[string]any) (any, error) {
 			cfg, err := config.Load(cfgPath)
 			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
+				return nil, err
 			}
 			instance, err := app.Open(ctx, cfg)
 			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
+				return nil, err
 			}
 			defer instance.Close()
 			limit := 50
-			if rawLimit := req.GetFloat("limit", 50); rawLimit > 0 {
+			if rawLimit := argFloat(args, "limit", 50); rawLimit > 0 {
 				limit = int(rawLimit)
 			}
-			items, err := instance.Queue.ListFailed(ctx, req.GetString("destination_id", ""), limit)
-			if err != nil {
-				return mcp.NewToolResultError(fmt.Sprintf("list failed queue jobs: %v", err)), nil
-			}
-			raw, _ := json.MarshalIndent(items, "", "  ")
-			return mcp.NewToolResultText(string(raw)), nil
+			return instance.Queue.ListFailed(ctx, argString(args, "destination_id", ""), limit)
 		},
-	)
+	})
 
-	s.AddTool(
-		mcp.NewTool("replay_failed_queue_job",
-			mcp.WithDescription("Replay a failed FE external delivery queue job back into the live queue."),
-			mcp.WithNumber("id", mcp.Required(), mcp.Description("Failed queue job id.")),
-			mcp.WithBoolean("force", mcp.Description("Replay even if destination status is unhealthy.")),
+	s.RegisterTool(gomcpserver.Tool{
+		Name:        "replay_failed_queue_job",
+		Description: "Replay a failed FE external delivery queue job back into the live queue.",
+		InputSchema: inputSchema(
+			numProp("id", "Failed queue job id.", true),
+			boolProp("force", "Replay even if destination status is unhealthy.", false),
 		),
-		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-			id := int64(req.GetFloat("id", 0))
+		Handler: func(ctx context.Context, args map[string]any) (any, error) {
+			id := int64(argFloat(args, "id", 0))
 			if id <= 0 {
-				return mcp.NewToolResultError("missing id"), nil
+				return nil, fmt.Errorf("missing id")
 			}
 			cfg, err := config.Load(cfgPath)
 			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
+				return nil, err
 			}
 			instance, err := app.Open(ctx, cfg)
 			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
+				return nil, err
 			}
 			defer instance.Close()
-			if err := instance.Queue.ReplayFailed(ctx, id, req.GetBool("force", false)); err != nil {
-				return mcp.NewToolResultError(fmt.Sprintf("replay failed queue job: %v", err)), nil
+			if err := instance.Queue.ReplayFailed(ctx, id, argBool(args, "force", false)); err != nil {
+				return nil, fmt.Errorf("replay failed queue job: %w", err)
 			}
 			stats, err := instance.Queue.Stats(ctx)
 			if err != nil {
-				return mcp.NewToolResultError(fmt.Sprintf("queue status: %v", err)), nil
+				return nil, fmt.Errorf("queue status: %w", err)
 			}
-			raw, _ := json.MarshalIndent(map[string]any{"replayed": id, "stats": stats}, "", "  ")
-			return mcp.NewToolResultText(string(raw)), nil
+			return map[string]any{"replayed": id, "stats": stats}, nil
 		},
-	)
+	})
 
-	s.AddTool(
-		mcp.NewTool("purge_failed_queue_job",
-			mcp.WithDescription("Purge a failed FE external delivery queue job without replaying it."),
-			mcp.WithNumber("id", mcp.Required(), mcp.Description("Failed queue job id.")),
+	s.RegisterTool(gomcpserver.Tool{
+		Name:        "purge_failed_queue_job",
+		Description: "Purge a failed FE external delivery queue job without replaying it.",
+		InputSchema: inputSchema(
+			numProp("id", "Failed queue job id.", true),
 		),
-		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-			id := int64(req.GetFloat("id", 0))
+		DestructiveHint: true,
+		IdempotentHint:  true,
+		Handler: func(ctx context.Context, args map[string]any) (any, error) {
+			id := int64(argFloat(args, "id", 0))
 			if id <= 0 {
-				return mcp.NewToolResultError("missing id"), nil
+				return nil, fmt.Errorf("missing id")
 			}
 			cfg, err := config.Load(cfgPath)
 			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
+				return nil, err
 			}
 			instance, err := app.Open(ctx, cfg)
 			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
+				return nil, err
 			}
 			defer instance.Close()
 			if err := instance.Queue.PurgeFailed(ctx, id); err != nil {
-				return mcp.NewToolResultError(fmt.Sprintf("purge failed queue job: %v", err)), nil
+				return nil, fmt.Errorf("purge failed queue job: %w", err)
 			}
 			stats, err := instance.Queue.Stats(ctx)
 			if err != nil {
-				return mcp.NewToolResultError(fmt.Sprintf("queue status: %v", err)), nil
+				return nil, fmt.Errorf("queue status: %w", err)
 			}
-			raw, _ := json.MarshalIndent(map[string]any{"purged": id, "stats": stats}, "", "  ")
-			return mcp.NewToolResultText(string(raw)), nil
+			return map[string]any{"purged": id, "stats": stats}, nil
 		},
-	)
+	})
 
-	s.AddTool(
-		mcp.NewTool("list_inbox_entities",
-			mcp.WithDescription("List persisted entity groups across staged inbox items."),
-			mcp.WithString("kind", mcp.Description("Optional entity kind filter.")),
+	s.RegisterTool(gomcpserver.Tool{
+		Name:        "list_inbox_entities",
+		Description: "List persisted entity groups across staged inbox items.",
+		InputSchema: inputSchema(
+			strProp("kind", "Optional entity kind filter.", false),
 		),
-		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-			kind := req.GetString("kind", "")
+		ReadOnlyHint: true,
+		Handler: func(ctx context.Context, args map[string]any) (any, error) {
 			cfg, err := config.Load(cfgPath)
 			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
+				return nil, err
 			}
 			instance, err := app.Open(ctx, cfg)
 			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
+				return nil, err
 			}
 			defer instance.Close()
-			items, err := instance.Inbox.ListEntityGroups(ctx, kind, 50)
-			if err != nil {
-				return mcp.NewToolResultError(fmt.Sprintf("inbox entities: %v", err)), nil
-			}
-			raw, _ := json.MarshalIndent(items, "", "  ")
-			return mcp.NewToolResultText(string(raw)), nil
+			return instance.Inbox.ListEntityGroups(ctx, argString(args, "kind", ""), 50)
 		},
-	)
+	})
 
-	s.AddTool(
-		mcp.NewTool("list_inbox_items_by_entity",
-			mcp.WithDescription("List staged inbox items linked to a persisted entity."),
-			mcp.WithString("kind", mcp.Required(), mcp.Description("Entity kind.")),
-			mcp.WithString("value", mcp.Required(), mcp.Description("Entity value.")),
+	s.RegisterTool(gomcpserver.Tool{
+		Name:        "list_inbox_items_by_entity",
+		Description: "List staged inbox items linked to a persisted entity.",
+		InputSchema: inputSchema(
+			strProp("kind", "Entity kind.", true),
+			strProp("value", "Entity value.", true),
 		),
-		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-			kind, err := req.RequireString("kind")
+		ReadOnlyHint: true,
+		Handler: func(ctx context.Context, args map[string]any) (any, error) {
+			kind, err := requiredString(args, "kind")
 			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
+				return nil, err
 			}
-			value, err := req.RequireString("value")
+			value, err := requiredString(args, "value")
 			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
+				return nil, err
 			}
 			cfg, err := config.Load(cfgPath)
 			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
+				return nil, err
 			}
 			instance, err := app.Open(ctx, cfg)
 			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
+				return nil, err
 			}
 			defer instance.Close()
-			items, err := instance.Inbox.ListByEntity(ctx, kind, value, 50)
-			if err != nil {
-				return mcp.NewToolResultError(fmt.Sprintf("inbox items by entity: %v", err)), nil
-			}
-			raw, _ := json.MarshalIndent(items, "", "  ")
-			return mcp.NewToolResultText(string(raw)), nil
+			return instance.Inbox.ListByEntity(ctx, kind, value, 50)
 		},
-	)
+	})
 
-	s.AddTool(
-		mcp.NewTool("list_destinations",
-			mcp.WithDescription("List configured routing destinations."),
-		),
-		func(ctx context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	s.RegisterTool(gomcpserver.Tool{
+		Name:         "list_destinations",
+		Description:  "List configured routing destinations.",
+		InputSchema:  gomcpserver.EmptyObjectSchema(),
+		ReadOnlyHint: true,
+		Handler: func(ctx context.Context, _ map[string]any) (any, error) {
 			cfg, err := config.Load(cfgPath)
 			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
+				return nil, err
 			}
 			instance, err := app.Open(ctx, cfg)
 			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
+				return nil, err
 			}
 			defer instance.Close()
-			items, err := instance.Routing.ListDestinations(ctx)
-			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
-			}
-			raw, _ := json.MarshalIndent(items, "", "  ")
-			return mcp.NewToolResultText(string(raw)), nil
+			return instance.Routing.ListDestinations(ctx)
 		},
-	)
+	})
 
-	s.AddTool(
-		mcp.NewTool("get_destination_status",
-			mcp.WithDescription("Get FE destination status including config validity, reachability, and last delivery state."),
-			mcp.WithString("destination_id", mcp.Description("Optional destination id. Omit to list all destination statuses.")),
+	s.RegisterTool(gomcpserver.Tool{
+		Name:        "get_destination_status",
+		Description: "Get FE destination status including config validity, reachability, and last delivery state.",
+		InputSchema: inputSchema(
+			strProp("destination_id", "Optional destination id. Omit to list all destination statuses.", false),
 		),
-		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		ReadOnlyHint: true,
+		Handler: func(ctx context.Context, args map[string]any) (any, error) {
 			cfg, err := config.Load(cfgPath)
 			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
+				return nil, err
 			}
 			instance, err := app.Open(ctx, cfg)
 			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
+				return nil, err
 			}
 			defer instance.Close()
-			destinationID := req.GetString("destination_id", "")
+			destinationID := argString(args, "destination_id", "")
 			if destinationID != "" {
-				item, err := instance.Routing.GetDestinationStatus(ctx, destinationID)
-				if err != nil {
-					return mcp.NewToolResultError(fmt.Sprintf("destination status: %v", err)), nil
-				}
-				raw, _ := json.MarshalIndent(item, "", "  ")
-				return mcp.NewToolResultText(string(raw)), nil
+				return instance.Routing.GetDestinationStatus(ctx, destinationID)
 			}
-			items, err := instance.Routing.ListDestinationStatus(ctx)
-			if err != nil {
-				return mcp.NewToolResultError(fmt.Sprintf("destination status: %v", err)), nil
-			}
-			raw, _ := json.MarshalIndent(items, "", "  ")
-			return mcp.NewToolResultText(string(raw)), nil
+			return instance.Routing.ListDestinationStatus(ctx)
 		},
-	)
+	})
 
-	s.AddTool(
-		mcp.NewTool("validate_destination",
-			mcp.WithDescription("Validate a destination config without persisting it."),
-			mcp.WithString("name", mcp.Description("Optional destination name.")),
-			mcp.WithString("kind", mcp.Required(), mcp.Description("Destination kind.")),
-			mcp.WithString("config_json", mcp.Description("Destination config JSON.")),
+	s.RegisterTool(gomcpserver.Tool{
+		Name:        "validate_destination",
+		Description: "Validate a destination config without persisting it.",
+		InputSchema: inputSchema(
+			strProp("name", "Optional destination name.", false),
+			strProp("kind", "Destination kind.", true),
+			strProp("config_json", "Destination config JSON.", false),
 		),
-		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-			kind, err := req.RequireString("kind")
+		ReadOnlyHint: true,
+		Handler: func(ctx context.Context, args map[string]any) (any, error) {
+			kind, err := requiredString(args, "kind")
 			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
+				return nil, err
 			}
 			cfg, err := config.Load(cfgPath)
 			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
+				return nil, err
 			}
 			instance, err := app.Open(ctx, cfg)
 			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
+				return nil, err
 			}
 			defer instance.Close()
-			item, err := instance.Routing.ValidateDestination(ctx, domain.Destination{
-				Name:       req.GetString("name", "validation-target"),
+			return instance.Routing.ValidateDestination(ctx, domain.Destination{
+				Name:       argString(args, "name", "validation-target"),
 				Kind:       kind,
-				ConfigJSON: req.GetString("config_json", "{}"),
+				ConfigJSON: argString(args, "config_json", "{}"),
 			})
-			if err != nil {
-				return mcp.NewToolResultError(fmt.Sprintf("validate destination: %v", err)), nil
-			}
-			raw, _ := json.MarshalIndent(item, "", "  ")
-			return mcp.NewToolResultText(string(raw)), nil
 		},
-	)
+	})
 
-	s.AddTool(
-		mcp.NewTool("rename_destination",
-			mcp.WithDescription("Rename a persisted destination."),
-			mcp.WithString("destination_id", mcp.Required(), mcp.Description("Destination id.")),
-			mcp.WithString("name", mcp.Required(), mcp.Description("New destination name.")),
+	s.RegisterTool(gomcpserver.Tool{
+		Name:        "rename_destination",
+		Description: "Rename a persisted destination.",
+		InputSchema: inputSchema(
+			strProp("destination_id", "Destination id.", true),
+			strProp("name", "New destination name.", true),
 		),
-		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-			destinationID, err := req.RequireString("destination_id")
+		IdempotentHint: true,
+		Handler: func(ctx context.Context, args map[string]any) (any, error) {
+			destinationID, err := requiredString(args, "destination_id")
 			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
+				return nil, err
 			}
-			name, err := req.RequireString("name")
+			name, err := requiredString(args, "name")
 			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
+				return nil, err
 			}
 			cfg, err := config.Load(cfgPath)
 			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
+				return nil, err
 			}
 			instance, err := app.Open(ctx, cfg)
 			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
+				return nil, err
 			}
 			defer instance.Close()
-			item, err := instance.Routing.RenameDestination(ctx, destinationID, name)
-			if err != nil {
-				return mcp.NewToolResultError(fmt.Sprintf("rename destination: %v", err)), nil
-			}
-			raw, _ := json.MarshalIndent(item, "", "  ")
-			return mcp.NewToolResultText(string(raw)), nil
+			return instance.Routing.RenameDestination(ctx, destinationID, name)
 		},
-	)
+	})
 
-	s.AddTool(
-		mcp.NewTool("delete_destination",
-			mcp.WithDescription("Delete a persisted destination, optionally forcing route removal."),
-			mcp.WithString("destination_id", mcp.Required(), mcp.Description("Destination id.")),
-			mcp.WithBoolean("force", mcp.Description("Delete even if routes still reference the destination.")),
+	s.RegisterTool(gomcpserver.Tool{
+		Name:        "delete_destination",
+		Description: "Delete a persisted destination, optionally forcing route removal.",
+		InputSchema: inputSchema(
+			strProp("destination_id", "Destination id.", true),
+			boolProp("force", "Delete even if routes still reference the destination.", false),
 		),
-		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-			destinationID, err := req.RequireString("destination_id")
+		DestructiveHint: true,
+		IdempotentHint:  true,
+		Handler: func(ctx context.Context, args map[string]any) (any, error) {
+			destinationID, err := requiredString(args, "destination_id")
 			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
+				return nil, err
 			}
 			cfg, err := config.Load(cfgPath)
 			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
+				return nil, err
 			}
 			instance, err := app.Open(ctx, cfg)
 			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
+				return nil, err
 			}
 			defer instance.Close()
-			item, err := instance.Routing.DeleteDestination(ctx, destinationID, req.GetBool("force", false))
-			if err != nil {
-				return mcp.NewToolResultError(fmt.Sprintf("delete destination: %v", err)), nil
-			}
-			raw, _ := json.MarshalIndent(item, "", "  ")
-			return mcp.NewToolResultText(string(raw)), nil
+			return instance.Routing.DeleteDestination(ctx, destinationID, argBool(args, "force", false))
 		},
-	)
+	})
 
-	s.AddTool(
-		mcp.NewTool("set_destination_retry_policy",
-			mcp.WithDescription("Set the stored retry policy override for a destination."),
-			mcp.WithString("destination_id", mcp.Required(), mcp.Description("Destination id.")),
-			mcp.WithNumber("max_attempts", mcp.Description("Retry max attempts.")),
-			mcp.WithNumber("backoff_ms", mcp.Description("Retry backoff in milliseconds.")),
+	s.RegisterTool(gomcpserver.Tool{
+		Name:        "set_destination_retry_policy",
+		Description: "Set the stored retry policy override for a destination.",
+		InputSchema: inputSchema(
+			strProp("destination_id", "Destination id.", true),
+			numProp("max_attempts", "Retry max attempts.", false),
+			numProp("backoff_ms", "Retry backoff in milliseconds.", false),
 		),
-		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-			destinationID, err := req.RequireString("destination_id")
+		IdempotentHint: true,
+		Handler: func(ctx context.Context, args map[string]any) (any, error) {
+			destinationID, err := requiredString(args, "destination_id")
 			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
+				return nil, err
 			}
 			cfg, err := config.Load(cfgPath)
 			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
+				return nil, err
 			}
 			instance, err := app.Open(ctx, cfg)
 			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
+				return nil, err
 			}
 			defer instance.Close()
-			item, err := instance.Routing.UpdateDestinationRetry(ctx, destinationID, domain.DeliveryRetryConfig{
-				MaxAttempts: int(req.GetFloat("max_attempts", 0)),
-				BackoffMS:   int(req.GetFloat("backoff_ms", 0)),
+			return instance.Routing.UpdateDestinationRetry(ctx, destinationID, domain.DeliveryRetryConfig{
+				MaxAttempts: int(argFloat(args, "max_attempts", 0)),
+				BackoffMS:   int(argFloat(args, "backoff_ms", 0)),
 			})
-			if err != nil {
-				return mcp.NewToolResultError(fmt.Sprintf("set destination retry policy: %v", err)), nil
-			}
-			raw, _ := json.MarshalIndent(item, "", "  ")
-			return mcp.NewToolResultText(string(raw)), nil
 		},
-	)
+	})
 
-	s.AddTool(
-		mcp.NewTool("set_destination_queue_policy",
-			mcp.WithDescription("Set the stored queue-policy override for a destination."),
-			mcp.WithString("destination_id", mcp.Required(), mcp.Description("Destination id.")),
-			mcp.WithNumber("replay_cooldown_seconds", mcp.Description("Replay cooldown in seconds.")),
-			mcp.WithNumber("max_replays_per_hour", mcp.Description("Maximum replays per hour.")),
-			mcp.WithNumber("alert_pending_threshold", mcp.Description("Pending-job alert threshold.")),
-			mcp.WithNumber("alert_dead_letter_threshold", mcp.Description("Dead-letter alert threshold.")),
+	s.RegisterTool(gomcpserver.Tool{
+		Name:        "set_destination_queue_policy",
+		Description: "Set the stored queue-policy override for a destination.",
+		InputSchema: inputSchema(
+			strProp("destination_id", "Destination id.", true),
+			numProp("replay_cooldown_seconds", "Replay cooldown in seconds.", false),
+			numProp("max_replays_per_hour", "Maximum replays per hour.", false),
+			numProp("alert_pending_threshold", "Pending-job alert threshold.", false),
+			numProp("alert_dead_letter_threshold", "Dead-letter alert threshold.", false),
 		),
-		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-			destinationID, err := req.RequireString("destination_id")
+		IdempotentHint: true,
+		Handler: func(ctx context.Context, args map[string]any) (any, error) {
+			destinationID, err := requiredString(args, "destination_id")
 			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
+				return nil, err
 			}
 			cfg, err := config.Load(cfgPath)
 			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
+				return nil, err
 			}
 			instance, err := app.Open(ctx, cfg)
 			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
+				return nil, err
 			}
 			defer instance.Close()
-			item, err := instance.Routing.UpdateDestinationQueuePolicy(ctx, destinationID, domain.QueuePolicyConfig{
-				ReplayCooldownSeconds:    int(req.GetFloat("replay_cooldown_seconds", 0)),
-				MaxReplaysPerHour:        int(req.GetFloat("max_replays_per_hour", 0)),
-				AlertPendingThreshold:    int(req.GetFloat("alert_pending_threshold", 0)),
-				AlertDeadLetterThreshold: int(req.GetFloat("alert_dead_letter_threshold", 0)),
+			return instance.Routing.UpdateDestinationQueuePolicy(ctx, destinationID, domain.QueuePolicyConfig{
+				ReplayCooldownSeconds:    int(argFloat(args, "replay_cooldown_seconds", 0)),
+				MaxReplaysPerHour:        int(argFloat(args, "max_replays_per_hour", 0)),
+				AlertPendingThreshold:    int(argFloat(args, "alert_pending_threshold", 0)),
+				AlertDeadLetterThreshold: int(argFloat(args, "alert_dead_letter_threshold", 0)),
 			})
-			if err != nil {
-				return mcp.NewToolResultError(fmt.Sprintf("set destination queue policy: %v", err)), nil
-			}
-			raw, _ := json.MarshalIndent(item, "", "  ")
-			return mcp.NewToolResultText(string(raw)), nil
 		},
-	)
+	})
 
-	s.AddTool(
-		mcp.NewTool("list_routes",
-			mcp.WithDescription("List configured deterministic routes."),
-		),
-		func(ctx context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	s.RegisterTool(gomcpserver.Tool{
+		Name:         "list_routes",
+		Description:  "List configured deterministic routes.",
+		InputSchema:  gomcpserver.EmptyObjectSchema(),
+		ReadOnlyHint: true,
+		Handler: func(ctx context.Context, _ map[string]any) (any, error) {
 			cfg, err := config.Load(cfgPath)
 			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
+				return nil, err
 			}
 			instance, err := app.Open(ctx, cfg)
 			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
+				return nil, err
 			}
 			defer instance.Close()
-			items, err := instance.Routing.ListRoutes(ctx)
-			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
-			}
-			raw, _ := json.MarshalIndent(items, "", "  ")
-			return mcp.NewToolResultText(string(raw)), nil
+			return instance.Routing.ListRoutes(ctx)
 		},
-	)
+	})
 
-	s.AddTool(
-		mcp.NewTool("rename_route",
-			mcp.WithDescription("Rename a configured route."),
-			mcp.WithString("route_id", mcp.Required(), mcp.Description("Route id.")),
-			mcp.WithString("name", mcp.Required(), mcp.Description("New route name.")),
+	s.RegisterTool(gomcpserver.Tool{
+		Name:        "rename_route",
+		Description: "Rename a configured route.",
+		InputSchema: inputSchema(
+			strProp("route_id", "Route id.", true),
+			strProp("name", "New route name.", true),
 		),
-		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-			routeID, err := req.RequireString("route_id")
+		IdempotentHint: true,
+		Handler: func(ctx context.Context, args map[string]any) (any, error) {
+			routeID, err := requiredString(args, "route_id")
 			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
+				return nil, err
 			}
-			name, err := req.RequireString("name")
+			name, err := requiredString(args, "name")
 			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
+				return nil, err
 			}
 			cfg, err := config.Load(cfgPath)
 			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
+				return nil, err
 			}
 			instance, err := app.Open(ctx, cfg)
 			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
+				return nil, err
 			}
 			defer instance.Close()
-			item, err := instance.Routing.RenameRoute(ctx, routeID, name)
-			if err != nil {
-				return mcp.NewToolResultError(fmt.Sprintf("rename route: %v", err)), nil
-			}
-			raw, _ := json.MarshalIndent(item, "", "  ")
-			return mcp.NewToolResultText(string(raw)), nil
+			return instance.Routing.RenameRoute(ctx, routeID, name)
 		},
-	)
+	})
 
-	s.AddTool(
-		mcp.NewTool("preview_route",
-			mcp.WithDescription("Preview which staged inbox items a route would currently match."),
-			mcp.WithString("route_id", mcp.Required(), mcp.Description("Route id.")),
-			mcp.WithNumber("limit", mcp.Description("Maximum staged items to inspect.")),
+	s.RegisterTool(gomcpserver.Tool{
+		Name:        "preview_route",
+		Description: "Preview which staged inbox items a route would currently match.",
+		InputSchema: inputSchema(
+			strProp("route_id", "Route id.", true),
+			numProp("limit", "Maximum staged items to inspect.", false),
 		),
-		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-			routeID, err := req.RequireString("route_id")
+		ReadOnlyHint: true,
+		Handler: func(ctx context.Context, args map[string]any) (any, error) {
+			routeID, err := requiredString(args, "route_id")
 			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
+				return nil, err
 			}
 			cfg, err := config.Load(cfgPath)
 			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
+				return nil, err
 			}
 			instance, err := app.Open(ctx, cfg)
 			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
+				return nil, err
 			}
 			defer instance.Close()
-			item, err := instance.Routing.PreviewRoute(ctx, routeID, int(req.GetFloat("limit", 50)))
-			if err != nil {
-				return mcp.NewToolResultError(fmt.Sprintf("preview route: %v", err)), nil
-			}
-			raw, _ := json.MarshalIndent(item, "", "  ")
-			return mcp.NewToolResultText(string(raw)), nil
+			return instance.Routing.PreviewRoute(ctx, routeID, int(argFloat(args, "limit", 50)))
 		},
-	)
+	})
 
-	s.AddTool(
-		mcp.NewTool("delete_route",
-			mcp.WithDescription("Delete a route, optionally forcing reference cleanup."),
-			mcp.WithString("route_id", mcp.Required(), mcp.Description("Route id.")),
-			mcp.WithBoolean("force", mcp.Description("Delete even if staged or route-log references still exist.")),
+	s.RegisterTool(gomcpserver.Tool{
+		Name:        "delete_route",
+		Description: "Delete a route, optionally forcing reference cleanup.",
+		InputSchema: inputSchema(
+			strProp("route_id", "Route id.", true),
+			boolProp("force", "Delete even if staged or route-log references still exist.", false),
 		),
-		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-			routeID, err := req.RequireString("route_id")
+		DestructiveHint: true,
+		IdempotentHint:  true,
+		Handler: func(ctx context.Context, args map[string]any) (any, error) {
+			routeID, err := requiredString(args, "route_id")
 			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
+				return nil, err
 			}
 			cfg, err := config.Load(cfgPath)
 			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
+				return nil, err
 			}
 			instance, err := app.Open(ctx, cfg)
 			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
+				return nil, err
 			}
 			defer instance.Close()
-			item, err := instance.Routing.DeleteRoute(ctx, routeID, req.GetBool("force", false))
-			if err != nil {
-				return mcp.NewToolResultError(fmt.Sprintf("delete route: %v", err)), nil
-			}
-			raw, _ := json.MarshalIndent(item, "", "  ")
-			return mcp.NewToolResultText(string(raw)), nil
+			return instance.Routing.DeleteRoute(ctx, routeID, argBool(args, "force", false))
 		},
-	)
+	})
 
-	s.AddTool(
-		mcp.NewTool("get_route_log",
-			mcp.WithDescription("Get route-log entries for a fragment id."),
-			mcp.WithString("fragment_id", mcp.Required(), mcp.Description("Fragment id to inspect.")),
+	s.RegisterTool(gomcpserver.Tool{
+		Name:        "get_route_log",
+		Description: "Get route-log entries for a fragment id.",
+		InputSchema: inputSchema(
+			strProp("fragment_id", "Fragment id to inspect.", true),
 		),
-		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-			fragmentID, err := req.RequireString("fragment_id")
+		ReadOnlyHint: true,
+		Handler: func(ctx context.Context, args map[string]any) (any, error) {
+			fragmentID, err := requiredString(args, "fragment_id")
 			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
+				return nil, err
 			}
 			cfg, err := config.Load(cfgPath)
 			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
+				return nil, err
 			}
 			instance, err := app.Open(ctx, cfg)
 			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
+				return nil, err
 			}
 			defer instance.Close()
-			items, err := instance.Routing.ListRouteLog(ctx, fragmentID)
-			if err != nil {
-				return mcp.NewToolResultError(fmt.Sprintf("route log: %v", err)), nil
-			}
-			raw, _ := json.MarshalIndent(items, "", "  ")
-			return mcp.NewToolResultText(string(raw)), nil
+			return instance.Routing.ListRouteLog(ctx, fragmentID)
 		},
-	)
+	})
 
-	s.AddTool(
-		mcp.NewTool("apply_route_by_entity",
-			mcp.WithDescription("Apply a route to staged inbox items matching a persisted entity."),
-			mcp.WithString("route_id", mcp.Required(), mcp.Description("Route id to apply.")),
-			mcp.WithString("kind", mcp.Required(), mcp.Description("Entity kind.")),
-			mcp.WithString("value", mcp.Required(), mcp.Description("Entity value.")),
+	s.RegisterTool(gomcpserver.Tool{
+		Name:        "apply_route_by_entity",
+		Description: "Apply a route to staged inbox items matching a persisted entity.",
+		InputSchema: inputSchema(
+			strProp("route_id", "Route id to apply.", true),
+			strProp("kind", "Entity kind.", true),
+			strProp("value", "Entity value.", true),
 		),
-		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-			routeID, err := req.RequireString("route_id")
+		Handler: func(ctx context.Context, args map[string]any) (any, error) {
+			routeID, err := requiredString(args, "route_id")
 			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
+				return nil, err
 			}
-			kind, err := req.RequireString("kind")
+			kind, err := requiredString(args, "kind")
 			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
+				return nil, err
 			}
-			value, err := req.RequireString("value")
+			value, err := requiredString(args, "value")
 			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
+				return nil, err
 			}
 			cfg, err := config.Load(cfgPath)
 			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
+				return nil, err
 			}
 			instance, err := app.Open(ctx, cfg)
 			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
+				return nil, err
 			}
 			defer instance.Close()
-			result, err := instance.Routing.ApplyRouteByEntity(ctx, routeID, kind, value, 50)
-			if err != nil {
-				return mcp.NewToolResultError(fmt.Sprintf("apply route by entity: %v", err)), nil
-			}
-			raw, _ := json.MarshalIndent(result, "", "  ")
-			return mcp.NewToolResultText(string(raw)), nil
+			return instance.Routing.ApplyRouteByEntity(ctx, routeID, kind, value, 50)
 		},
-	)
+	})
 
-	return server.ServeStdio(s)
+	return s.Run(ctx)
 }

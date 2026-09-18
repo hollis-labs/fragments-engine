@@ -14,8 +14,7 @@ import (
 
 	"github.com/hollis-labs/fragments-engine/internal/config"
 	"github.com/hollis-labs/fragments-engine/internal/domain"
-	mcpclient "github.com/mark3labs/mcp-go/client"
-	"github.com/mark3labs/mcp-go/mcp"
+	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 type ProbeResult struct {
@@ -73,9 +72,9 @@ func probeMCPDestination(ctx context.Context, destination domain.Destination) (P
 	callCtx, cancel := context.WithTimeout(ctx, minDuration(timeout, 5*time.Second))
 	defer cancel()
 
-	var client *mcpclient.Client
+	var transport mcpsdk.Transport
 	var readyMessage string
-	switch transport := strings.TrimSpace(cfg.Transport); transport {
+	switch t := strings.TrimSpace(cfg.Transport); t {
 	case "", "stdio":
 		command := strings.TrimSpace(cfg.Command)
 		if command == "" {
@@ -92,32 +91,29 @@ func probeMCPDestination(ctx context.Context, destination domain.Destination) (P
 			}
 			command = path
 		}
-		client, err = mcpclient.NewStdioMCPClient(command, cfg.Env, cfg.Args...)
+		cmd := exec.Command(command, cfg.Args...)
+		if len(cfg.Env) > 0 {
+			cmd.Env = append(os.Environ(), cfg.Env...)
+		}
+		transport = &mcpsdk.CommandTransport{Command: cmd}
 		readyMessage = "mcp_ready:" + command
 	case "http":
 		baseURL := strings.TrimSpace(cfg.BaseURL)
 		if baseURL == "" {
 			return ProbeResult{}, fmt.Errorf("mcp destination %q missing base_url for http transport", destination.Name)
 		}
-		client, err = mcpclient.NewStreamableHttpClient(baseURL)
-		if err == nil {
-			err = client.Start(callCtx)
-		}
+		transport = &mcpsdk.StreamableClientTransport{Endpoint: baseURL}
 		readyMessage = "mcp_ready:" + baseURL
 	default:
-		return ProbeResult{}, fmt.Errorf("mcp destination %q unsupported transport %q", destination.Name, transport)
+		return ProbeResult{}, fmt.Errorf("mcp destination %q unsupported transport %q", destination.Name, t)
 	}
-	if err != nil {
-		return ProbeResult{Reachable: false, Message: "start_failed:" + err.Error()}, nil
-	}
-	defer client.Close()
 
-	initReq := mcp.InitializeRequest{}
-	initReq.Params.ProtocolVersion = mcp.LATEST_PROTOCOL_VERSION
-	initReq.Params.ClientInfo = mcp.Implementation{Name: "fragments-engine", Version: "0.1.0"}
-	if _, err := client.Initialize(callCtx, initReq); err != nil {
-		return ProbeResult{Reachable: false, Message: "initialize_failed:" + err.Error()}, nil
+	client := mcpsdk.NewClient(&mcpsdk.Implementation{Name: "fragments-engine", Version: "0.1.0"}, nil)
+	session, err := client.Connect(callCtx, transport, nil)
+	if err != nil {
+		return ProbeResult{Reachable: false, Message: "connect_failed:" + err.Error()}, nil
 	}
+	defer session.Close()
 	return ProbeResult{Reachable: true, Message: readyMessage}, nil
 }
 

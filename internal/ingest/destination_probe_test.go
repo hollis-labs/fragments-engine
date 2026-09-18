@@ -12,8 +12,8 @@ import (
 
 	"github.com/hollis-labs/fragments-engine/internal/config"
 	"github.com/hollis-labs/fragments-engine/internal/domain"
-	"github.com/mark3labs/mcp-go/mcp"
-	mcpserver "github.com/mark3labs/mcp-go/server"
+	gomcpserver "github.com/hollis-labs/go-mcp/server"
+	httptransport "github.com/hollis-labs/go-mcp/transport/http"
 )
 
 func TestProbeDestination_File(t *testing.T) {
@@ -41,11 +41,16 @@ func TestProbeDestination_File(t *testing.T) {
 // reachable tangent_hitl destination as unreachable with "missing command",
 // because probeMCPDestination assumed stdio unconditionally.
 func TestProbeDestination_MCPHTTPTransport(t *testing.T) {
-	mcpSrv := mcpserver.NewMCPServer("fake-tangent", "0.0.1")
-	mcpSrv.AddTool(mcp.NewTool("tangent.hitl_enqueue"), func(_ context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		return mcp.NewToolResultText("{}"), nil
+	mcpSrv := gomcpserver.NewServer("fake-tangent", "0.0.1")
+	mcpSrv.RegisterTool(gomcpserver.Tool{
+		Name:        "tangent.hitl_enqueue",
+		Description: "fake",
+		InputSchema: gomcpserver.EmptyObjectSchema(),
+		Handler: func(_ context.Context, _ map[string]any) (any, error) {
+			return "{}", nil
+		},
 	})
-	httpSrv := mcpserver.NewTestStreamableHTTPServer(mcpSrv)
+	httpSrv := httptest.NewServer(httptransport.NewHandler(mcpSrv, httptransport.HandlerOptions{}))
 	defer httpSrv.Close()
 
 	result, err := ProbeDestination(context.Background(), domain.Destination{
