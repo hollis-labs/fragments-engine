@@ -1,6 +1,7 @@
 package sourceutil
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -10,6 +11,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"gopkg.in/yaml.v3"
 )
 
 var defaultDocExts = map[string]struct{}{
@@ -58,6 +61,34 @@ func FileURI(path string) string {
 func HashText(text string) string {
 	sum := sha256.Sum256([]byte(text))
 	return hex.EncodeToString(sum[:])
+}
+
+// ParseFrontmatter splits a leading "---\n...\n---\n" (or "...\n") YAML
+// frontmatter block off the front of body, returning the decoded frontmatter
+// map and the remaining body. It returns (nil, body) unchanged when body has
+// no frontmatter block, or when the block fails to decode as a YAML mapping,
+// so callers can always treat the return as "best-effort metadata, body is
+// authoritative."
+func ParseFrontmatter(body string) (map[string]any, string) {
+	body = strings.ReplaceAll(body, "\r\n", "\n")
+	if !strings.HasPrefix(body, "---\n") {
+		return nil, body
+	}
+	rest := strings.TrimPrefix(body, "---\n")
+	endIdx := strings.Index(rest, "\n---\n")
+	tokenLen := len("\n---\n")
+	if endIdx == -1 {
+		endIdx = strings.Index(rest, "\n...\n")
+		tokenLen = len("\n...\n")
+	}
+	if endIdx == -1 {
+		return nil, body
+	}
+	var frontmatter map[string]any
+	if err := yaml.NewDecoder(bytes.NewBufferString(rest[:endIdx])).Decode(&frontmatter); err != nil || len(frontmatter) == 0 {
+		return nil, body
+	}
+	return frontmatter, rest[endIdx+tokenLen:]
 }
 
 func SortedKeys[V any](in map[string]V) []string {

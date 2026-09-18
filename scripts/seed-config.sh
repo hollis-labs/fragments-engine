@@ -3,10 +3,12 @@
 #
 # fragments.example.yaml is a hand-maintained, commented template. It must never
 # be used as the live `--config` path: the ingest CRUD endpoints
-# (POST /v1/ingests/create|update|delete|set-enabled) rewrite the config file in
-# place via Go's YAML marshaller, which strips comments, re-indents, reorders
-# keys, and adds machine-default fields. Pointing the server at the template
-# clobbers it into machine output.
+# (POST /v1/ingests/create|update|delete|set-enabled) rewrite the config file
+# in place. config.Save does that as a byte-preserving merge against whatever
+# is already on disk (internal/config/merge.go), not a full re-encode, so this
+# is no longer about formatting getting clobbered -- it's that a running
+# server writing live config state into a git-tracked file is the wrong
+# direction regardless.
 #
 # This script copies the template to the runtime path once, then leaves the
 # runtime file alone on every subsequent run, so it is safe to call on each

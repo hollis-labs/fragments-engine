@@ -9,6 +9,20 @@ type deliveryReasonPayload struct {
 	Ref             string `json:"ref,omitempty"`
 	Error           string `json:"error,omitempty"`
 	DestinationKind string `json:"destination_kind,omitempty"`
+	// AttachmentCollisions records attachments this delivery published whose
+	// storage_path had already been claimed by an earlier match in the same
+	// fan-out pass (see RouteStage.Run). The later match still wins -- there
+	// is one storage_path per attachment, not one per destination -- but the
+	// collision is recorded here instead of happening silently.
+	AttachmentCollisions []AttachmentCollision `json:"attachment_collisions,omitempty"`
+}
+
+// AttachmentCollision names one attachment whose storage_path this match
+// overwrote, and which earlier route in the same fan-out pass had claimed it
+// first.
+type AttachmentCollision struct {
+	AttachmentID    string `json:"attachment_id"`
+	PreviousRouteID string `json:"previous_route_id"`
 }
 
 func encodeDeliveryReason(prefix string, payload deliveryReasonPayload) string {

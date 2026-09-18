@@ -137,6 +137,71 @@ func TestRoutingService_AddDestination_CLIDefaults(t *testing.T) {
 	}
 }
 
+// TestRoutingService_AddDestination_MCPHTTPTransport is the regression
+// test for a gap `route destination-add` had until now: normalizeDestination
+// (shared by AddDestination and ValidateDestination) validated "mcp"
+// destinations against stdio only, even after MCPDestinationExecutor itself
+// gained "http" transport support -- so creating the exact tangent_hitl
+// destination the README documents failed with "unsupported transport
+// \"http\"" despite the transport working end to end once created.
+func TestRoutingService_AddDestination_MCPHTTPTransport(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "fragments.db")
+	st, err := store.Open(dbPath)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+
+	svc := NewRoutingService(
+		repository.NewRoutingRepository(st.DB),
+		repository.NewFragmentRepository(st.DB),
+		repository.NewEntityRepository(st.DB),
+		repository.NewInboxRepository(st.DB),
+		config.DeliveryConfig{},
+		config.QueueConfig{},
+	)
+
+	dest, err := svc.AddDestination(context.Background(), domain.Destination{
+		Name: "tangent-hitl",
+		Kind: "mcp",
+		ConfigJSON: `{
+			"transport": "http",
+			"base_url": "http://127.0.0.1:7842/mcp",
+			"provider": "tangent_hitl",
+			"tangent_hitl": {"application_id": "fragments-engine", "agent_id": "fe-router"}
+		}`,
+	})
+	if err != nil {
+		t.Fatalf("add mcp http destination: %v", err)
+	}
+	cfg, err := domain.DecodeDestinationConfig[domain.MCPDestinationConfig](dest)
+	if err != nil {
+		t.Fatalf("decode mcp config: %v", err)
+	}
+	if cfg.Transport != "http" {
+		t.Fatalf("expected transport http preserved, got %q", cfg.Transport)
+	}
+	if cfg.Tool != "tangent.hitl_enqueue" {
+		t.Fatalf("expected tangent_hitl provider to default tool, got %q", cfg.Tool)
+	}
+
+	if _, err := svc.AddDestination(context.Background(), domain.Destination{
+		Name:       "tangent-hitl-no-url",
+		Kind:       "mcp",
+		ConfigJSON: `{"transport":"http","provider":"tangent_hitl"}`,
+	}); err == nil || !strings.Contains(err.Error(), "missing base_url") {
+		t.Fatalf("expected missing base_url error, got %v", err)
+	}
+
+	if _, err := svc.AddDestination(context.Background(), domain.Destination{
+		Name:       "bad-transport",
+		Kind:       "mcp",
+		ConfigJSON: `{"transport":"sse","command":"/usr/bin/env"}`,
+	}); err == nil || !strings.Contains(err.Error(), "unsupported transport") {
+		t.Fatalf("expected unsupported transport error, got %v", err)
+	}
+}
+
 func TestRoutingService_UpdateDestinationPolicies(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "fragments.db")
 	st, err := store.Open(dbPath)

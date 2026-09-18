@@ -1,7 +1,6 @@
 package filesystemdocs
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -12,7 +11,6 @@ import (
 	"github.com/hollis-labs/fragments-engine/internal/config"
 	"github.com/hollis-labs/fragments-engine/internal/domain"
 	"github.com/hollis-labs/fragments-engine/internal/ingest/sourceutil"
-	"gopkg.in/yaml.v3"
 )
 
 const kind = "filesystem_docs"
@@ -105,7 +103,7 @@ func collectFile(root, path string, cfg config.IngestConfig, rules config.Filesy
 		return domain.PipelineFragment{}, fmt.Errorf("relative path %s: %w", path, err)
 	}
 	repoRoot, repoName, repoRel := repoContext(root, path)
-	frontmatter, body := parseFrontmatter(string(raw))
+	frontmatter, body := sourceutil.ParseFrontmatter(string(raw))
 	content := normalizeBody(body)
 	if strings.TrimSpace(content) == "" {
 		return domain.PipelineFragment{}, nil
@@ -218,26 +216,4 @@ func documentTitle(path string, frontmatter map[string]any, content string) stri
 
 func normalizeBody(body string) string {
 	return strings.TrimSpace(strings.ReplaceAll(body, "\r\n", "\n"))
-}
-
-func parseFrontmatter(body string) (map[string]any, string) {
-	body = strings.ReplaceAll(body, "\r\n", "\n")
-	if !strings.HasPrefix(body, "---\n") {
-		return nil, body
-	}
-	rest := strings.TrimPrefix(body, "---\n")
-	endIdx := strings.Index(rest, "\n---\n")
-	tokenLen := len("\n---\n")
-	if endIdx == -1 {
-		endIdx = strings.Index(rest, "\n...\n")
-		tokenLen = len("\n...\n")
-	}
-	if endIdx == -1 {
-		return nil, body
-	}
-	var frontmatter map[string]any
-	if err := yaml.NewDecoder(bytes.NewBufferString(rest[:endIdx])).Decode(&frontmatter); err != nil || len(frontmatter) == 0 {
-		return nil, body
-	}
-	return frontmatter, rest[endIdx+tokenLen:]
 }

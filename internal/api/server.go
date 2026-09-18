@@ -2066,6 +2066,11 @@ type intakeRequest struct {
 	SourceType string   `json:"source_type"`
 	Tags       []string `json:"tags"`
 
+	// Source overrides the fragment's Source field. Defaults to "manual" in
+	// service.FragmentService.Intake when omitted, for backward compatibility
+	// with existing callers (the web clipper). Agent callers pass "agent".
+	Source string `json:"source"`
+
 	// SourceURL, Description, and Selection support intake of content the
 	// caller already fetched/extracted client-side (the web clipper browser
 	// extension being the first such caller, see EP-20260816-0005). When
@@ -2077,6 +2082,14 @@ type intakeRequest struct {
 	Selection   string   `json:"selection"`
 	Highlights  []string `json:"highlights"`
 	Notes       []string `json:"notes"`
+
+	// PublicationPath and NotifyNow mirror the write_doc MCP tool and CLI
+	// `intake` flags -- see service.IntakeRequest. No file_path here
+	// deliberately: unlike the CLI/MCP (local, same-machine callers), an
+	// HTTP caller reading an arbitrary server-local path is a different risk
+	// profile FE doesn't take on for this endpoint.
+	PublicationPath string `json:"publication_path"`
+	NotifyNow       bool   `json:"notify_now"`
 }
 
 func (s *Server) handleIntake(w http.ResponseWriter, r *http.Request) {
@@ -2105,15 +2118,18 @@ func (s *Server) handleIntake(w http.ResponseWriter, r *http.Request) {
 	}
 	defer instance.Close()
 	result, err := instance.Fragments.Intake(r.Context(), service.IntakeRequest{
-		Content:     input.Content,
-		Title:       input.Title,
-		SourceType:  input.SourceType,
-		Tags:        input.Tags,
-		SourceURL:   input.SourceURL,
-		Description: input.Description,
-		Selection:   input.Selection,
-		Highlights:  input.Highlights,
-		Notes:       input.Notes,
+		Content:         input.Content,
+		Title:           input.Title,
+		SourceType:      input.SourceType,
+		Tags:            input.Tags,
+		Source:          input.Source,
+		SourceURL:       input.SourceURL,
+		Description:     input.Description,
+		Selection:       input.Selection,
+		Highlights:      input.Highlights,
+		Notes:           input.Notes,
+		PublicationPath: input.PublicationPath,
+		NotifyNow:       input.NotifyNow,
 	})
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)

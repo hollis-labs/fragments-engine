@@ -39,10 +39,14 @@ go build ./cmd/fragments-engine
 ## Boundaries
 
 `fragments.example.yaml` is a hand-commented template and is read-only at
-runtime. The ingest CRUD endpoints rewrite the live config file in place through
-Go's YAML marshaller, which strips comments, reorders keys and adds machine
-defaults, so the server must run against the gitignored `fragments.yaml`. Seed it
-once with `make seed-config`; `scripts/seed-config.sh` carries the full reasoning.
+runtime. The ingest CRUD endpoints rewrite the live config file in place;
+`config.Save` does this as a byte-preserving merge against whatever's already
+on disk (`internal/config/merge.go`), not a full re-encode, so comments and
+key order survive a write. The server must still run against the gitignored
+`fragments.yaml` rather than the template directly: a running server writing
+config state into a git-tracked file is the wrong direction regardless of
+formatting. Seed it once with `make seed-config`; `scripts/seed-config.sh`
+carries the full reasoning.
 
 `apps/sysop/dist` is gitignored but embedded with `//go:embed all:dist`
 (`apps/sysop/embed.go`), so a fresh clone cannot `go build` until `make

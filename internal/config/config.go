@@ -281,14 +281,36 @@ func AnchorPath(dir, p string) string {
 	return filepath.Join(dir, p)
 }
 
+// Save persists cfg to path. When path already holds a config file, the
+// write is a byte-preserving merge (see mergeYAML) rather than a full
+// re-encode: only keys cfg's schema actually changed are touched, so
+// comments, key order, and any key the schema doesn't model survive. A
+// missing path (first write) falls back to a plain marshal -- there's
+// nothing to preserve yet.
 func Save(path string, cfg Config) error {
 	if err := cfg.Validate(); err != nil {
 		return err
 	}
-	raw, err := yaml.Marshal(&cfg)
-	if err != nil {
-		return fmt.Errorf("encode config: %w", err)
+
+	var raw []byte
+	original, err := os.ReadFile(path)
+	switch {
+	case err == nil:
+		merged, mergeErr := mergeYAML(original, cfg)
+		if mergeErr != nil {
+			return fmt.Errorf("merge config: %w", mergeErr)
+		}
+		raw = merged
+	case errors.Is(err, os.ErrNotExist):
+		full, marshalErr := yaml.Marshal(&cfg)
+		if marshalErr != nil {
+			return fmt.Errorf("encode config: %w", marshalErr)
+		}
+		raw = full
+	default:
+		return fmt.Errorf("read existing config: %w", err)
 	}
+
 	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
 		return fmt.Errorf("mkdir config dir: %w", err)
 	}

@@ -3,6 +3,7 @@ package ingest
 import (
 	"context"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/hollis-labs/fragments-engine/internal/analyze"
@@ -232,7 +233,6 @@ func (s *RouteStage) Run(ctx context.Context, stageCtx *StageContext) error {
 		return err
 	}
 
-	var matched *domain.Route
 	// fragmentEntities starts from the in-memory extract.FromFragment kinds
 	// (workspace/repo/model/tool) -- those can't be read from the DB yet
 	// because RecallStage, which persists them, runs after RouteStage -- and
@@ -247,14 +247,20 @@ func (s *RouteStage) Run(ctx context.Context, stageCtx *StageContext) error {
 		}
 		fragmentEntities = append(fragmentEntities, persisted...)
 	}
+
+	// Fan-out: every matching route is delivered, not just the first. A
+	// fragment can carry more than one intent at once -- e.g. an
+	// agent-authored draft tagged for both corpus storage and a Tangent
+	// notification -- and each is an independent route/destination pair
+	// with its own route_log audit trail.
+	var matches []domain.Route
 	for i := range routes {
 		if routeMatches(routes[i], stageCtx.Fragment, fragmentEntities) {
-			matched = &routes[i]
-			break
+			matches = append(matches, routes[i])
 		}
 	}
 
-	if matched == nil {
+	if len(matches) == 0 {
 		return s.routes.LogDecision(ctx, domain.RouteLogEntry{
 			FragmentID: stageCtx.Fragment.ID,
 			Decision:   "inbox",
@@ -263,8 +269,53 @@ func (s *RouteStage) Run(ctx context.Context, stageCtx *StageContext) error {
 		})
 	}
 
+	attachments, err := s.attachments.ListByFragment(ctx, stageCtx.Fragment.ID)
+	if err != nil {
+		return err
+	}
+	routedFragment := stageCtx.Fragment
+	routedFragment.Status = domain.FragmentStatusRouted
+
+	delivered := false
+	// attachmentWinners tracks, for this pass only, which match most
+	// recently claimed each attachment's storage_path -- so a later match
+	// publishing the same attachment can record the collision instead of
+	// silently overwriting it (see runMatch).
+	attachmentWinners := map[string]string{}
+	for i := range matches {
+		matched := &matches[i]
+		ok, err := s.runMatch(ctx, stageCtx, matched, routedFragment, attachments, attachmentWinners)
+		if err != nil {
+			return err
+		}
+		if ok {
+			delivered = true
+		}
+	}
+
+	// The fragment leaves the inbox once ANY matched route has delivered
+	// synchronously. A callback match (always async) or a failed-and-queued
+	// match on its own leaves the fragment awaiting routing, exactly as the
+	// single-match path always has -- fan-out only changes how many
+	// destinations get a turn, not what "delivered" means for any one of
+	// them.
+	if !delivered {
+		return nil
+	}
+	if err := s.fragments.UpdateStatus(ctx, stageCtx.Fragment.ID, domain.FragmentStatusRouted); err != nil {
+		return err
+	}
+	stageCtx.Fragment = routedFragment
+	return s.inbox.Remove(ctx, stageCtx.Fragment.ID)
+}
+
+// runMatch delivers one matched route and returns whether it delivered
+// synchronously. A manual-review match, a callback match (always async), and
+// a failed-then-queued match all return false without that being an error --
+// each still gets its own route_log entry.
+func (s *RouteStage) runMatch(ctx context.Context, stageCtx *StageContext, matched *domain.Route, routedFragment domain.Fragment, attachments []domain.FragmentAttachment, attachmentWinners map[string]string) (bool, error) {
 	if !matched.AutoRoute {
-		return s.routes.LogDecision(ctx, domain.RouteLogEntry{
+		return false, s.routes.LogDecision(ctx, domain.RouteLogEntry{
 			FragmentID:    stageCtx.Fragment.ID,
 			RouteID:       matched.ID,
 			DestinationID: matched.DestinationID,
@@ -276,21 +327,15 @@ func (s *RouteStage) Run(ctx context.Context, stageCtx *StageContext) error {
 
 	destination, err := s.routes.GetDestination(ctx, matched.DestinationID)
 	if err != nil {
-		return err
+		return false, err
 	}
-	attachments, err := s.attachments.ListByFragment(ctx, stageCtx.Fragment.ID)
-	if err != nil {
-		return err
-	}
-	routedFragment := stageCtx.Fragment
-	routedFragment.Status = domain.FragmentStatusRouted
 
 	// Callback destinations must never fire synchronously against Curator's
 	// endpoint (see domain.CallbackDestinationConfig): skip the inline
 	// attempt entirely and go straight to the async delivery queue. This is
 	// the routing hot path, so it must never block on live network I/O.
 	if destination.Kind == "callback" {
-		return s.enqueueCallbackDelivery(ctx, stageCtx, matched, destination)
+		return false, s.enqueueCallbackDelivery(ctx, stageCtx, matched, destination)
 	}
 
 	delivery, err := s.executeDestination(ctx, destination, routedFragment, attachments)
@@ -302,7 +347,7 @@ func (s *RouteStage) Run(ctx context.Context, stageCtx *StageContext) error {
 				reason = EncodeDeliveryQueued(delivery.Attempts, err.Error())
 			}
 		}
-		return s.routes.LogDecision(ctx, domain.RouteLogEntry{
+		return false, s.routes.LogDecision(ctx, domain.RouteLogEntry{
 			FragmentID:    stageCtx.Fragment.ID,
 			RouteID:       matched.ID,
 			DestinationID: matched.DestinationID,
@@ -312,26 +357,38 @@ func (s *RouteStage) Run(ctx context.Context, stageCtx *StageContext) error {
 		})
 	}
 
-	if err := s.fragments.UpdateStatus(ctx, stageCtx.Fragment.ID, domain.FragmentStatusRouted); err != nil {
-		return err
-	}
+	// Attachment storage paths are a single field per attachment, not one per
+	// destination. When more than one match publishes the same attachment
+	// (e.g. two "file" destinations), the last successful match in route
+	// order wins the recorded path -- every match still gets its own
+	// route_log delivery record regardless, and a collision (this match
+	// overwriting a path an earlier match in the same pass already claimed)
+	// is recorded on that entry rather than happening silently.
+	var collisions []AttachmentCollision
 	if len(delivery.PublishedAttachments) > 0 {
+		for attachmentID := range delivery.PublishedAttachments {
+			if previousRouteID, ok := attachmentWinners[attachmentID]; ok && previousRouteID != matched.ID {
+				collisions = append(collisions, AttachmentCollision{AttachmentID: attachmentID, PreviousRouteID: previousRouteID})
+			}
+			attachmentWinners[attachmentID] = matched.ID
+		}
+		sort.Slice(collisions, func(i, j int) bool { return collisions[i].AttachmentID < collisions[j].AttachmentID })
 		if err := s.attachments.UpdateFragmentAttachmentStoragePaths(ctx, stageCtx.Fragment.ID, delivery.PublishedAttachments); err != nil {
-			return err
+			return false, err
 		}
 	}
-	stageCtx.Fragment = routedFragment
-	if err := s.inbox.Remove(ctx, stageCtx.Fragment.ID); err != nil {
-		return err
-	}
-	return s.routes.LogDecision(ctx, domain.RouteLogEntry{
+
+	if err := s.routes.LogDecision(ctx, domain.RouteLogEntry{
 		FragmentID:    stageCtx.Fragment.ID,
 		RouteID:       matched.ID,
 		DestinationID: matched.DestinationID,
 		Decision:      "auto_route",
-		Reason:        encodeDeliveryReason("matched_auto_route", deliveryReasonPayload{Attempts: delivery.Attempts, Ref: delivery.Ref}),
+		Reason:        encodeDeliveryReason("matched_auto_route", deliveryReasonPayload{Attempts: delivery.Attempts, Ref: delivery.Ref, AttachmentCollisions: collisions}),
 		CreatedAt:     stageCtx.Now,
-	})
+	}); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // enqueueCallbackDelivery handles the callback-destination branch of Run: it

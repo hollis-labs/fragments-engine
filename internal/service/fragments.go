@@ -16,6 +16,7 @@ import (
 	"github.com/hollis-labs/fragments-engine/internal/domain"
 	"github.com/hollis-labs/fragments-engine/internal/extract"
 	"github.com/hollis-labs/fragments-engine/internal/ingest"
+	"github.com/hollis-labs/fragments-engine/internal/ingest/sourceutil"
 	"github.com/hollis-labs/fragments-engine/internal/legacycapture"
 	"github.com/hollis-labs/fragments-engine/internal/recall"
 	"github.com/hollis-labs/fragments-engine/internal/repository"
@@ -365,6 +366,30 @@ type IntakeRequest struct {
 	SourceType string   // optional hint: "url", "youtube", "code", "markdown", "text"
 	Tags       []string // optional tag entities written as kind="tag"
 
+	// Source overrides the fragment's Source field. Defaults to "manual" for
+	// backward compatibility with callers that predate this field (the web
+	// clipper, Raycast). CLI/MCP agent-drop entry points pass "agent" so
+	// routes and reporting can tell an agent-authored draft apart from
+	// something Chrispian typed himself.
+	Source string
+
+	// SourceFilePath records where the caller read Content from on its own
+	// filesystem, when it did (the write_doc tool's file_path parameter).
+	// Informational only -- FE never reads, moves, or deletes that file; the
+	// path is stored in fragment metadata so a reviewer can see where the
+	// working copy actually lives.
+	SourceFilePath string
+	// PublicationPath is where this content should live once approved/
+	// processed -- a repo path, a docs/ location -- not auto-executed by FE.
+	// Falls back to a "publication_path" frontmatter key when unset. Visible
+	// in fragment metadata and in the rendered markdown a reviewer sees.
+	PublicationPath string
+	// NotifyNow forces this submission into any route matching the reserved
+	// "notify" tag, regardless of its other tags -- the explicit "show me
+	// this now" override, independent of what doc_type/tags it carries.
+	// Falls back to a "notify_now" frontmatter key when unset (false).
+	NotifyNow bool
+
 	// SourceURL, Description, and Selection support intake of content a
 	// caller already fetched/extracted client-side (the web clipper browser
 	// extension being the first such caller). When SourceURL is non-empty,
@@ -422,8 +447,8 @@ func (s *FragmentService) UpdateManualFragment(ctx context.Context, req UpdateFr
 	if err != nil {
 		return domain.FragmentDetail{}, fmt.Errorf("update fragment: %w", err)
 	}
-	if fragment.Source != "manual" {
-		return domain.FragmentDetail{}, fmt.Errorf("update fragment: only manual fragments are editable")
+	if fragment.Source != "manual" && fragment.Source != "agent" {
+		return domain.FragmentDetail{}, fmt.Errorf("update fragment: only manual or agent fragments are editable")
 	}
 	fragmentID = fragment.ID
 
@@ -588,23 +613,66 @@ func (s *FragmentService) Intake(ctx context.Context, req IntakeRequest) (Intake
 		return IntakeResult{}, fmt.Errorf("intake: content is required")
 	}
 
-	materialTitle := strings.TrimSpace(req.Title)
-	title := materialTitle
-	if title == "" {
-		title = deriveTitle(req.Content)
+	source := strings.TrimSpace(req.Source)
+	if source == "" {
+		source = "manual"
 	}
 
-	// Merge caller-supplied tags with any "#tag" tokens found inline in the
-	// content. Content itself is never mutated -- hashtags stay in place.
-	userTags := dedupeTagValues(req.Tags)
-	inlineTags := dedupeTagValues(ExtractHashtags(req.Content))
+	// A leading YAML frontmatter block (as an agent submitting a markdown
+	// draft would write) is parsed out here rather than left in Content:
+	// title and tags feed the same fields a caller-supplied title/tags
+	// would, and the whole block is preserved verbatim in
+	// metadata["frontmatter"]. A caller with no frontmatter block gets body
+	// == req.Content back unchanged.
+	frontmatter, body := sourceutil.ParseFrontmatter(req.Content)
+	if len(frontmatter) > 0 {
+		// Only normalize when a frontmatter block was actually stripped --
+		// callers with no frontmatter keep byte-identical Content, exactly as
+		// before this field existed.
+		body = strings.TrimSpace(body)
+	}
+
+	materialTitle := strings.TrimSpace(req.Title)
+	if materialTitle == "" {
+		if fmTitle, ok := frontmatter["title"].(string); ok && strings.TrimSpace(fmTitle) != "" {
+			materialTitle = strings.TrimSpace(fmTitle)
+		}
+	}
+	title := materialTitle
+	if title == "" {
+		title = deriveTitle(body)
+	}
+
+	publicationPath := strings.TrimSpace(req.PublicationPath)
+	if publicationPath == "" {
+		if fmPath, ok := frontmatter["publication_path"].(string); ok {
+			publicationPath = strings.TrimSpace(fmPath)
+		}
+	}
+	notifyNow := req.NotifyNow
+	if !notifyNow {
+		if fmNotify, ok := frontmatter["notify_now"].(bool); ok {
+			notifyNow = fmNotify
+		}
+	}
+
+	// Merge caller-supplied tags, frontmatter tags, any "#tag" tokens found
+	// inline in the content, and -- when notifyNow forced it -- the reserved
+	// "notify" tag a standing route matches to reach Tangent regardless of
+	// what else this is tagged. Content itself is never mutated -- hashtags
+	// stay in place.
+	userTags := dedupeTagValues(append(append([]string{}, req.Tags...), frontmatterTags(frontmatter)...))
+	if notifyNow {
+		userTags = dedupeTagValues(append(userTags, "notify"))
+	}
+	inlineTags := dedupeTagValues(ExtractHashtags(body))
 	mergedTags := dedupeTagValues(append(append([]string{}, userTags...), inlineTags...))
 	hasLinkTag := containsTagFold(mergedTags, "link")
 
 	requestedSourceType := strings.TrimSpace(req.SourceType)
 	sourceType := requestedSourceType
 	if sourceType == "" {
-		sourceType = detectSourceType(req.Content)
+		sourceType = detectSourceType(body)
 	}
 
 	sourceURL := strings.TrimSpace(req.SourceURL)
@@ -625,10 +693,10 @@ func (s *FragmentService) Intake(ctx context.Context, req IntakeRequest) (Intake
 	// future enrichment path, and -- only when the caller didn't force a
 	// source type, and detection didn't already land on something more
 	// specific like "youtube" -- treat it as a "url" source.
-	_, isBareURL := singleURL(req.Content)
+	_, isBareURL := singleURL(body)
 	var linkURL string
 	if hasLinkTag || isBareURL {
-		if url, ok := ExtractFirstURL(req.Content); ok {
+		if url, ok := ExtractFirstURL(body); ok {
 			linkURL = url
 		}
 	}
@@ -638,7 +706,7 @@ func (s *FragmentService) Intake(ctx context.Context, req IntakeRequest) (Intake
 
 	now := time.Now().UTC()
 	// Use a content-address as the source_id so identical submissions dedup.
-	sourceID := hashContent(req.Content)
+	sourceID := hashContent(body)
 
 	var (
 		err             error
@@ -646,7 +714,7 @@ func (s *FragmentService) Intake(ctx context.Context, req IntakeRequest) (Intake
 		derivedEntities []domain.FragmentEntity
 	)
 	if s.enricher != nil {
-		enriched, err = s.enricher.EnrichIntake(ctx, req.Content, title, sourceType, req.Tags, linkURL, PrefetchedContent{
+		enriched, err = s.enricher.EnrichIntake(ctx, body, title, sourceType, req.Tags, linkURL, PrefetchedContent{
 			SourceURL:   sourceURL,
 			Description: req.Description,
 			Selection:   req.Selection,
@@ -664,14 +732,14 @@ func (s *FragmentService) Intake(ctx context.Context, req IntakeRequest) (Intake
 	}
 
 	candidate := domain.PipelineFragment{
-		Source:        "manual",
+		Source:        source,
 		SourceType:    sourceType,
 		SourceID:      sourceID,
 		Title:         title,
 		Description:   req.Description,
-		Content:       req.Content,
+		Content:       body,
 		CreatedAt:     now,
-		CanonicalPath: "fragments/manual/" + sourceType + "/" + sourceID,
+		CanonicalPath: "fragments/" + source + "/" + sourceType + "/" + sourceID,
 	}
 	if strings.TrimSpace(enriched.CanonicalPath) != "" {
 		candidate.CanonicalPath = enriched.CanonicalPath
@@ -681,6 +749,22 @@ func (s *FragmentService) Intake(ctx context.Context, req IntakeRequest) (Intake
 	}
 	if len(enriched.Attachments) > 0 {
 		candidate.Attachments = enriched.Attachments
+	}
+	if len(frontmatter) > 0 || publicationPath != "" || strings.TrimSpace(req.SourceFilePath) != "" {
+		metadata := make(map[string]any, len(candidate.Metadata)+3)
+		for k, v := range candidate.Metadata {
+			metadata[k] = v
+		}
+		if len(frontmatter) > 0 {
+			metadata["frontmatter"] = frontmatter
+		}
+		if publicationPath != "" {
+			metadata["publication_path"] = publicationPath
+		}
+		if sourceFilePath := strings.TrimSpace(req.SourceFilePath); sourceFilePath != "" {
+			metadata["source_file_path"] = sourceFilePath
+		}
+		candidate.Metadata = metadata
 	}
 
 	materialMetadata := map[string]any{}
@@ -840,6 +924,35 @@ func decodeEditableMetadata(raw string) (map[string]any, error) {
 		meta = map[string]any{}
 	}
 	return meta, nil
+}
+
+// frontmatterTags reads a "tags" entry out of a decoded YAML frontmatter map.
+// A YAML sequence decodes into map[string]any as []interface{}, so that's the
+// primary case; a bare string is also accepted as a single tag.
+func frontmatterTags(frontmatter map[string]any) []string {
+	raw, ok := frontmatter["tags"]
+	if !ok {
+		return nil
+	}
+	switch v := raw.(type) {
+	case []interface{}:
+		tags := make([]string, 0, len(v))
+		for _, item := range v {
+			if s, ok := item.(string); ok && strings.TrimSpace(s) != "" {
+				tags = append(tags, strings.TrimSpace(s))
+			}
+		}
+		return tags
+	case []string:
+		return v
+	case string:
+		if strings.TrimSpace(v) == "" {
+			return nil
+		}
+		return []string{strings.TrimSpace(v)}
+	default:
+		return nil
+	}
 }
 
 func dedupeTagValues(tags []string) []string {

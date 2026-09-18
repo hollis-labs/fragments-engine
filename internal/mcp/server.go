@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"strings"
 
 	"github.com/hollis-labs/fragments-engine/internal/app"
 	"github.com/hollis-labs/fragments-engine/internal/config"
@@ -127,6 +129,59 @@ func Serve(ctx context.Context, cfgPath string) error {
 			)
 			if err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
+			}
+			raw, _ := json.MarshalIndent(result, "", "  ")
+			return mcp.NewToolResultText(string(raw)), nil
+		},
+	)
+
+	s.AddTool(
+		mcp.NewTool("write_doc",
+			mcp.WithDescription("Write a finished document — an ADR, report, procedure, architecture note, or similar — into Fragments Engine for Chrispian to triage: keep, move, edit, delete, or route further, on his own schedule. Use once a document like that is done, not for code or task-tracking work, and not for durable factual/decision knowledge, which belongs in Tesseract's capture-* skills instead."),
+			mcp.WithString("file_path", mcp.Description("Path to a file already written to disk (preferred). FE reads its content for review; the file itself is left exactly where it is. Use this or content, not both.")),
+			mcp.WithString("content", mcp.Description("The document content directly, when there's no local file yet. A leading YAML frontmatter block (title/tags/doc_type/publication_path/notify_now) is parsed server-side and merged into the fields below.")),
+			mcp.WithString("title", mcp.Description("Optional title override; otherwise taken from frontmatter or derived from content.")),
+			mcp.WithString("doc_type", mcp.Description("What kind of document this is, e.g. \"adr\", \"report\", \"procedure\", \"architecture\", \"investigation\", \"note\". Free text, not a fixed list -- becomes part of the corpus path and is available to route matching.")),
+			mcp.WithArray("tags", mcp.Description("Tags this document should carry, merged with any frontmatter tags and inline #hashtags. These decide routing: a tag with no configured route just sits in FE's own review queue, unnotified -- check `list_routes` before inventing a new one; see the write-doc skill for how to observe real conventions."), mcp.Items(map[string]any{"type": "string"})),
+			mcp.WithString("publication_path", mcp.Description("Where this should ultimately live once Chrispian processes it -- a repo path, a docs/ location. Not auto-written there; visible to him at review time.")),
+			mcp.WithBoolean("notify_now", mcp.Description("Force this into Chrispian's Tangent review right now, regardless of what routes its tags/doc_type would otherwise match. Offer this explicitly when producing a document he'd want to see immediately, rather than defaulting it either way.")),
+			mcp.WithString("source", mcp.Description("Fragment source. Defaults to \"agent\" -- this tool exists for agent callers.")),
+		),
+		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			filePath := strings.TrimSpace(req.GetString("file_path", ""))
+			content := req.GetString("content", "")
+			if filePath == "" && strings.TrimSpace(content) == "" {
+				return mcp.NewToolResultError("write_doc: one of file_path or content is required"), nil
+			}
+			if filePath != "" {
+				raw, err := os.ReadFile(filePath)
+				if err != nil {
+					return mcp.NewToolResultError(fmt.Sprintf("write_doc: read file_path: %v", err)), nil
+				}
+				content = string(raw)
+			}
+			source := req.GetString("source", "agent")
+			cfg, err := config.Load(cfgPath)
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			instance, err := app.Open(ctx, cfg)
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			defer instance.Close()
+			result, err := instance.Fragments.Intake(ctx, service.IntakeRequest{
+				Content:         content,
+				Title:           req.GetString("title", ""),
+				SourceType:      req.GetString("doc_type", ""),
+				Tags:            req.GetStringSlice("tags", nil),
+				Source:          source,
+				SourceFilePath:  filePath,
+				PublicationPath: req.GetString("publication_path", ""),
+				NotifyNow:       req.GetBool("notify_now", false),
+			})
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("submit fragment: %v", err)), nil
 			}
 			raw, _ := json.MarshalIndent(result, "", "  ")
 			return mcp.NewToolResultText(string(raw)), nil

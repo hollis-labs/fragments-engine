@@ -69,27 +69,44 @@ func probeMCPDestination(ctx context.Context, destination domain.Destination) (P
 	if err != nil {
 		return ProbeResult{}, err
 	}
-	command := strings.TrimSpace(cfg.Command)
-	if command == "" {
-		return ProbeResult{}, fmt.Errorf("mcp destination %q missing command", destination.Name)
-	}
-	if strings.ContainsRune(command, filepath.Separator) {
-		if _, err := os.Stat(command); err != nil {
-			return ProbeResult{Reachable: false, Message: "command_missing:" + command}, nil
-		}
-	} else {
-		path, err := exec.LookPath(command)
-		if err != nil {
-			return ProbeResult{Reachable: false, Message: "command_not_found:" + command}, nil
-		}
-		command = path
-	}
-
 	timeout := time.Duration(max(cfg.TimeoutSeconds, 30)) * time.Second
 	callCtx, cancel := context.WithTimeout(ctx, minDuration(timeout, 5*time.Second))
 	defer cancel()
 
-	client, err := mcpclient.NewStdioMCPClient(command, cfg.Env, cfg.Args...)
+	var client *mcpclient.Client
+	var readyMessage string
+	switch transport := strings.TrimSpace(cfg.Transport); transport {
+	case "", "stdio":
+		command := strings.TrimSpace(cfg.Command)
+		if command == "" {
+			return ProbeResult{}, fmt.Errorf("mcp destination %q missing command", destination.Name)
+		}
+		if strings.ContainsRune(command, filepath.Separator) {
+			if _, err := os.Stat(command); err != nil {
+				return ProbeResult{Reachable: false, Message: "command_missing:" + command}, nil
+			}
+		} else {
+			path, err := exec.LookPath(command)
+			if err != nil {
+				return ProbeResult{Reachable: false, Message: "command_not_found:" + command}, nil
+			}
+			command = path
+		}
+		client, err = mcpclient.NewStdioMCPClient(command, cfg.Env, cfg.Args...)
+		readyMessage = "mcp_ready:" + command
+	case "http":
+		baseURL := strings.TrimSpace(cfg.BaseURL)
+		if baseURL == "" {
+			return ProbeResult{}, fmt.Errorf("mcp destination %q missing base_url for http transport", destination.Name)
+		}
+		client, err = mcpclient.NewStreamableHttpClient(baseURL)
+		if err == nil {
+			err = client.Start(callCtx)
+		}
+		readyMessage = "mcp_ready:" + baseURL
+	default:
+		return ProbeResult{}, fmt.Errorf("mcp destination %q unsupported transport %q", destination.Name, transport)
+	}
 	if err != nil {
 		return ProbeResult{Reachable: false, Message: "start_failed:" + err.Error()}, nil
 	}
@@ -101,7 +118,7 @@ func probeMCPDestination(ctx context.Context, destination domain.Destination) (P
 	if _, err := client.Initialize(callCtx, initReq); err != nil {
 		return ProbeResult{Reachable: false, Message: "initialize_failed:" + err.Error()}, nil
 	}
-	return ProbeResult{Reachable: true, Message: "mcp_ready:" + command}, nil
+	return ProbeResult{Reachable: true, Message: readyMessage}, nil
 }
 
 func probeAPIDestination(ctx context.Context, destination domain.Destination) (ProbeResult, error) {

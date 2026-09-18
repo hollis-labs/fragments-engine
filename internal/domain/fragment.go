@@ -458,17 +458,22 @@ type FileDestinationConfig struct {
 }
 
 type MCPDestinationConfig struct {
-	Transport      string              `json:"transport"`
-	Command        string              `json:"command"`
-	Args           []string            `json:"args"`
-	Env            []string            `json:"env"`
-	Tool           string              `json:"tool"`
-	TimeoutSeconds int                 `json:"timeout_seconds"`
-	Provider       string              `json:"provider"`
-	NilInbox       MCPNilInboxConfig   `json:"nil_inbox"`
-	Arguments      map[string]any      `json:"arguments"`
-	Retry          DeliveryRetryConfig `json:"retry"`
-	QueuePolicy    *QueuePolicyConfig  `json:"queue_policy,omitempty"`
+	// Transport selects the MCP client transport: "stdio" (default, spawns
+	// Command as a subprocess) or "http" (Streamable HTTP against BaseURL,
+	// e.g. a long-running peer like Tangent).
+	Transport      string               `json:"transport"`
+	Command        string               `json:"command"`
+	Args           []string             `json:"args"`
+	Env            []string             `json:"env"`
+	BaseURL        string               `json:"base_url"`
+	Tool           string               `json:"tool"`
+	TimeoutSeconds int                  `json:"timeout_seconds"`
+	Provider       string               `json:"provider"`
+	NilInbox       MCPNilInboxConfig    `json:"nil_inbox"`
+	TangentHITL    MCPTangentHITLConfig `json:"tangent_hitl"`
+	Arguments      map[string]any       `json:"arguments"`
+	Retry          DeliveryRetryConfig  `json:"retry"`
+	QueuePolicy    *QueuePolicyConfig   `json:"queue_policy,omitempty"`
 }
 
 type MCPNilInboxConfig struct {
@@ -477,6 +482,19 @@ type MCPNilInboxConfig struct {
 	Tags        []string `json:"tags"`
 	Contexts    []string `json:"contexts"`
 	Projects    []string `json:"projects"`
+}
+
+// MCPTangentHITLConfig configures the "tangent_hitl" MCP provider, which
+// calls Tangent's tangent.hitl_enqueue tool (kind "attention") to place a
+// fragment in Tangent's durable /hitl operator inbox. See Tangent's own
+// .agents/skills/tangent-hitl-inbox/SKILL.md and
+// docs/contracts/hitl-inbox-v1.md for the contract.
+type MCPTangentHITLConfig struct {
+	ApplicationID string            `json:"application_id"`
+	AgentID       string            `json:"agent_id"`
+	Summary       string            `json:"summary"`
+	Request       string            `json:"request"`
+	ActionLabels  map[string]string `json:"action_labels"`
 }
 
 type APIDestinationConfig struct {

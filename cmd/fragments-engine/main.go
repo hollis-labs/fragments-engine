@@ -37,6 +37,8 @@ func run(args []string) error {
 		return runIngest(args[1:])
 	case "search":
 		return runSearch(args[1:])
+	case "intake":
+		return runIntake(args[1:])
 	case "fragment":
 		return runFragment(args[1:])
 	case "entity":
@@ -249,6 +251,73 @@ func runSearch(args []string) error {
 	for _, result := range results {
 		fmt.Printf("[%0.3f] %s (%s)\n%s\n\n", result.Score, result.Fragment.Title, result.Fragment.SourceID, result.Snippet)
 	}
+	return nil
+}
+
+// runIntake is the agent-facing "send FE a markdown file" entry point: read a
+// local file (or take content inline), parse any YAML frontmatter for
+// title/tags server-side (service.FragmentService.Intake does the parsing),
+// and run it through the normal ingest pipeline. Defaults -source to "agent"
+// since submitting through this command is this command's entire purpose;
+// pass -source manual to reproduce a human manual-intake fragment instead.
+func runIntake(args []string) error {
+	fs := flag.NewFlagSet("intake", flag.ContinueOnError)
+	configPath := fs.String("config", "fragments.example.yaml", "path to config file")
+	file := fs.String("file", "", "path to a markdown file to submit; mutually exclusive with -content")
+	content := fs.String("content", "", "content to submit inline; mutually exclusive with -file")
+	title := fs.String("title", "", "optional title override")
+	sourceType := fs.String("source-type", "", "optional doc_type hint, e.g. adr, report, procedure")
+	source := fs.String("source", "agent", "fragment source: agent or manual")
+	tags := fs.String("tags", "", "comma-separated tags")
+	publicationPath := fs.String("publication-path", "", "where this should live once processed; not auto-written there")
+	notifyNow := fs.Bool("notify-now", false, "force this into any route matching the reserved \"notify\" tag, regardless of other tags")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if (*file == "") == (*content == "") {
+		return fmt.Errorf("intake requires exactly one of -file or -content")
+	}
+	body := *content
+	if *file != "" {
+		raw, err := os.ReadFile(*file)
+		if err != nil {
+			return fmt.Errorf("read -file: %w", err)
+		}
+		body = string(raw)
+	}
+
+	var tagList []string
+	for _, tag := range strings.Split(*tags, ",") {
+		tag = strings.TrimSpace(tag)
+		if tag != "" {
+			tagList = append(tagList, tag)
+		}
+	}
+
+	cfg, err := config.Load(*configPath)
+	if err != nil {
+		return err
+	}
+	instance, err := app.Open(context.Background(), cfg)
+	if err != nil {
+		return err
+	}
+	defer instance.Close()
+
+	result, err := instance.Fragments.Intake(context.Background(), service.IntakeRequest{
+		Content:         body,
+		Title:           *title,
+		SourceType:      *sourceType,
+		Source:          *source,
+		Tags:            tagList,
+		SourceFilePath:  *file,
+		PublicationPath: *publicationPath,
+		NotifyNow:       *notifyNow,
+	})
+	if err != nil {
+		return err
+	}
+	fmt.Printf("%s %s %s\n", result.FragmentID, result.Outcome, result.Status)
 	return nil
 }
 

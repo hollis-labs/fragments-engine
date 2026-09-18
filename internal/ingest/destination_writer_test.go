@@ -147,6 +147,53 @@ func TestMCPDestinationExecutor_NilInbox(t *testing.T) {
 	}
 }
 
+// TestAPIDestinationExecutor_GenericProviderTemplatedBody covers the "api"
+// half of CW-20260917-0003's declarative-provider capability: a custom
+// provider name with a templated "body" map, no Go code for that provider
+// at all -- proving a new HTTP integration is addable as config.
+func TestAPIDestinationExecutor_GenericProviderTemplatedBody(t *testing.T) {
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer srv.Close()
+
+	fragment := testFragment()
+	destination := domain.Destination{
+		Name: "generic-webhook",
+		Kind: "api",
+		ConfigJSON: fmt.Sprintf(`{
+			"base_url": %q,
+			"path": "/webhook",
+			"provider": "generic_webhook",
+			"body": {
+				"fragment_id": "{{.Fragment.ID}}",
+				"title": "{{.Fragment.Title | truncate 10}}",
+				"payload": {"content": "{{.Fragment.Content}}"}
+			}
+		}`, srv.URL),
+	}
+
+	if _, err := (APIDestinationExecutor{}).Execute(context.Background(), destination, fragment, nil); err != nil {
+		t.Fatalf("execute api destination: %v", err)
+	}
+	if gotBody["fragment_id"] != fragment.ID {
+		t.Fatalf("unexpected fragment_id: %#v", gotBody["fragment_id"])
+	}
+	if gotBody["title"] != "Claude ses" {
+		t.Fatalf("expected truncated title, got %#v", gotBody["title"])
+	}
+	payload, _ := gotBody["payload"].(map[string]any)
+	if payload["content"] != fragment.Content {
+		t.Fatalf("expected nested map field rendered from fragment content, got %#v", payload)
+	}
+}
+
 func TestCallbackDestinationExecutor_ForwardsGeneratorUnmodified(t *testing.T) {
 	var (
 		gotMethod  string

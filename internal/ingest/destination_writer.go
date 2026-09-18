@@ -322,6 +322,12 @@ func renderFragmentMarkdown(fragment domain.Fragment) string {
 	b.WriteString("ingested_at: " + fragment.IngestedAt.Format("2006-01-02T15:04:05Z07:00") + "\n")
 	b.WriteString("ingest_name: " + fragment.IngestName + "\n")
 	b.WriteString("canonical_path: " + fragment.CanonicalPath + "\n")
+	if path := fragmentMetadataString(fragment, "publication_path"); path != "" {
+		b.WriteString("publication_path: " + path + "\n")
+	}
+	if path := fragmentMetadataString(fragment, "source_file_path"); path != "" {
+		b.WriteString("source_file_path: " + path + "\n")
+	}
 	b.WriteString("---\n\n")
 	b.WriteString("# " + fragment.Title + "\n\n")
 	b.WriteString(fragment.Content)
@@ -331,25 +337,60 @@ func renderFragmentMarkdown(fragment domain.Fragment) string {
 	return b.String()
 }
 
+// fragmentMetadataString reads a top-level string key out of a fragment's
+// decoded MetadataJSON, or "" if the key is absent, not a string, or the
+// metadata doesn't decode. Never an error -- this is presentation, not a
+// contract the caller depends on.
+func fragmentMetadataString(fragment domain.Fragment, key string) string {
+	if strings.TrimSpace(fragment.MetadataJSON) == "" {
+		return ""
+	}
+	var meta map[string]any
+	if err := json.Unmarshal([]byte(fragment.MetadataJSON), &meta); err != nil {
+		return ""
+	}
+	v, _ := meta[key].(string)
+	return strings.TrimSpace(v)
+}
+
 func (MCPDestinationExecutor) Execute(ctx context.Context, destination domain.Destination, fragment domain.Fragment, _ []domain.FragmentAttachment) (DeliveryResult, error) {
 	cfg, err := domain.DecodeDestinationConfig[domain.MCPDestinationConfig](destination)
 	if err != nil {
 		return DeliveryResult{}, err
 	}
-	if transport := strings.TrimSpace(cfg.Transport); transport != "" && transport != "stdio" {
-		return DeliveryResult{}, fmt.Errorf("unsupported mcp transport %q", transport)
-	}
-	command := strings.TrimSpace(cfg.Command)
-	if command == "" {
-		return DeliveryResult{}, fmt.Errorf("mcp destination %q missing command", destination.Name)
-	}
 	timeout := time.Duration(max(cfg.TimeoutSeconds, 30)) * time.Second
 	callCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	c, err := mcpclient.NewStdioMCPClient(command, cfg.Env, cfg.Args...)
-	if err != nil {
-		return DeliveryResult{}, markRetryable(fmt.Errorf("start mcp client: %w", err))
+	var c *mcpclient.Client
+	switch transport := strings.TrimSpace(cfg.Transport); transport {
+	case "", "stdio":
+		command := strings.TrimSpace(cfg.Command)
+		if command == "" {
+			return DeliveryResult{}, fmt.Errorf("mcp destination %q missing command", destination.Name)
+		}
+		c, err = mcpclient.NewStdioMCPClient(command, cfg.Env, cfg.Args...)
+		if err != nil {
+			return DeliveryResult{}, markRetryable(fmt.Errorf("start mcp client: %w", err))
+		}
+	case "http":
+		// Streamable HTTP: a long-running peer's own MCP server (e.g.
+		// Tangent on :7842), not a subprocess FE spawns. Start is required
+		// here -- NewStdioMCPClient auto-starts for backward compatibility,
+		// NewStreamableHttpClient does not.
+		baseURL := strings.TrimSpace(cfg.BaseURL)
+		if baseURL == "" {
+			return DeliveryResult{}, fmt.Errorf("mcp destination %q missing base_url for http transport", destination.Name)
+		}
+		c, err = mcpclient.NewStreamableHttpClient(baseURL)
+		if err != nil {
+			return DeliveryResult{}, markRetryable(fmt.Errorf("build mcp http client: %w", err))
+		}
+		if err := c.Start(callCtx); err != nil {
+			return DeliveryResult{}, markRetryable(fmt.Errorf("start mcp http client: %w", err))
+		}
+	default:
+		return DeliveryResult{}, fmt.Errorf("unsupported mcp transport %q", transport)
 	}
 	defer c.Close()
 
@@ -371,11 +412,20 @@ func (MCPDestinationExecutor) Execute(ctx context.Context, destination domain.De
 			toolName = "nil_create_inbox"
 		}
 		args = buildNilInboxArguments(fragment, cfg.NilInbox)
+	case "tangent_hitl":
+		if toolName == "" {
+			toolName = "tangent.hitl_enqueue"
+		}
+		args = buildTangentHITLArguments(fragment, cfg.TangentHITL)
 	default:
 		if toolName == "" {
 			return DeliveryResult{}, fmt.Errorf("mcp destination %q missing tool for provider %q", destination.Name, cfg.Provider)
 		}
-		args = cloneArguments(cfg.Arguments)
+		rendered, renderErr := renderArgumentTemplate(cfg.Arguments, fragment)
+		if renderErr != nil {
+			return DeliveryResult{}, fmt.Errorf("mcp destination %q: %w", destination.Name, renderErr)
+		}
+		args, _ = rendered.(map[string]any)
 	}
 
 	req := mcp.CallToolRequest{}
@@ -591,6 +641,68 @@ func buildNilInboxArguments(fragment domain.Fragment, cfg domain.MCPNilInboxConf
 	return args
 }
 
+// buildTangentHITLArguments builds a tangent.hitl-item request (contract
+// v1.0, kind "attention") from a fragment. Field lengths follow Tangent's
+// strict schema: title <=160, summary <=600, request <=4000,
+// details_markdown <=65536.
+func buildTangentHITLArguments(fragment domain.Fragment, cfg domain.MCPTangentHITLConfig) map[string]any {
+	applicationID := strings.TrimSpace(cfg.ApplicationID)
+	if applicationID == "" {
+		applicationID = "fragments-engine"
+	}
+	agentID := strings.TrimSpace(cfg.AgentID)
+	if agentID == "" {
+		agentID = "fragments-engine"
+	}
+	title := truncateRunes(strings.TrimSpace(fragment.Title), 160)
+	if title == "" {
+		title = truncateRunes(fragment.ID, 160)
+	}
+	summary := strings.TrimSpace(cfg.Summary)
+	if summary == "" {
+		summary = "Fragments Engine routed a fragment for your review."
+	}
+	summary = truncateRunes(summary, 600)
+	request := strings.TrimSpace(cfg.Request)
+	if request == "" {
+		request = "Review this draft. Acknowledge it, optionally with a note or reply."
+	}
+	request = truncateRunes(request, 4000)
+
+	args := map[string]any{
+		"contract_version": "1.0",
+		"kind":             "attention",
+		// One idempotency key per fragment: a retried delivery for the same
+		// fragment collapses into the same durable HITL item instead of
+		// enqueuing a duplicate.
+		"idempotency_key": "fragments-engine:" + fragment.ID,
+		"title":           title,
+		"summary":         summary,
+		"request":         request,
+		"source": map[string]any{
+			"application_id": applicationID,
+			"agent_id":       agentID,
+		},
+		"details_markdown": truncateRunes(renderFragmentMarkdown(fragment), 65536),
+	}
+	if len(cfg.ActionLabels) > 0 {
+		labels := make(map[string]any, len(cfg.ActionLabels))
+		for k, v := range cfg.ActionLabels {
+			labels[k] = v
+		}
+		args["action_labels"] = labels
+	}
+	return args
+}
+
+func truncateRunes(s string, max int) string {
+	runes := []rune(s)
+	if len(runes) <= max {
+		return s
+	}
+	return string(runes[:max])
+}
+
 func buildAPIBody(cfg domain.APIDestinationConfig, fragment domain.Fragment) (map[string]any, error) {
 	switch strings.TrimSpace(cfg.Provider) {
 	case "", "nanite_messaging", "nanite_user_mailbox":
@@ -602,7 +714,12 @@ func buildAPIBody(cfg domain.APIDestinationConfig, fragment domain.Fragment) (ma
 		if cfg.Body == nil {
 			return nil, fmt.Errorf("api destination missing body for provider %q", cfg.Provider)
 		}
-		return cloneArguments(cfg.Body), nil
+		rendered, err := renderArgumentTemplate(cfg.Body, fragment)
+		if err != nil {
+			return nil, fmt.Errorf("render api body: %w", err)
+		}
+		body, _ := rendered.(map[string]any)
+		return body, nil
 	}
 }
 
@@ -748,14 +865,6 @@ func generateImagePreview(srcPath, previewDir, name string) (string, error) {
 
 func expandConfigValue(v string) string {
 	return os.ExpandEnv(strings.TrimSpace(v))
-}
-
-func cloneArguments(in map[string]any) map[string]any {
-	out := make(map[string]any, len(in))
-	for key, value := range in {
-		out[key] = value
-	}
-	return out
 }
 
 func firstToolResultText(result *mcp.CallToolResult) string {
