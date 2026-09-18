@@ -14,8 +14,7 @@ import (
 
 	"github.com/hollis-labs/fragments-engine/internal/config"
 	"github.com/hollis-labs/fragments-engine/internal/domain"
-	mcpclient "github.com/mark3labs/mcp-go/client"
-	"github.com/mark3labs/mcp-go/mcp"
+	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 type ProbeResult struct {
@@ -69,39 +68,53 @@ func probeMCPDestination(ctx context.Context, destination domain.Destination) (P
 	if err != nil {
 		return ProbeResult{}, err
 	}
-	command := strings.TrimSpace(cfg.Command)
-	if command == "" {
-		return ProbeResult{}, fmt.Errorf("mcp destination %q missing command", destination.Name)
-	}
-	if strings.ContainsRune(command, filepath.Separator) {
-		if _, err := os.Stat(command); err != nil {
-			return ProbeResult{Reachable: false, Message: "command_missing:" + command}, nil
-		}
-	} else {
-		path, err := exec.LookPath(command)
-		if err != nil {
-			return ProbeResult{Reachable: false, Message: "command_not_found:" + command}, nil
-		}
-		command = path
-	}
-
 	timeout := time.Duration(max(cfg.TimeoutSeconds, 30)) * time.Second
 	callCtx, cancel := context.WithTimeout(ctx, minDuration(timeout, 5*time.Second))
 	defer cancel()
 
-	client, err := mcpclient.NewStdioMCPClient(command, cfg.Env, cfg.Args...)
-	if err != nil {
-		return ProbeResult{Reachable: false, Message: "start_failed:" + err.Error()}, nil
+	var transport mcpsdk.Transport
+	var readyMessage string
+	switch t := strings.TrimSpace(cfg.Transport); t {
+	case "", "stdio":
+		command := strings.TrimSpace(cfg.Command)
+		if command == "" {
+			return ProbeResult{}, fmt.Errorf("mcp destination %q missing command", destination.Name)
+		}
+		if strings.ContainsRune(command, filepath.Separator) {
+			if _, err := os.Stat(command); err != nil {
+				return ProbeResult{Reachable: false, Message: "command_missing:" + command}, nil
+			}
+		} else {
+			path, err := exec.LookPath(command)
+			if err != nil {
+				return ProbeResult{Reachable: false, Message: "command_not_found:" + command}, nil
+			}
+			command = path
+		}
+		cmd := exec.Command(command, cfg.Args...)
+		if len(cfg.Env) > 0 {
+			cmd.Env = append(os.Environ(), cfg.Env...)
+		}
+		transport = &mcpsdk.CommandTransport{Command: cmd}
+		readyMessage = "mcp_ready:" + command
+	case "http":
+		baseURL := strings.TrimSpace(cfg.BaseURL)
+		if baseURL == "" {
+			return ProbeResult{}, fmt.Errorf("mcp destination %q missing base_url for http transport", destination.Name)
+		}
+		transport = &mcpsdk.StreamableClientTransport{Endpoint: baseURL}
+		readyMessage = "mcp_ready:" + baseURL
+	default:
+		return ProbeResult{}, fmt.Errorf("mcp destination %q unsupported transport %q", destination.Name, t)
 	}
-	defer client.Close()
 
-	initReq := mcp.InitializeRequest{}
-	initReq.Params.ProtocolVersion = mcp.LATEST_PROTOCOL_VERSION
-	initReq.Params.ClientInfo = mcp.Implementation{Name: "fragments-engine", Version: "0.1.0"}
-	if _, err := client.Initialize(callCtx, initReq); err != nil {
-		return ProbeResult{Reachable: false, Message: "initialize_failed:" + err.Error()}, nil
+	client := mcpsdk.NewClient(&mcpsdk.Implementation{Name: "fragments-engine", Version: "0.1.0"}, nil)
+	session, err := client.Connect(callCtx, transport, nil)
+	if err != nil {
+		return ProbeResult{Reachable: false, Message: "connect_failed:" + err.Error()}, nil
 	}
-	return ProbeResult{Reachable: true, Message: "mcp_ready:" + command}, nil
+	defer session.Close()
+	return ProbeResult{Reachable: true, Message: readyMessage}, nil
 }
 
 func probeAPIDestination(ctx context.Context, destination domain.Destination) (ProbeResult, error) {

@@ -17,7 +17,6 @@ import (
 
 	"github.com/hollis-labs/fragments-engine/internal/config"
 	"github.com/hollis-labs/fragments-engine/internal/domain"
-	"github.com/mark3labs/mcp-go/mcp"
 )
 
 func TestAPIDestinationExecutor_NaniteMessaging(t *testing.T) {
@@ -144,6 +143,53 @@ func TestMCPDestinationExecutor_NilInbox(t *testing.T) {
 	notes, _ := captured.Arguments["notes_md"].(string)
 	if !strings.Contains(notes, "deterministic ingest and search") {
 		t.Fatalf("expected fragment markdown in notes: %s", notes)
+	}
+}
+
+// TestAPIDestinationExecutor_GenericProviderTemplatedBody covers the "api"
+// half of CW-20260917-0003's declarative-provider capability: a custom
+// provider name with a templated "body" map, no Go code for that provider
+// at all -- proving a new HTTP integration is addable as config.
+func TestAPIDestinationExecutor_GenericProviderTemplatedBody(t *testing.T) {
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer srv.Close()
+
+	fragment := testFragment()
+	destination := domain.Destination{
+		Name: "generic-webhook",
+		Kind: "api",
+		ConfigJSON: fmt.Sprintf(`{
+			"base_url": %q,
+			"path": "/webhook",
+			"provider": "generic_webhook",
+			"body": {
+				"fragment_id": "{{.Fragment.ID}}",
+				"title": "{{.Fragment.Title | truncate 10}}",
+				"payload": {"content": "{{.Fragment.Content}}"}
+			}
+		}`, srv.URL),
+	}
+
+	if _, err := (APIDestinationExecutor{}).Execute(context.Background(), destination, fragment, nil); err != nil {
+		t.Fatalf("execute api destination: %v", err)
+	}
+	if gotBody["fragment_id"] != fragment.ID {
+		t.Fatalf("unexpected fragment_id: %#v", gotBody["fragment_id"])
+	}
+	if gotBody["title"] != "Claude ses" {
+		t.Fatalf("expected truncated title, got %#v", gotBody["title"])
+	}
+	payload, _ := gotBody["payload"].(map[string]any)
+	if payload["content"] != fragment.Content {
+		t.Fatalf("expected nested map field rendered from fragment content, got %#v", payload)
 	}
 }
 
@@ -567,14 +613,19 @@ func TestHelperProcessMCPServer(t *testing.T) {
 
 	type request struct {
 		JSONRPC string          `json:"jsonrpc"`
-		ID      *mcp.RequestId  `json:"id,omitempty"`
+		ID      json.RawMessage `json:"id,omitempty"`
 		Method  string          `json:"method"`
 		Params  json.RawMessage `json:"params"`
 	}
+	type rpcError struct {
+		Code    int    `json:"code"`
+		Message string `json:"message"`
+	}
 	type response struct {
-		JSONRPC string         `json:"jsonrpc"`
-		ID      *mcp.RequestId `json:"id,omitempty"`
-		Result  map[string]any `json:"result,omitempty"`
+		JSONRPC string          `json:"jsonrpc"`
+		ID      json.RawMessage `json:"id,omitempty"`
+		Result  map[string]any  `json:"result,omitempty"`
+		Error   *rpcError       `json:"error,omitempty"`
 	}
 
 	reader := bufio.NewReader(os.Stdin)
@@ -592,15 +643,17 @@ func TestHelperProcessMCPServer(t *testing.T) {
 			continue
 		}
 
-		rsp := response{
-			JSONRPC: "2.0",
-			ID:      req.ID,
-			Result:  map[string]any{},
-		}
+		rsp := response{JSONRPC: "2.0", ID: req.ID}
 		switch req.Method {
 		case "initialize":
+			// Echo back whatever protocolVersion the client asked for, so
+			// this fixture never needs to track the SDK's own supported set.
+			var params struct {
+				ProtocolVersion string `json:"protocolVersion"`
+			}
+			_ = json.Unmarshal(req.Params, &params)
 			rsp.Result = map[string]any{
-				"protocolVersion": mcp.LATEST_PROTOCOL_VERSION,
+				"protocolVersion": params.ProtocolVersion,
 				"serverInfo": map[string]any{
 					"name":    "fe-test-mcp",
 					"version": "1.0.0",
@@ -626,7 +679,11 @@ func TestHelperProcessMCPServer(t *testing.T) {
 				},
 			}
 		default:
-			rsp.Result = map[string]any{}
+			// Notably "server/discover" (SEP-2575): this fixture only speaks
+			// the legacy initialize/initialized handshake, so refusing an
+			// unknown method here is what makes the real client fall back
+			// to it.
+			rsp.Error = &rpcError{Code: -32601, Message: "method not found: " + req.Method}
 		}
 
 		out, _ := json.Marshal(rsp)

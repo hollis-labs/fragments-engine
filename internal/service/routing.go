@@ -823,19 +823,34 @@ func normalizeDestination(in domain.Destination, defaults config.DeliveryConfig)
 		if err != nil {
 			return domain.Destination{}, err
 		}
-		if transport := strings.TrimSpace(cfg.Transport); transport == "" {
-			cfg.Transport = "stdio"
-		} else if transport != "stdio" {
+		transport := strings.TrimSpace(cfg.Transport)
+		if transport == "" {
+			transport = "stdio"
+		}
+		switch transport {
+		case "stdio":
+			if strings.TrimSpace(cfg.Command) == "" {
+				return domain.Destination{}, fmt.Errorf("mcp destination %q missing command", in.Name)
+			}
+		case "http":
+			// Streamable HTTP: a long-running peer's own MCP server (e.g.
+			// Tangent), reached by base_url rather than a spawned command.
+			if strings.TrimSpace(cfg.BaseURL) == "" {
+				return domain.Destination{}, fmt.Errorf("mcp destination %q missing base_url for http transport", in.Name)
+			}
+		default:
 			return domain.Destination{}, fmt.Errorf("mcp destination %q unsupported transport %q", in.Name, transport)
 		}
-		if strings.TrimSpace(cfg.Command) == "" {
-			return domain.Destination{}, fmt.Errorf("mcp destination %q missing command", in.Name)
-		}
+		cfg.Transport = transport
 		switch strings.TrimSpace(cfg.Provider) {
 		case "", "nil_inbox":
 			cfg.Provider = "nil_inbox"
 			if strings.TrimSpace(cfg.Tool) == "" {
 				cfg.Tool = "nil_create_inbox"
+			}
+		case "tangent_hitl":
+			if strings.TrimSpace(cfg.Tool) == "" {
+				cfg.Tool = "tangent.hitl_enqueue"
 			}
 		default:
 			if strings.TrimSpace(cfg.Tool) == "" {

@@ -432,7 +432,7 @@ function DetailBody({
 }: DetailBodyProps) {
   const api = useApi()
   const { fragment, entities, attachments, route_log, related } = detail
-  const editable = fragment.source === 'manual'
+  const editable = fragment.source === 'manual' || fragment.source === 'agent'
   const primaryPreview = attachments.find((attachment) => isRenderableImage(attachment))
   const primaryPreviewURL = primaryPreview
     ? hasLocalMedia(primaryPreview)

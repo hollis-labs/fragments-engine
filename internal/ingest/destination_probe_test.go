@@ -12,6 +12,8 @@ import (
 
 	"github.com/hollis-labs/fragments-engine/internal/config"
 	"github.com/hollis-labs/fragments-engine/internal/domain"
+	gomcpserver "github.com/hollis-labs/go-mcp/server"
+	httptransport "github.com/hollis-labs/go-mcp/transport/http"
 )
 
 func TestProbeDestination_File(t *testing.T) {
@@ -28,6 +30,41 @@ func TestProbeDestination_File(t *testing.T) {
 		t.Fatalf("expected file destination to be reachable: %+v", result)
 	}
 	if !strings.Contains(result.Message, "filesystem_ready:") {
+		t.Fatalf("unexpected probe message: %s", result.Message)
+	}
+}
+
+// TestProbeDestination_MCPHTTPTransport is the regression test for the
+// third place (after MCPDestinationExecutor and normalizeDestination) that
+// independently branched on MCP transport and had never been taught about
+// "http": route destination-status reported a freshly created, genuinely
+// reachable tangent_hitl destination as unreachable with "missing command",
+// because probeMCPDestination assumed stdio unconditionally.
+func TestProbeDestination_MCPHTTPTransport(t *testing.T) {
+	mcpSrv := gomcpserver.NewServer("fake-tangent", "0.0.1")
+	mcpSrv.RegisterTool(gomcpserver.Tool{
+		Name:        "tangent.hitl_enqueue",
+		Description: "fake",
+		InputSchema: gomcpserver.EmptyObjectSchema(),
+		Handler: func(_ context.Context, _ map[string]any) (any, error) {
+			return "{}", nil
+		},
+	})
+	httpSrv := httptest.NewServer(httptransport.NewHandler(mcpSrv, httptransport.HandlerOptions{}))
+	defer httpSrv.Close()
+
+	result, err := ProbeDestination(context.Background(), domain.Destination{
+		Name:       "tangent-hitl",
+		Kind:       "mcp",
+		ConfigJSON: fmt.Sprintf(`{"transport":"http","base_url":%q,"provider":"tangent_hitl"}`, httpSrv.URL),
+	})
+	if err != nil {
+		t.Fatalf("probe mcp http destination: %v", err)
+	}
+	if !result.Reachable {
+		t.Fatalf("expected mcp http destination to be reachable: %+v", result)
+	}
+	if !strings.Contains(result.Message, httpSrv.URL) {
 		t.Fatalf("unexpected probe message: %s", result.Message)
 	}
 }
