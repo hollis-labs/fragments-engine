@@ -197,7 +197,7 @@ Adding a link deterministically pulls a title and summary from the source. Prima
 Manual intake is HTTP-only today (no CLI equivalent yet) — start the API server first:
 
 ```bash
-go run ./cmd/fragments-engine serve-api -config ./fragments.yaml -addr :8091
+go run ./cmd/fragments-engine serve-api -config ./fragments.yaml -addr 127.0.0.1:8091
 ```
 
 Then POST content containing a URL. Either a bare URL alone, or a `#link` hashtag anywhere alongside a URL embedded in other text, triggers link enrichment — the hashtag is recorded as a tag and left in place in the stored content, never stripped:
