@@ -17,7 +17,7 @@ resources:
         - ./fragments-engine
         - serve-api
         - --addr
-        - :8091
+        - 127.0.0.1:8091
         - --config
         - fragments.yaml
       dir: /Users/chrispian/dev/hollis-labs/apps/fragments-engine

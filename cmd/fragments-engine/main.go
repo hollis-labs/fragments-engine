@@ -758,7 +758,7 @@ func runEntityFragments(args []string) error {
 func runServeAPI(args []string) error {
 	fs := flag.NewFlagSet("serve-api", flag.ContinueOnError)
 	configPath := fs.String("config", "fragments.example.yaml", "path to config file")
-	addr := fs.String("addr", ":8091", "listen address")
+	addr := fs.String("addr", "127.0.0.1:8091", "listen address (the API has no auth; widen only behind your own access control)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
