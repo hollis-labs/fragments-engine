@@ -102,9 +102,9 @@ through the CRUD endpoints, so it must never be the template itself.
 Config fields like `openai.api_key_env` and `firecrawl.api_key_env` name an
 *environment variable*, not the secret. FE reads it once at process startup
 with a plain `os.Getenv`. An interactive shell run inherits your exports; the
-long-running dev service (Cerberus resource `fragments-engine-dev`,
-launchd-managed) does not — add the variable to that resource's `env:` block
-and reload it, or the key never reaches the process.
+service run under launchd or another service manager does not — add the
+variable to that service's environment and reload it, or the key never reaches
+the process.
 
 Full operator/agent usage guide: [`docs/usage.md`](docs/usage.md). Browser
 capture and the Sysop Reader: [`docs/browser-capture-reader.md`](docs/browser-capture-reader.md).
