@@ -2,6 +2,7 @@
   "name": "sysop",
   "private": true,
   "version": "0.0.0",
+  "license": "MIT",
   "description": "Sysop frontend for Fragments Engine — built on @hollis-labs/sysop-ui.",
   "type": "module",
   "scripts": {

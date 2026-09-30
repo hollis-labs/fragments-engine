@@ -6,8 +6,8 @@ media, and code changes. It's the inbox and the knowledge/search engine at
 once: what it can't route confidently stays in the inbox for a human
 decision instead of being filed silently.
 
-> **Pre-release.** FE is unreleased and unlicensed — no public repo, no
-> outside consumers, no compatibility guarantees. It is, however, in active
+> **Pre-release.** FE is unreleased (MIT-licensed; see [LICENSE](./LICENSE)) — no outside
+> consumers, no compatibility guarantees. It is, however, in active
 > daily use as Chrispian's own inbox and recall layer, and runs as a live
 > local service. This is a working system, not a prototype; it just isn't
 > released. Built in the open: this README and [`docs/`](./docs) describe
