@@ -41,6 +41,9 @@ func stepText(stepType int, raw []byte) (string, error) {
 	}
 	var items []string
 	for _, item := range inner[3] {
+		if item == nil {
+			return "", errPayload
+		}
 		itemFields, err := fields(item)
 		if err != nil {
 			return "", err

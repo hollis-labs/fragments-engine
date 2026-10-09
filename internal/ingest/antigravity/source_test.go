@@ -102,6 +102,7 @@ func TestTypedPayloadsAndMalformedRefusal(t *testing.T) {
 		{"tool-only-planner", "", 15, pb(20, pb(7, []byte("tool"))), false},
 		{"missing-typed-field", "", 14, pb(1, []byte("plausible text is not a user field")), true},
 		{"wrong-envelope-wire", "", 14, []byte{0x98, 1, 1}, true},
+		{"wrong-item-wire", "", 14, pb(19, []byte{0x18, 1}), true},
 		{"wrong-text-wire", "", 14, pb(19, []byte{0x10, 1}), true},
 		{"truncated", "", 14, []byte{0x9a, 1, 10, 1}, true},
 		{"overflow", "", 14, []byte{0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 1}, true},
