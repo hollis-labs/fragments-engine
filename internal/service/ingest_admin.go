@@ -408,6 +408,11 @@ func (s *IngestAdminService) Preview(ctx context.Context, name string, limit int
 	if err != nil {
 		return domain.IngestPreviewResult{}, err
 	}
+	// Preview exposes raw titles, IDs and locators without private acceptance.
+	// Even redacted transcript material is not authorized for this public path.
+	if domain.IsTranscriptSource(ingestCfg.Kind) {
+		return domain.IngestPreviewResult{}, ValidationError{Msg: "transcript preview is unavailable; material requires owner-private acceptance"}
+	}
 	previewCfg, err := sanitizePreviewIngestConfig(ingestCfg)
 	if err != nil {
 		return domain.IngestPreviewResult{}, err

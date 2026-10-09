@@ -61,7 +61,8 @@ safe to publish.
 Transcript acceptance bypasses attachment/LLM analysis, shared captures, routing,
 inbox, and SQLite/Vanta/Tesseract recall. The shared canonical write boundaries
 and manual intake reject transcript producers. There is no public transcript
-search/export API in this slice. Raw attachments and ChatGPT raw-copy/delete
+search/export API in this slice. Public ingest preview refuses transcript sources
+before collection because raw titles, IDs and locators can contain secrets. Raw attachments and ChatGPT raw-copy/delete
 options are refused; the source archive remains read-only. Existing records in
 the shared database are neither retrospectively redacted nor removed by this
 change. Pending identity/media backfills containing transcript material refuse
