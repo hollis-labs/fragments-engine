@@ -233,6 +233,9 @@ func validateIngestRules(ic config.IngestConfig) error {
 	case "codex_sessions":
 		_, err := config.DecodeRules[config.CodexSessionRules](ic)
 		return err
+	case "antigravity":
+		_, err := config.DecodeRules[config.AntigravityRules](ic)
+		return err
 	case "chatgpt_export":
 		_, err := config.DecodeRules[config.ChatGPTExportRules](ic)
 		return err
@@ -314,6 +317,11 @@ func (s *IngestAdminService) Validate(_ context.Context, name string) (domain.In
 		}
 	case "codex_sessions":
 		if _, err := config.DecodeRules[config.CodexSessionRules](ingestCfg); err != nil {
+			result.Valid = false
+			result.Errors = append(result.Errors, err.Error())
+		}
+	case "antigravity":
+		if _, err := config.DecodeRules[config.AntigravityRules](ingestCfg); err != nil {
 			result.Valid = false
 			result.Errors = append(result.Errors, err.Error())
 		}

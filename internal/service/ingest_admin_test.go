@@ -368,8 +368,30 @@ func TestIngestAdminService_CodexRulesValidation(t *testing.T) {
 	}
 }
 
+func TestIngestAdminService_AntigravityRulesValidation(t *testing.T) {
+	root := t.TempDir()
+	cfgPath := filepath.Join(t.TempDir(), "fragments.yaml")
+	cfg := config.Config{Database: config.DatabaseConfig{Path: filepath.Join(root, "shared.db")}, Ingests: []config.IngestConfig{{Name: "antigravity-fixture", Kind: "antigravity", Source: config.IngestSource{Root: root}, Rules: map[string]any{"max_file_size_mb": "invalid"}}}}
+	if err := config.Save(cfgPath, cfg); err != nil {
+		t.Fatal(err)
+	}
+	svc := NewIngestAdminService(cfgPath)
+	result, err := svc.Validate(context.Background(), "antigravity-fixture")
+	if err != nil || result.Valid {
+		t.Fatalf("invalid Antigravity rules accepted: %+v %v", result, err)
+	}
+	cfg.Ingests[0].Rules = map[string]any{"max_file_size_mb": 50}
+	if err := config.Save(cfgPath, cfg); err != nil {
+		t.Fatal(err)
+	}
+	result, err = svc.Validate(context.Background(), "antigravity-fixture")
+	if err != nil || !result.Valid {
+		t.Fatalf("valid Antigravity config refused: %+v %v", result, err)
+	}
+}
+
 func TestIngestAdminService_TranscriptPreviewRefusedBeforeCollection(t *testing.T) {
-	for _, kind := range []string{"claude_code", "chatgpt_export", "codex_sessions"} {
+	for _, kind := range []string{"claude_code", "chatgpt_export", "codex_sessions", "antigravity"} {
 		t.Run(kind, func(t *testing.T) {
 			root := t.TempDir()
 			cfgPath := filepath.Join(root, "fragments.yaml")

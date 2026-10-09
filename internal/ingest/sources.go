@@ -6,6 +6,7 @@ import (
 
 	"github.com/hollis-labs/fragments-engine/internal/config"
 	"github.com/hollis-labs/fragments-engine/internal/domain"
+	"github.com/hollis-labs/fragments-engine/internal/ingest/antigravity"
 	"github.com/hollis-labs/fragments-engine/internal/ingest/chatgpt"
 	"github.com/hollis-labs/fragments-engine/internal/ingest/claude"
 	"github.com/hollis-labs/fragments-engine/internal/ingest/codex"
@@ -17,7 +18,7 @@ import (
 
 func DefaultSources() []Source {
 	return []Source{
-		claude.Source{}, codex.Source{},
+		claude.Source{}, codex.Source{}, antigravity.Source{},
 		chatgpt.Source{},
 		urlsource.Source{},
 		filesystemdocs.Source{},

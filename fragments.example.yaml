@@ -116,6 +116,13 @@ ingests:
       root: ~/dev/agent-os/ingest/sessions/mac/codex
     rules:
       max_file_size_mb: 50
+  - name: antigravity-archive
+    kind: antigravity
+    enabled: false
+    source:
+      root: ~/dev/agent-os/ingest/sessions/mac/antigravity
+    rules:
+      max_file_size_mb: 50
   - name: chatgpt-export
     kind: chatgpt_export
     enabled: false
