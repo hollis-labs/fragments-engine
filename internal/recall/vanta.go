@@ -17,17 +17,18 @@ import (
 	"github.com/hollis-labs/fragments-engine/internal/config"
 	"github.com/hollis-labs/fragments-engine/internal/domain"
 	"github.com/hollis-labs/fragments-engine/internal/repository"
-	embedcontracts "github.com/hollis-labs/go-embed-contracts"
+	embedcontracts "github.com/hollis-labs/substrate/llm-core/embedcontracts"
 	conduit "github.com/hollis-labs/tesseract"
 	vmemory "github.com/hollis-labs/tesseract/memory"
 )
 
-const vantaNamespace = "user/fragments-engine/knowledge/fragments"
+const vantaNamespace = "project/fragments-engine/knowledge/fragments"
+const legacyVantaNamespace = "user/fragments-engine/knowledge/fragments"
 
 type VantaIndexer struct {
 	base    *SQLiteIndexer
 	repo    *repository.FragmentRepository
-	conduit *conduit.Conduit
+	conduit *conduit.Tesseract
 	status  Status
 }
 
@@ -90,23 +91,23 @@ func (v *VantaIndexer) IndexFragment(ctx context.Context, fragment domain.Fragme
 	}
 
 	rev, err := v.conduit.WriteMemory(ctx, vmemory.WriteInput{
-		Domain:     vmemory.DomainKnowledge,
-		Namespace:  vantaNamespace,
-		MemoryKey:  fragment.ID,
-		Supersedes: supersedes,
-		Status:     vmemory.StatusCanonical,
-		Author:     vmemory.Author{AgentID: "fragments-engine", AgentVersion: "0.1.0"},
-		Trigger:    vmemory.TriggerManual,
-		SessionID:  "fragments-engine",
-		Origin:     vmemory.OriginReference,
-		Confidence: 1.0,
-		Tags:       recallTags(fragment),
-		Payload: vmemory.Payload{
-			Summary: summary,
-			Body:    fragment.Content,
-		},
+		Domain:      vmemory.DomainKnowledge,
+		Namespace:   vantaNamespace,
+		MemoryKey:   fragment.ID,
+		Supersedes:  supersedes,
+		Status:      vmemory.StatusCanonical,
+		Author:      vmemory.Author{AgentID: "fragments-engine", AgentVersion: "0.1.0"},
+		Trigger:     vmemory.TriggerManual,
+		SessionID:   "fragments-engine",
+		DerivedFrom: vmemory.DerivedFromReference,
+		Confidence:  1.0,
+		Tags:        recallTags(fragment),
+		Summary:     summary,
+		Body:        fragment.Content,
 		Facets: vmemory.Facets{
-			Kind:   "fragment",
+			// Generic fragment projections use the supported fallback kind;
+			// the fragment tag preserves their application classification.
+			Kind:   "note",
 			Source: fragment.Source,
 			Pointer: &vmemory.Pointer{
 				Scheme:  "fe",
@@ -133,9 +134,9 @@ func (v *VantaIndexer) Search(ctx context.Context, query string, limit int) ([]d
 // actually ran, so `mode_used` is not overstated as semantic on a fallback.
 func (v *VantaIndexer) searchVector(ctx context.Context, query string, limit int) (results []domain.SearchResult, fellBack bool, err error) {
 	recalled, err := v.conduit.RecallMemory(ctx, vmemory.RecallInput{
-		Namespaces: []string{vantaNamespace},
+		Namespaces: []string{vantaNamespace, legacyVantaNamespace},
 		Query:      query,
-		Limit:      limit,
+		Limit:      projectionRecallLimit(limit),
 	})
 	if err != nil {
 		base, baseErr := v.base.Search(ctx, query, limit)
@@ -198,9 +199,9 @@ func (v *VantaIndexer) Related(ctx context.Context, fragmentID string, limit int
 		query = fragment.Title + " " + fragment.Content
 	}
 	results, err := v.conduit.RecallMemory(ctx, vmemory.RecallInput{
-		Namespaces: []string{vantaNamespace},
+		Namespaces: []string{vantaNamespace, legacyVantaNamespace},
 		Query:      query,
-		Limit:      limit + 3,
+		Limit:      projectionRecallLimit(limit + 3),
 	})
 	if err != nil {
 		return v.base.Related(ctx, fragmentID, limit)
@@ -240,22 +241,24 @@ func (v *VantaIndexer) Close() error {
 
 func (v *VantaIndexer) resolveResults(ctx context.Context, recalls []vmemory.RecallResult, skipID string, limit int) ([]domain.SearchResult, error) {
 	out := make([]domain.SearchResult, 0, limit)
+	seen := make(map[string]bool)
 	for _, item := range recalls {
 		key := strings.TrimSpace(item.Revision.MemoryKey)
-		if key == "" || key == skipID {
+		if key == "" || key == skipID || seen[key] {
 			continue
 		}
 		fragment, err := v.repo.GetByID(ctx, key)
 		if err != nil {
 			continue
 		}
+		seen[key] = true
 		snippet := item.Revision.Payload.Summary
 		if snippet == "" {
 			snippet = fragment.Summary
 		}
 		out = append(out, domain.SearchResult{
 			Fragment: fragment,
-			Score:    item.Score,
+			Score:    recallScore(item.Score),
 			Snippet:  snippet,
 			Trace: domain.RecallTrace{
 				Backend:          "vanta",
@@ -460,6 +463,7 @@ func ollamaAvailable() bool {
 
 func recallTags(fragment domain.Fragment) []string {
 	tags := []string{
+		"fragment",
 		"source:" + fragment.Source,
 		"source_type:" + fragment.SourceType,
 		"status:" + string(fragment.Status),
@@ -468,4 +472,21 @@ func recallTags(fragment domain.Fragment) []string {
 		tags = append(tags, "indexed")
 	}
 	return tags
+}
+
+// recallScore preserves the fragment score contract when a recall ranking omits scores.
+func recallScore(score *float64) float64 {
+	if score == nil {
+		return 0
+	}
+	return *score
+}
+
+// Each current fragment can have one legacy and one project projection.
+// Fetch enough hits to preserve the caller's limit after identity deduplication.
+func projectionRecallLimit(limit int) int {
+	if limit > 0 && limit <= int(^uint(0)>>1)/2 {
+		return limit * 2
+	}
+	return limit
 }

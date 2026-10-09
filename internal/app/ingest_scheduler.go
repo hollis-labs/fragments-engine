@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"log"
 
-	scheduler "github.com/hollis-labs/go-scheduler"
+	scheduler "github.com/hollis-labs/libs/util/scheduler"
 
 	"github.com/hollis-labs/fragments-engine/internal/config"
 	"github.com/hollis-labs/fragments-engine/internal/domain"
@@ -63,7 +63,7 @@ func (r *ingestScheduleRunner) Enqueue(ctx context.Context, job scheduler.Job) e
 	}
 	defer instance.Close()
 
-	if _, err := instance.Fragments.EnqueueIngestRun(ctx, instance.IngestQueue, ingestCfg); err != nil {
+	if err := instance.enqueueScheduledIngest(ctx, job.FireID, ingestCfg); err != nil {
 		return fmt.Errorf("enqueue scheduled ingest run: %w", err)
 	}
 	return nil

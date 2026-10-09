@@ -5,7 +5,7 @@ import (
 
 	"github.com/hollis-labs/fragments-engine/internal/domain"
 	"github.com/hollis-labs/fragments-engine/internal/repository"
-	directives "github.com/hollis-labs/go-directives"
+	directives "github.com/hollis-labs/libs/ui-go/directives"
 )
 
 // DirectiveEntityKind is the fragment_entities Kind used to tag fragments
