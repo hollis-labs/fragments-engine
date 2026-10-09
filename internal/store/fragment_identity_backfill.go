@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/hollis-labs/fragments-engine/internal/domain"
+	"github.com/hollis-labs/fragments-engine/internal/transcript"
 )
 
 type legacyFragment struct {
@@ -55,6 +56,9 @@ func (s *Store) backfillFragmentIdentity(ctx context.Context) error {
 	groups := make(map[string][]*legacyFragment)
 	for i := range legacy {
 		item := &legacy[i]
+		if domain.IsTranscript(item.Source, item.SourceType, "") {
+			return transcript.ErrHistoricalDispositionRequired
+		}
 		metadata := make(map[string]any)
 		if strings.TrimSpace(item.MetadataJSON) != "" {
 			_ = json.Unmarshal([]byte(item.MetadataJSON), &metadata)

@@ -15,7 +15,8 @@ decision instead of being filed silently.
 
 ## What it is today
 
-- **Ingests** Claude Code chat history, ChatGPT exports, filesystem docs,
+- **Ingests** Claude Code chat history and ChatGPT exports into an explicit private
+  redacted store; filesystem docs,
   git changes, saved URLs (single-link or manifest/batch), pre-fetched
   browser captures, and notes read directly out of Nil's per-vault SQLite
   databases.
@@ -31,6 +32,41 @@ decision instead of being filed silently.
   fragment content and provenance, with entities and durable relations.
 - **Exposes one service layer** three ways — CLI, HTTP API, and MCP — so a
   human, a script, or an agent hit the same behavior.
+
+## Private transcript storage
+
+Claude Code and ChatGPT transcript ingests require an explicit
+`transcripts.private_root`. An empty value refuses transcript ingestion before
+collecting source files. This also applies to the reserved Codex and Antigravity
+transcript source names when those adapters are added. This source change does
+not activate any importer, schedule, or synced Mac archive.
+
+The destination is a **local owner-only store**, owned by the process's effective
+OS UID. Use a dedicated root with an existing trusted parent. FE creates the
+root with mode `0700` and `transcripts.db` with mode `0600`; existing unsafe modes,
+foreign ownership, symlinks, hard-linked database files, writable exposed
+ancestors, and a foreign database schema are refused rather than repaired.
+Ownership and database identity are checked again on acceptance. This isolates
+other OS users; it does not protect against the same UID, root, disk access, or
+an already compromised process. Protect backups with the same permissions.
+
+The transcript store redacts recognizable private-key blocks, common token/key
+formats, authorization/cookie headers, labelled secrets, and URL credentials
+**before any transcript canonical or index write**. Titles, source locators,
+IDs, and nested metadata are included. Only redacted text reaches the local
+SQLite text index. Pattern redaction cannot detect every unlabeled or encoded
+secret, so redacted transcripts remain owner-private and must not be treated as
+safe to publish.
+
+Transcript acceptance bypasses attachment/LLM analysis, shared captures, routing,
+inbox, and SQLite/Vanta/Tesseract recall. The shared canonical write boundaries
+and manual intake reject transcript producers. There is no public transcript
+search/export API in this slice. Raw attachments and ChatGPT raw-copy/delete
+options are refused; the source archive remains read-only. Existing records in
+the shared database are neither retrospectively redacted nor removed by this
+change. Pending identity/media backfills containing transcript material refuse
+before copying it into new canonical records. Any historical-data disposition requires separate
+explicit authority before activation.
 
 ## Where it sits in the stack
 

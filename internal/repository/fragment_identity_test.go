@@ -30,8 +30,8 @@ func TestStableIdentityReusesAndRevisesAcrossExistingIngestKinds(t *testing.T) {
 		{"manual", "manual-intake", domain.PipelineFragment{Source: "manual", SourceType: "text", SourceID: "manual-note-1"}},
 		{"url", "reading-list", domain.PipelineFragment{Source: "url", SourceType: "article", SourceID: "https://example.com/a", Metadata: map[string]any{"source_url": "https://example.com/a"}}},
 		{"filesystem", "project-docs", domain.PipelineFragment{Source: "file:///repo/README.md", SourceType: "document", SourceID: "/repo/README.md"}},
-		{"claude", "claude-sessions", domain.PipelineFragment{Source: "claude", SourceType: "chat", SourceID: "session-1"}},
-		{"chatgpt", "chatgpt-export", domain.PipelineFragment{Source: "chatgpt", SourceType: "chat", SourceID: "conversation-1"}},
+		{"fixture-document", "claude-sessions", domain.PipelineFragment{Source: "fixture-document", SourceType: "chat", SourceID: "session-1"}},
+		{"fixture-export", "chatgpt-export", domain.PipelineFragment{Source: "fixture-export", SourceType: "chat", SourceID: "conversation-1"}},
 		{"git-commit", "git-history", domain.PipelineFragment{Source: "git://repo/abc", SourceType: "git_change", SourceID: "abc"}},
 		{"git-changed-file", "git-history", domain.PipelineFragment{Source: "git://repo/abc/README.md", SourceType: "git_change", SourceID: "abc:README.md", Metadata: map[string]any{"ingest_mode": "changed_doc", "repo_name": "repo", "relative_path": "README.md"}}},
 		{"nil", "nil-vault", domain.PipelineFragment{Source: "nil", SourceType: "note", SourceID: "vault:42"}},
@@ -221,7 +221,7 @@ func TestConcurrentExactUpsertCreatesOneFragmentAndRevision(t *testing.T) {
 	}
 	now := time.Date(2026, 9, 3, 12, 0, 0, 0, time.UTC)
 	built, err := BuildFragment(domain.PipelineFragment{
-		Source: "claude", SourceType: "chat", SourceID: "concurrent-session",
+		Source: "fixture-document", SourceType: "chat", SourceID: "concurrent-session",
 		Title: "Concurrent", Content: "same material", CreatedAt: now,
 	}, "concurrent-ingest", now)
 	if err != nil {
@@ -331,7 +331,7 @@ func TestMigrationBackfillsLegacyDuplicatesAsOneCanonicalFragment(t *testing.T) 
 	}
 
 	input := domain.PipelineFragment{
-		Source: "claude", SourceType: "chat", SourceID: "session-legacy",
+		Source: "fixture-document", SourceType: "chat", SourceID: "session-legacy",
 		Title: "  Second \t", Content: "  second material\n\n",
 		CreatedAt: time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC),
 		Attachments: []domain.PipelineAttachment{{
@@ -447,7 +447,7 @@ CREATE TABLE fragment_entities (
 		if _, err := db.Exec(`
 INSERT INTO fragments(id, source, source_type, source_id, title, content, content_hash,
  created_at, ingested_at, status, metadata_json, ingest_name, canonical_path)
-VALUES (?, 'claude', 'chat', 'session-legacy', ?, ?, ?, ?, ?, 'inbox', '{}', 'claude-test', '')`,
+VALUES (?, 'fixture-document', 'chat', 'session-legacy', ?, ?, ?, ?, ?, 'inbox', '{}', 'claude-test', '')`,
 			row.id, row.title, row.content, row.hash, row.created, row.ingested); err != nil {
 			t.Fatal(err)
 		}

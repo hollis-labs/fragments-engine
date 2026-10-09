@@ -319,3 +319,15 @@ Single SQLite database:
 2. Carrier's corpus becomes a FE destination through `file`
 3. Carrier's blueprint/generate pipeline continues operating against whatever corpus FE produces
 4. FE's Go runtime gradually replaces the current Python ingest/runtime path
+
+## Transcript privacy boundary
+
+Transcript sources have a separate pre-persistence path: collect in memory →
+local deterministic redaction → owner-private canonical SQLite + local text
+index. `internal/transcript.Store.Accept` owns the transaction and is its only
+write entry point. An explicit `transcripts.private_root` is required; the
+shared fragment/capture repositories reject transcript writes. No routing,
+attachment analysis, inbox, or shared recall stage runs for transcript material.
+Redaction includes provenance and nested metadata, and fails closed for opaque
+metadata or raw attachments. Redaction is not a publishing permission. See the
+README for the OS ownership limits and historical-data exclusions.

@@ -20,7 +20,7 @@ func TestPipelineAllLegacyIngestKindsUseCaptureAdapter(t *testing.T) {
 	}
 	defer st.Close()
 	now := time.Date(2026, 9, 3, 12, 0, 0, 0, time.UTC)
-	kinds := []string{"claude_code", "chatgpt_export", "url_source", "filesystem_docs", "git_changes", "nil_vault"}
+	kinds := []string{"url_source", "filesystem_docs", "git_changes", "nil_vault"}
 	sources := make([]Source, 0, len(kinds))
 	for _, kind := range kinds {
 		sources = append(sources, staticLegacySource{kind: kind, candidate: domain.PipelineFragment{

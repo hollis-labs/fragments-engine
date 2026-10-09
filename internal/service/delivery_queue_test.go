@@ -66,7 +66,7 @@ func TestDeliveryQueueService_DrainSuccess(t *testing.T) {
 		t.Fatalf("add route: %v", err)
 	}
 	fragment, err := repository.BuildFragment(domain.PipelineFragment{
-		Source:        "chatgpt",
+		Source:        "fixture-export",
 		SourceType:    "chat",
 		SourceID:      "conv-123",
 		Title:         "ChatGPT chat: Roadmap planning",
@@ -186,7 +186,7 @@ func TestDeliveryQueueService_Drain_CallbackSuccess(t *testing.T) {
 		t.Fatalf("add route: %v", err)
 	}
 	fragment, err := repository.BuildFragment(domain.PipelineFragment{
-		Source:        "claude",
+		Source:        "fixture-document",
 		SourceType:    "chat",
 		SourceID:      "session-callback-drain",
 		Title:         "Claude session: callback drain",
@@ -312,7 +312,7 @@ func TestDeliveryQueueService_Drain_CallbackDeadLetter(t *testing.T) {
 		t.Fatalf("add route: %v", err)
 	}
 	fragment, err := repository.BuildFragment(domain.PipelineFragment{
-		Source:        "claude",
+		Source:        "fixture-document",
 		SourceType:    "chat",
 		SourceID:      "session-callback-dead-letter",
 		Title:         "Claude session: callback dead letter",
@@ -384,7 +384,7 @@ func TestDeliveryQueueService_DeadLetter(t *testing.T) {
 		t.Fatalf("add route: %v", err)
 	}
 	fragment, err := repository.BuildFragment(domain.PipelineFragment{
-		Source:        "claude",
+		Source:        "fixture-document",
 		SourceType:    "chat",
 		SourceID:      "session-123",
 		Title:         "Claude session: roadmap-review",
@@ -457,7 +457,7 @@ func TestDeliveryQueueService_ReplayAndPurgeFailed(t *testing.T) {
 		t.Fatalf("add route: %v", err)
 	}
 	fragment, err := repository.BuildFragment(domain.PipelineFragment{
-		Source:        "chatgpt",
+		Source:        "fixture-export",
 		SourceType:    "chat",
 		SourceID:      "conv-999",
 		Title:         "ChatGPT chat: Replay test",
@@ -593,7 +593,7 @@ func TestDeliveryQueueService_ListJobsByDestination(t *testing.T) {
 		t.Fatalf("add route b: %v", err)
 	}
 	fragmentA, err := repository.BuildFragment(domain.PipelineFragment{
-		Source:        "claude",
+		Source:        "fixture-document",
 		SourceType:    "chat",
 		SourceID:      "session-a",
 		Title:         "Claude session: A",
@@ -605,7 +605,7 @@ func TestDeliveryQueueService_ListJobsByDestination(t *testing.T) {
 		t.Fatalf("build fragment a: %v", err)
 	}
 	fragmentB, err := repository.BuildFragment(domain.PipelineFragment{
-		Source:        "chatgpt",
+		Source:        "fixture-export",
 		SourceType:    "chat",
 		SourceID:      "conv-b",
 		Title:         "ChatGPT chat: B",
@@ -689,7 +689,7 @@ func TestDeliveryQueueService_ReplayFailedRequiresHealthyDestinationUnlessForced
 		t.Fatalf("add route: %v", err)
 	}
 	fragment, err := repository.BuildFragment(domain.PipelineFragment{
-		Source:        "claude",
+		Source:        "fixture-document",
 		SourceType:    "chat",
 		SourceID:      "session-replay",
 		Title:         "Claude session: replay guard",
@@ -785,7 +785,7 @@ func TestDeliveryQueueService_ReplayPolicyCooldownAndLimit(t *testing.T) {
 		t.Fatalf("add route: %v", err)
 	}
 	fragment, err := repository.BuildFragment(domain.PipelineFragment{
-		Source:        "claude",
+		Source:        "fixture-document",
 		SourceType:    "chat",
 		SourceID:      "session-policy",
 		Title:         "Claude session: policy",
@@ -871,7 +871,7 @@ func TestDeliveryQueueService_ReplayPolicyDestinationOverride(t *testing.T) {
 		t.Fatalf("add route: %v", err)
 	}
 	fragment, err := repository.BuildFragment(domain.PipelineFragment{
-		Source:        "claude",
+		Source:        "fixture-document",
 		SourceType:    "chat",
 		SourceID:      "session-override",
 		Title:         "Claude session: override",
@@ -962,7 +962,7 @@ func TestDeliveryQueueService_DestinationSummaries(t *testing.T) {
 		t.Fatalf("add route: %v", err)
 	}
 	fragment, err := repository.BuildFragment(domain.PipelineFragment{
-		Source:        "claude",
+		Source:        "fixture-document",
 		SourceType:    "chat",
 		SourceID:      "session-summary",
 		Title:         "Claude session: summary",

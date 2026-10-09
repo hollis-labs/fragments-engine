@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -27,6 +28,7 @@ import (
 	"github.com/hollis-labs/fragments-engine/internal/repository"
 	"github.com/hollis-labs/fragments-engine/internal/service"
 	"github.com/hollis-labs/fragments-engine/internal/store"
+	"github.com/hollis-labs/fragments-engine/internal/transcript"
 )
 
 // go-queue tables for async ingest jobs. Created on demand by the sqlite
@@ -38,6 +40,7 @@ const (
 
 type App struct {
 	store            *store.Store
+	transcripts      *transcript.Store
 	recall           recall.Indexer
 	Fragments        *service.FragmentService
 	Inbox            *service.InboxService
@@ -135,6 +138,16 @@ func Open(ctx context.Context, cfg config.Config) (*App, error) {
 		ingest.NewInboxStage(inboxRepo),
 		ingest.NewRecallStage(recallIndex),
 	}, claude.Source{}, chatgpt.Source{}, urlsource.Source{}, filesystemdocs.Source{}, gitchanges.Source{}, nilvault.Source{})
+	var transcriptStore *transcript.Store
+	if cfg.Transcripts.PrivateRoot != "" {
+		transcriptStore, err = transcript.Open(config.ExpandHome(cfg.Transcripts.PrivateRoot))
+		if err != nil {
+			_ = recallIndex.Close()
+			_ = st.Close()
+			return nil, err
+		}
+	}
+	pipeline.SetTranscriptStore(transcriptStore)
 	legacyCapture := legacycapture.NewService(captureRepo)
 	pipeline.SetLegacyCaptureService(legacyCapture)
 	fragmentService := service.NewFragmentService(fragmentRepo, entityRepo, attachmentRepo, routingRepo, recallIndex, pipeline, visionAnalyzer, manualEnricher, corpusWriter)
@@ -144,6 +157,7 @@ func Open(ctx context.Context, cfg config.Config) (*App, error) {
 	readerService := service.NewReaderService(repository.NewReaderRepository(st.DB))
 	return &App{
 		store:           st,
+		transcripts:     transcriptStore,
 		recall:          recallIndex,
 		Fragments:       fragmentService,
 		Inbox:           service.NewInboxService(inboxRepo),
@@ -197,13 +211,17 @@ func (a *App) Close() error {
 	if a == nil {
 		return nil
 	}
+	var transcriptErr error
+	if a.transcripts != nil {
+		transcriptErr = a.transcripts.Close()
+	}
 	if a.recall != nil {
 		_ = a.recall.Close()
 	}
 	if a.store != nil {
-		return a.store.Close()
+		return errors.Join(transcriptErr, a.store.Close())
 	}
-	return nil
+	return transcriptErr
 }
 
 func (a *App) RecallStatus() recall.Status {

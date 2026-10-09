@@ -1,6 +1,12 @@
 database:
   path: ./data/fragments-engine.db
 
+# Transcript ingests are unavailable until an explicit owner-private root is
+# configured. Its existing parent must be trusted; FE creates the root 0700
+# and transcripts.db 0600 for the effective OS user. No shared routing/recall.
+transcripts:
+  private_root: ""
+
 delivery:
   file:
     max_attempts: 1
@@ -96,7 +102,7 @@ link_content:
 ingests:
   - name: claude-default
     kind: claude_code
-    enabled: true
+    enabled: false
     source:
       root: ~/.claude
     routing:
@@ -113,7 +119,7 @@ ingests:
     rules:
       max_file_size_mb: 50
       archive_root: ~/Documents/corpus/ai-chat-logs/chatgpt/logs
-      copy_text_exports: true
+      copy_text_exports: false
       delete_copied_source: false
   - name: saved-urls
     kind: url_source

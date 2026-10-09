@@ -20,7 +20,7 @@ func TestFragmentSearch(t *testing.T) {
 
 	repo := NewFragmentRepository(st.DB)
 	fragment, err := BuildFragment(domain.PipelineFragment{
-		Source:     "claude",
+		Source:     "fixture-document",
 		SourceType: "chat",
 		SourceID:   "session-1",
 		Title:      "Claude session: roadmap",
@@ -75,7 +75,7 @@ func TestFragmentList(t *testing.T) {
 	ids := make([]string, 3)
 	for i := 0; i < 3; i++ {
 		f, err := BuildFragment(domain.PipelineFragment{
-			Source:     "claude",
+			Source:     "fixture-document",
 			SourceType: "chat",
 			SourceID:   "session-" + string(rune('a'+i)),
 			Title:      "Fragment",

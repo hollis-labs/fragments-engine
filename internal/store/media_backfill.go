@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/hollis-labs/fragments-engine/internal/domain"
+	"github.com/hollis-labs/fragments-engine/internal/transcript"
 )
 
 type legacyMediaLink struct {
@@ -17,6 +18,8 @@ type legacyMediaLink struct {
 	attachmentID       string
 	sourceRegistration string
 	fragmentProvider   string
+	fragmentSource     string
+	fragmentType       string
 	metadataJSON       string
 	createdAt          string
 	previewStoragePath string
@@ -72,7 +75,7 @@ SELECT
   fa.storage_path, fa.preview_storage_path, a.size_bytes, fa.source, fa.source_item_id,
   fa.metadata_json, fa.created_at,
   COALESCE(si.source_registration_id, NULLIF(cf.ingest_name, ''), cf.source),
-  COALESCE(si.provider, NULLIF(cf.source, ''), 'legacy')
+  COALESCE(si.provider, NULLIF(cf.source, ''), 'legacy'), cf.source, cf.source_type
 FROM fragment_attachments fa
 JOIN projected ON projected.fragment_id = fa.fragment_id
 JOIN attachments a ON a.id = fa.attachment_id
@@ -99,7 +102,7 @@ ORDER BY revision_id, fa.created_at, a.name, a.id, fa.role, fa.source, fa.source
 			&item.attachment.ExternalURL, &item.attachment.StoragePath,
 			&item.previewStoragePath, &item.attachment.SizeBytes, &item.attachment.Source,
 			&item.attachment.SourceItemID, &item.metadataJSON, &item.createdAt,
-			&item.sourceRegistration, &item.fragmentProvider,
+			&item.sourceRegistration, &item.fragmentProvider, &item.fragmentSource, &item.fragmentType,
 		); err != nil {
 			rows.Close()
 			return fmt.Errorf("scan legacy media link: %w", err)
@@ -114,6 +117,12 @@ ORDER BY revision_id, fa.created_at, a.name, a.id, fa.role, fa.source, fa.source
 		return fmt.Errorf("close legacy media links: %w", err)
 	}
 
+	// Preflight the entire batch before inserting even one media observation.
+	for _, item := range links {
+		if domain.IsTranscript(item.fragmentSource, item.fragmentType, item.fragmentProvider) || domain.IsTranscriptSource(item.attachment.Source) {
+			return transcript.ErrHistoricalDispositionRequired
+		}
+	}
 	// Legacy fragment_attachments had no position column. The ORDER BY above
 	// is the compatibility fallback used by the old digest backfill too:
 	// created_at, attachment name/ID, then relationship identity. Positions

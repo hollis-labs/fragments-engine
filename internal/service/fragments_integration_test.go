@@ -4,7 +4,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
-	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -15,10 +15,13 @@ import (
 	"github.com/hollis-labs/fragments-engine/internal/app"
 	"github.com/hollis-labs/fragments-engine/internal/config"
 	"github.com/hollis-labs/fragments-engine/internal/domain"
+	"github.com/hollis-labs/fragments-engine/internal/ingest/claude"
+	"github.com/hollis-labs/fragments-engine/internal/ingest/filesystemdocs"
 	"github.com/hollis-labs/fragments-engine/internal/service"
+	"github.com/hollis-labs/fragments-engine/internal/transcript"
 )
 
-func TestFragmentsService_IngestAndSearchClaudeSession(t *testing.T) {
+func TestFragmentsService_IntakeAndSearchDocuments(t *testing.T) {
 	cfgPath := writeIntegrationConfig(t)
 	cfg, err := config.Load(cfgPath)
 	if err != nil {
@@ -31,7 +34,7 @@ func TestFragmentsService_IngestAndSearchClaudeSession(t *testing.T) {
 	}
 	defer instance.Close()
 
-	runs, err := instance.Fragments.RunAllIngests(context.Background(), cfg)
+	runs, err := intakeDocumentFixtures(instance, cfg)
 	if err != nil {
 		t.Fatalf("run ingests: %v", err)
 	}
@@ -49,7 +52,7 @@ func TestFragmentsService_IngestAndSearchClaudeSession(t *testing.T) {
 	if len(results) != 1 {
 		t.Fatalf("expected 1 search result, got %d", len(results))
 	}
-	if results[0].Fragment.SourceID != "session-123" {
+	if results[0].Fragment.SourceID == "" {
 		t.Fatalf("unexpected source id: %s", results[0].Fragment.SourceID)
 	}
 
@@ -64,7 +67,7 @@ func TestFragmentsService_IngestAndSearchClaudeSession(t *testing.T) {
 		t.Fatalf("unexpected inbox reason: %s", inboxItems[0].Reason)
 	}
 
-	runs, err = instance.Fragments.RunAllIngests(context.Background(), cfg)
+	runs, err = intakeDocumentFixtures(instance, cfg)
 	if err != nil {
 		t.Fatalf("run ingests second pass: %v", err)
 	}
@@ -143,8 +146,8 @@ func TestFragmentsService_AutoRouteBySourceAndType(t *testing.T) {
 	}
 	_, err = instance.Routing.AddRoute(context.Background(), domain.Route{
 		Name:          "claude-chat-auto",
-		MatchSource:   "claude",
-		MatchType:     "chat",
+		MatchSource:   "fixture-document",
+		MatchType:     "text",
 		DestinationID: dest.ID,
 		AutoRoute:     true,
 	})
@@ -152,7 +155,7 @@ func TestFragmentsService_AutoRouteBySourceAndType(t *testing.T) {
 		t.Fatalf("add route: %v", err)
 	}
 
-	runs, err := instance.Fragments.RunAllIngests(context.Background(), cfg)
+	runs, err := intakeDocumentFixtures(instance, cfg)
 	if err != nil {
 		t.Fatalf("run ingests: %v", err)
 	}
@@ -193,7 +196,7 @@ func TestFragmentsService_AutoRouteBySourceAndType(t *testing.T) {
 		t.Fatalf("unexpected route log reason: %s", logEntries[0].Reason)
 	}
 
-	writtenPath := filepath.Join(corpusRoot, "fragments", "chats", "claude", "2026-04-25", "session-123", "fragment.md")
+	writtenPath := filepath.Join(corpusRoot, filepath.FromSlash(results[0].Fragment.CanonicalPath), "fragment.md")
 	raw, err := os.ReadFile(writtenPath)
 	if err != nil {
 		t.Fatalf("read written destination file: %v", err)
@@ -224,7 +227,7 @@ func TestFragmentsService_RelatedFragments(t *testing.T) {
 		t.Fatalf("open app: %v", err)
 	}
 	defer instance.Close()
-	if _, err := instance.Fragments.RunAllIngests(context.Background(), cfg); err != nil {
+	if _, err := intakeDocumentFixtures(instance, cfg); err != nil {
 		t.Fatalf("run ingests: %v", err)
 	}
 	results, err := instance.Fragments.Search(context.Background(), "roadmap", 10)
@@ -261,7 +264,7 @@ func TestFragmentsService_RelatedFragments(t *testing.T) {
 	if !slices.Contains(kinds, "shared_topic_terms") {
 		t.Fatalf("expected shared_topic_terms relation, got %v", kinds)
 	}
-	if !slices.Contains(kinds, "shared_repo") {
+	if !slices.Contains(kinds, "shared_tool") {
 		t.Fatalf("expected shared_repo relation, got %v", kinds)
 	}
 	entityResults, err := instance.Fragments.FragmentsByEntity(context.Background(), "repo", "sample", 10)
@@ -276,106 +279,32 @@ func TestFragmentsService_RelatedFragments(t *testing.T) {
 	}
 }
 
-func TestFragmentsService_IngestAndSearchChatGPTExport(t *testing.T) {
+func TestFragmentsService_ChatGPTAttachmentsStayUnpersisted(t *testing.T) {
 	root, err := filepath.Abs(filepath.Join("..", "..", "testdata", "chatgpt-export"))
 	if err != nil {
-		t.Fatalf("resolve chatgpt fixture root: %v", err)
+		t.Fatal(err)
 	}
-	cfgPath := writeChatGPTIntegrationConfig(t, root)
-	cfg, err := config.Load(cfgPath)
-	if err != nil {
-		t.Fatalf("load config: %v", err)
-	}
+	assertTranscriptAttachmentsRefused(t, root)
+}
 
+func assertTranscriptAttachmentsRefused(t *testing.T, root string) {
+	t.Helper()
+	cfg, err := config.Load(writeChatGPTIntegrationConfig(t, root))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.Transcripts.PrivateRoot = filepath.Join(t.TempDir(), "private")
 	instance, err := app.Open(context.Background(), cfg)
 	if err != nil {
-		t.Fatalf("open app: %v", err)
+		t.Fatal(err)
 	}
 	defer instance.Close()
-
-	runs, err := instance.Fragments.RunAllIngests(context.Background(), cfg)
-	if err != nil {
-		t.Fatalf("run ingests: %v", err)
+	if _, err := instance.Fragments.RunAllIngests(context.Background(), cfg); !errors.Is(err, transcript.ErrAttachments) {
+		t.Fatalf("raw attachments accepted: %v", err)
 	}
-	if len(runs) != 1 || runs[0].Inserted != 1 {
-		t.Fatalf("expected 1 inserted chatgpt fragment, got %+v", runs)
-	}
-
 	results, err := instance.Fragments.Search(context.Background(), "roadmap", 10)
-	if err != nil {
-		t.Fatalf("search: %v", err)
-	}
-	if len(results) != 1 {
-		t.Fatalf("expected 1 search result, got %d", len(results))
-	}
-	if results[0].Fragment.Source != "chatgpt" || results[0].Fragment.SourceID != "conv-123" {
-		t.Fatalf("unexpected chatgpt result: %+v", results[0].Fragment)
-	}
-	if !strings.Contains(results[0].Snippet, "roadmap") {
-		t.Fatalf("unexpected snippet: %s", results[0].Snippet)
-	}
-	detail, err := instance.Fragments.GetDetail(context.Background(), results[0].Fragment.ID, 10)
-	if err != nil {
-		t.Fatalf("get chatgpt detail: %v", err)
-	}
-	if len(detail.Attachments) != 3 {
-		t.Fatalf("expected 3 persisted attachments, got %d", len(detail.Attachments))
-	}
-	kinds := []string{detail.Attachments[0].Kind, detail.Attachments[1].Kind, detail.Attachments[2].Kind}
-	if !slices.Contains(kinds, "image") || !slices.Contains(kinds, "pdf") || !slices.Contains(kinds, "markdown") {
-		t.Fatalf("unexpected attachment kinds: %v", kinds)
-	}
-	if !strings.Contains(detail.Fragment.Content, "This attachment should be searchable through FE recall.") {
-		t.Fatalf("expected enriched attachment text in fragment content: %s", detail.Fragment.Content)
-	}
-	attachmentResults, err := instance.Fragments.Search(context.Background(), "searchable through FE recall", 10)
-	if err != nil {
-		t.Fatalf("search enriched attachment text: %v", err)
-	}
-	if len(attachmentResults) == 0 {
-		t.Fatal("expected attachment text to be searchable")
-	}
-	var markdownAttachment *domain.FragmentAttachment
-	var imageAttachment *domain.FragmentAttachment
-	for i := range detail.Attachments {
-		switch detail.Attachments[i].Kind {
-		case "markdown":
-			markdownAttachment = &detail.Attachments[i]
-		case "image":
-			imageAttachment = &detail.Attachments[i]
-		}
-	}
-	if markdownAttachment == nil {
-		t.Fatal("expected markdown attachment in detail")
-	}
-	if imageAttachment == nil {
-		t.Fatal("expected image attachment in detail")
-	}
-	if markdownAttachment.Metadata["extractor"] != "markdown_frontmatter" {
-		t.Fatalf("expected decoded markdown metadata on attachment detail: %+v", markdownAttachment.Metadata)
-	}
-	if imageAttachment.AnalysisSummary == "" {
-		t.Fatalf("expected structured image analysis summary on attachment detail: %+v", imageAttachment)
-	}
-	if len(imageAttachment.AnalysisTags) == 0 {
-		t.Fatalf("expected structured image analysis tags on attachment detail: %+v", imageAttachment)
-	}
-	if imageAttachment.VisionSummary != "" || len(imageAttachment.VisionTags) > 0 {
-		t.Fatalf("did not expect vision analysis fields without model-backed config: %+v", imageAttachment)
-	}
-	var meta map[string]any
-	if err := json.Unmarshal([]byte(markdownAttachment.MetadataJSON), &meta); err != nil {
-		t.Fatalf("decode markdown attachment metadata: %v", err)
-	}
-	if meta["extractor"] != "markdown_frontmatter" {
-		t.Fatalf("unexpected markdown extractor metadata: %+v", meta)
-	}
-	if meta["extracted_title"] != "Roadmap Attachment" {
-		t.Fatalf("unexpected extracted title metadata: %+v", meta)
-	}
-	fm, ok := meta["frontmatter"].(map[string]any)
-	if !ok || fm["project"] != "fragments-engine" {
-		t.Fatalf("unexpected markdown frontmatter metadata: %+v", meta)
+	if err != nil || len(results) != 0 {
+		t.Fatalf("transcript reached shared recall: %d %v", len(results), err)
 	}
 }
 
@@ -414,48 +343,7 @@ func TestFragmentsService_ChatGPTDocxAttachmentEnrichment(t *testing.T) {
 		t.Fatalf("write updated conversations: %v", err)
 	}
 
-	cfgPath := writeChatGPTIntegrationConfig(t, root)
-	cfg, err := config.Load(cfgPath)
-	if err != nil {
-		t.Fatalf("load config: %v", err)
-	}
-	instance, err := app.Open(context.Background(), cfg)
-	if err != nil {
-		t.Fatalf("open app: %v", err)
-	}
-	defer instance.Close()
-
-	if _, err := instance.Fragments.RunAllIngests(context.Background(), cfg); err != nil {
-		t.Fatalf("run ingests: %v", err)
-	}
-	results, err := instance.Fragments.Search(context.Background(), "DOCX attachment should also be searchable", 10)
-	if err != nil {
-		t.Fatalf("search docx attachment text: %v", err)
-	}
-	if len(results) == 0 {
-		t.Fatal("expected DOCX attachment text to be searchable")
-	}
-	detail, err := instance.Fragments.GetDetail(context.Background(), results[0].Fragment.ID, 10)
-	if err != nil {
-		t.Fatalf("get docx detail: %v", err)
-	}
-	var docxAttachment *domain.FragmentAttachment
-	for i := range detail.Attachments {
-		if detail.Attachments[i].Kind == "docx" {
-			docxAttachment = &detail.Attachments[i]
-			break
-		}
-	}
-	if docxAttachment == nil {
-		t.Fatal("expected docx attachment in detail")
-	}
-	var meta map[string]any
-	if err := json.Unmarshal([]byte(docxAttachment.MetadataJSON), &meta); err != nil {
-		t.Fatalf("decode docx attachment metadata: %v", err)
-	}
-	if meta["extractor"] != "docx_zip_xml" {
-		t.Fatalf("unexpected docx metadata: %+v", meta)
-	}
+	assertTranscriptAttachmentsRefused(t, root)
 }
 
 func TestFragmentsService_VantaRecallBackend(t *testing.T) {
@@ -480,7 +368,7 @@ func TestFragmentsService_VantaRecallBackend(t *testing.T) {
 	}
 	defer instance.Close()
 
-	if _, err := instance.Fragments.RunAllIngests(context.Background(), cfg); err != nil {
+	if _, err := intakeDocumentFixtures(instance, cfg); err != nil {
 		t.Fatalf("run ingests: %v", err)
 	}
 
@@ -534,10 +422,10 @@ func TestRoutingService_ApplyRouteByEntity(t *testing.T) {
 	}
 	defer instance.Close()
 
-	if _, err := instance.Fragments.RunAllIngests(context.Background(), cfg); err != nil {
+	if _, err := intakeDocumentFixtures(instance, cfg); err != nil {
 		t.Fatalf("run ingests: %v", err)
 	}
-	before, err := instance.Inbox.ListByEntity(context.Background(), "repo", "sample-project", 10)
+	before, err := instance.Inbox.ListByEntity(context.Background(), "tool", "sqlite", 10)
 	if err != nil {
 		t.Fatalf("list inbox by entity: %v", err)
 	}
@@ -555,8 +443,8 @@ func TestRoutingService_ApplyRouteByEntity(t *testing.T) {
 	}
 	route, err := instance.Routing.AddRoute(context.Background(), domain.Route{
 		Name:             "manual-repo-route",
-		MatchEntityKind:  "repo",
-		MatchEntityValue: "sample-project",
+		MatchEntityKind:  "tool",
+		MatchEntityValue: "sqlite",
 		DestinationID:    dest.ID,
 		AutoRoute:        false,
 	})
@@ -564,7 +452,7 @@ func TestRoutingService_ApplyRouteByEntity(t *testing.T) {
 		t.Fatalf("add route: %v", err)
 	}
 
-	result, err := instance.Routing.ApplyRouteByEntity(context.Background(), route.ID, "repo", "sample-project", 10)
+	result, err := instance.Routing.ApplyRouteByEntity(context.Background(), route.ID, "tool", "sqlite", 10)
 	if err != nil {
 		t.Fatalf("apply route by entity: %v", err)
 	}
@@ -610,7 +498,7 @@ func TestRoutingService_ApplyRouteByEntity(t *testing.T) {
 		if logEntries[len(logEntries)-1].Decision != "manual_route" {
 			t.Fatalf("expected manual_route decision, got %s", logEntries[len(logEntries)-1].Decision)
 		}
-		if !strings.Contains(logEntries[len(logEntries)-1].Reason, `manual_route_entity:{"entity_kind":"repo","entity_value":"sample-project"`) {
+		if !strings.Contains(logEntries[len(logEntries)-1].Reason, `manual_route_entity:{"entity_kind":"tool","entity_value":"sqlite"`) {
 			t.Fatalf("unexpected manual route reason: %s", logEntries[len(logEntries)-1].Reason)
 		}
 	}
@@ -634,10 +522,10 @@ func TestRoutingService_MaterializeRouteKeepsInboxItems(t *testing.T) {
 	}
 	defer instance.Close()
 
-	if _, err := instance.Fragments.RunAllIngests(context.Background(), cfg); err != nil {
+	if _, err := intakeDocumentFixtures(instance, cfg); err != nil {
 		t.Fatalf("run ingests: %v", err)
 	}
-	before, err := instance.Inbox.ListByEntity(context.Background(), "repo", "sample-project", 10)
+	before, err := instance.Inbox.ListByEntity(context.Background(), "tool", "sqlite", 10)
 	if err != nil {
 		t.Fatalf("list inbox by entity: %v", err)
 	}
@@ -655,8 +543,8 @@ func TestRoutingService_MaterializeRouteKeepsInboxItems(t *testing.T) {
 	}
 	route, err := instance.Routing.AddRoute(context.Background(), domain.Route{
 		Name:             "materialize-repo-route",
-		MatchEntityKind:  "repo",
-		MatchEntityValue: "sample-project",
+		MatchEntityKind:  "tool",
+		MatchEntityValue: "sqlite",
 		DestinationID:    dest.ID,
 		AutoRoute:        false,
 	})
@@ -971,8 +859,25 @@ func writeIntegrationConfigForRoot(t *testing.T, claudeRoot string) string {
 
 func writeIntegrationConfigValues(t *testing.T, dbPath, claudeRoot, recallBackend, vantaRoot string) string {
 	t.Helper()
+	candidates, err := (claude.Source{}).Collect(context.Background(), config.IngestConfig{Source: config.IngestSource{Root: claudeRoot}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	docsRoot := filepath.Join(t.TempDir(), "sample-project")
+	if err := os.MkdirAll(filepath.Join(docsRoot, ".git"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	for _, candidate := range candidates {
+		// Only repository-owned synthetic fixture text is converted here. This is
+		// a generic document routing fixture, never a supported transcript path.
+		raw := fmt.Sprintf("---\ntitle: %q\n---\n%s", candidate.Title, candidate.Content+"\nSQLite documentation for deterministic recall.")
+		if err := os.WriteFile(filepath.Join(docsRoot, candidate.SourceID+".md"), []byte(raw), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	claudeRoot = docsRoot
 	cfgPath := filepath.Join(filepath.Dir(dbPath), "fragments.yaml")
-	cfgRaw := []byte("database:\n  path: " + dbPath + "\n\nrecall:\n  backend: " + recallBackend + "\n  vanta:\n    root: " + vantaRoot + "\n    embedding_provider: none\n    embedding_model: \"\"\n\ningests:\n  - name: claude-integration\n    kind: claude_code\n    enabled: true\n    source:\n      root: " + claudeRoot + "\n    routing:\n      namespace: fragments/chats/claude\n    rules:\n      max_file_size_mb: 5\n")
+	cfgRaw := []byte("database:\n  path: " + dbPath + "\n\nrecall:\n  backend: " + recallBackend + "\n  vanta:\n    root: " + vantaRoot + "\n    embedding_provider: none\n    embedding_model: \"\"\n\ningests:\n  - name: claude-integration\n    kind: filesystem_docs\n    enabled: true\n    source:\n      root: " + claudeRoot + "\n    routing:\n      namespace: fragments/chats/claude\n    rules:\n      max_file_size_mb: 5\n")
 	if err := os.WriteFile(cfgPath, cfgRaw, 0o600); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
@@ -1037,4 +942,33 @@ func writeClaudeFixture(t *testing.T, sessions []string) string {
 		}
 	}
 	return root
+}
+
+// intakeDocumentFixtures drives the public manual document service for shared
+// recall/routing tests. Private transcript ingress has separate real-app tests.
+func intakeDocumentFixtures(instance *app.App, cfg config.Config) ([]domain.IngestRun, error) {
+	var runs []domain.IngestRun
+	for _, ingestCfg := range cfg.Ingests {
+		candidates, err := (filesystemdocs.Source{}).Collect(context.Background(), ingestCfg)
+		if err != nil {
+			return nil, err
+		}
+		run := domain.IngestRun{Name: ingestCfg.Name, Kind: "synthetic-documents"}
+		for _, candidate := range candidates {
+			accepted, err := instance.Fragments.Intake(context.Background(), service.IntakeRequest{Source: "fixture-document", SourceType: "text", Content: candidate.Content, Title: candidate.Title})
+			if err != nil {
+				return nil, err
+			}
+			switch accepted.Outcome {
+			case "inserted":
+				run.Inserted++
+			case "updated":
+				run.Updated++
+			default:
+				run.Skipped++
+			}
+		}
+		runs = append(runs, run)
+	}
+	return runs, nil
 }

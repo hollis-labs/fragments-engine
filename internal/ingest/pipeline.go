@@ -12,6 +12,7 @@ import (
 	"github.com/hollis-labs/fragments-engine/internal/extract"
 	"github.com/hollis-labs/fragments-engine/internal/legacycapture"
 	"github.com/hollis-labs/fragments-engine/internal/repository"
+	"github.com/hollis-labs/fragments-engine/internal/transcript"
 )
 
 type Source interface {
@@ -38,12 +39,13 @@ type StageContext struct {
 }
 
 type Pipeline struct {
-	sources map[string]Source
-	repo    *repository.FragmentRepository
-	stages  []Stage
-	now     func() time.Time
-	vision  analyze.VisionAnalyzer
-	legacy  *legacycapture.Service
+	sources     map[string]Source
+	repo        *repository.FragmentRepository
+	stages      []Stage
+	now         func() time.Time
+	vision      analyze.VisionAnalyzer
+	legacy      *legacycapture.Service
+	transcripts *transcript.Store
 }
 
 // SetLegacyCaptureService installs the shared application adapter used by all
@@ -54,6 +56,10 @@ func (p *Pipeline) SetLegacyCaptureService(service *legacycapture.Service) {
 		p.legacy = service
 	}
 }
+
+// SetTranscriptStore binds the explicit owner-private destination. Transcript
+// producers cannot fall back to the shared capture/fragment store.
+func (p *Pipeline) SetTranscriptStore(store *transcript.Store) { p.transcripts = store }
 
 func NewPipeline(repo *repository.FragmentRepository, vision analyze.VisionAnalyzer, stages []Stage, sources ...Source) *Pipeline {
 	index := make(map[string]Source, len(sources))
@@ -96,9 +102,30 @@ func (p *Pipeline) RunOnce(ctx context.Context, ingestCfg config.IngestConfig) (
 	if !ok {
 		return domain.IngestRun{}, fmt.Errorf("pipeline: unsupported ingest kind %q", ingestCfg.Kind)
 	}
+	private := domain.IsTranscriptSource(ingestCfg.Kind)
+	if private && p.transcripts == nil {
+		return domain.IngestRun{}, transcript.ErrPrivateStoreRequired
+	}
+	// A transcript source is read-only. Copy/delete archive options would write
+	// raw source material before the redaction boundary.
+	if private && ingestCfg.Kind == "chatgpt_export" {
+		rules, err := config.DecodeRules[config.ChatGPTExportRules](ingestCfg)
+		if err != nil {
+			return domain.IngestRun{}, fmt.Errorf("transcript: invalid source rules")
+		}
+		if rules.CopyTextExports || rules.DeleteCopiedSource {
+			return domain.IngestRun{}, fmt.Errorf("transcript: raw archive copying/deletion is forbidden")
+		}
+	}
 	startedAt := p.now().UTC()
 	collected, err := source.Collect(ctx, ingestCfg)
 	if err != nil {
+		if private {
+			if ctx.Err() != nil {
+				return domain.IngestRun{}, ctx.Err()
+			}
+			return domain.IngestRun{}, fmt.Errorf("transcript: collection failed")
+		}
 		return domain.IngestRun{}, err
 	}
 
@@ -109,6 +136,21 @@ func (p *Pipeline) RunOnce(ctx context.Context, ingestCfg config.IngestConfig) (
 	}
 	now := p.now().UTC()
 	for _, materialCandidate := range collected {
+		if private || domain.IsTranscript(materialCandidate.Source, materialCandidate.SourceType, materialCandidate.SourceIdentity.Provider) {
+			outcome, err := p.transcripts.Accept(ctx, ingestCfg.Name, materialCandidate)
+			if err != nil {
+				return domain.IngestRun{}, err
+			}
+			switch outcome {
+			case transcript.Inserted:
+				run.Inserted++
+			case transcript.Updated:
+				run.Updated++
+			default:
+				run.Skipped++
+			}
+			continue // No attachment/LLM analysis, delivery, inbox, or shared recall.
+		}
 		projectionCandidate, err := EnrichAttachmentContent(ctx, materialCandidate, p.vision)
 		if err != nil {
 			return domain.IngestRun{}, err
