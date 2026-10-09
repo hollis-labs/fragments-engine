@@ -83,7 +83,8 @@ pre-persistence redaction path. Configuring a layout does not activate a schedul
 
 The disabled `codex_sessions` example reads JSONL files recursively under its
 configured archive root, including `sessions/YYYY/MM/DD` and archived sessions.
-Symlinks and files above `max_file_size_mb` (default 50 MiB) are ignored.
+Symlinks, `.rsync-partial` transfer directories and files above
+`max_file_size_mb` (default 50 MiB) are ignored.
 The parser requires `session_meta` with a thread ID and reads user/assistant
 `response_item` text blocks. Event-only rollouts fall back to `user_message` and
 `agent_message` events; duplicated legacy events are ignored when response

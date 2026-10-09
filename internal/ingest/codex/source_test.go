@@ -30,6 +30,13 @@ func TestCollectRolloutsAndDistinctPhysicalFiles(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	partial := filepath.Join(root, "sessions", ".rsync-partial", "rollout.jsonl")
+	if err := os.MkdirAll(filepath.Dir(partial), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(partial, []byte(syntheticRollout), 0600); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.Symlink(filepath.Join(root, "sessions"), filepath.Join(root, "linked-dir")); err != nil {
 		t.Fatal(err)
 	}

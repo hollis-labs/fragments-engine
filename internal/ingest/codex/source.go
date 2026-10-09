@@ -47,6 +47,9 @@ func (Source) Collect(ctx context.Context, cfg config.IngestConfig) ([]domain.Pi
 			}
 			return walkErr
 		}
+		if entry.IsDir() && entry.Name() == ".rsync-partial" {
+			return filepath.SkipDir
+		}
 		if entry.Type().IsRegular() && filepath.Ext(path) == ".jsonl" {
 			paths = append(paths, path)
 		}
