@@ -68,6 +68,16 @@ change. Pending identity/media backfills containing transcript material refuse
 before copying it into new canonical records. Any historical-data disposition requires separate
 explicit authority before activation.
 
+### Claude archive layout
+
+The `claude_code` source accepts both native `root/projects/<project>/*.jsonl`
+and synced `root/<project>/*.jsonl` layouts. It also reads
+`<project>/<session>/subagents/**/*.jsonl`. Subagent files have distinct segment
+identities even when they carry the parent's session ID; unchanged imports are
+skipped. Symlinked projects/files and unrelated nested JSONL files are ignored.
+The source is read-only and uses the same required private transcript store and
+pre-persistence redaction path. Configuring a layout does not activate a schedule.
+
 ## Where it sits in the stack
 
 ```
