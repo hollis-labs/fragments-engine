@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -74,14 +75,9 @@ func TestIngestAdminService_ListValidatePreviewAndArchivePolicy(t *testing.T) {
 	}
 
 	preview, err := svc.Preview(context.Background(), "chatgpt-fixture", 5)
-	if err != nil {
-		t.Fatalf("preview ingest: %v", err)
-	}
-	if preview.PreviewCount != 1 {
-		t.Fatalf("expected 1 preview fragment, got %d", preview.PreviewCount)
-	}
-	if len(preview.Items) != 1 || !strings.Contains(preview.Items[0].Title, "Roadmap planning") {
-		t.Fatalf("unexpected preview items: %+v", preview.Items)
+	var previewErr ValidationError
+	if !errors.As(err, &previewErr) || len(preview.Items) != 0 {
+		t.Fatalf("transcript preview must refuse without exposing metadata: %v", err)
 	}
 	if _, err := os.Stat(config.ExpandHome(list[1].ArchiveRoot)); !os.IsNotExist(err) {
 		t.Fatalf("preview should not create archive root, got err=%v", err)
@@ -347,5 +343,46 @@ func TestIngestAdminService_ValidateNilVault(t *testing.T) {
 	}
 	if missingResult.Valid {
 		t.Fatalf("expected invalid result for missing config.json: %+v", missingResult)
+	}
+}
+
+func TestIngestAdminService_CodexRulesValidation(t *testing.T) {
+	root := t.TempDir()
+	cfgPath := filepath.Join(t.TempDir(), "fragments.yaml")
+	cfg := config.Config{Database: config.DatabaseConfig{Path: filepath.Join(root, "shared.db")}, Ingests: []config.IngestConfig{{Name: "codex-fixture", Kind: "codex_sessions", Source: config.IngestSource{Root: root}, Rules: map[string]any{"max_file_size_mb": "invalid"}}}}
+	if err := config.Save(cfgPath, cfg); err != nil {
+		t.Fatal(err)
+	}
+	svc := NewIngestAdminService(cfgPath)
+	result, err := svc.Validate(context.Background(), "codex-fixture")
+	if err != nil || result.Valid {
+		t.Fatalf("invalid Codex rules accepted: %+v %v", result, err)
+	}
+	cfg.Ingests[0].Rules = map[string]any{"max_file_size_mb": 50}
+	if err := config.Save(cfgPath, cfg); err != nil {
+		t.Fatal(err)
+	}
+	result, err = svc.Validate(context.Background(), "codex-fixture")
+	if err != nil || !result.Valid {
+		t.Fatalf("valid Codex config refused: %+v %v", result, err)
+	}
+}
+
+func TestIngestAdminService_TranscriptPreviewRefusedBeforeCollection(t *testing.T) {
+	for _, kind := range []string{"claude_code", "chatgpt_export", "codex_sessions"} {
+		t.Run(kind, func(t *testing.T) {
+			root := t.TempDir()
+			cfgPath := filepath.Join(root, "fragments.yaml")
+			cfg := config.Config{Database: config.DatabaseConfig{Path: filepath.Join(root, "shared.db")}, Ingests: []config.IngestConfig{{Name: "private-transcript", Kind: kind, Source: config.IngestSource{Root: filepath.Join(root, "not-created")}}}}
+			if err := config.Save(cfgPath, cfg); err != nil {
+				t.Fatal(err)
+			}
+			svc := NewIngestAdminService(cfgPath)
+			result, err := svc.Preview(context.Background(), "private-transcript", 5)
+			var validation ValidationError
+			if !errors.As(err, &validation) || !strings.Contains(validation.Error(), "transcript preview is unavailable") || len(result.Items) != 0 {
+				t.Fatalf("preview not refused before source collection: %v", err)
+			}
+		})
 	}
 }

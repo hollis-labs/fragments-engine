@@ -230,6 +230,9 @@ func validateIngestRules(ic config.IngestConfig) error {
 	case "claude_code":
 		_, err := config.DecodeRules[config.ClaudeCodeRules](ic)
 		return err
+	case "codex_sessions":
+		_, err := config.DecodeRules[config.CodexSessionRules](ic)
+		return err
 	case "chatgpt_export":
 		_, err := config.DecodeRules[config.ChatGPTExportRules](ic)
 		return err
@@ -308,6 +311,11 @@ func (s *IngestAdminService) Validate(_ context.Context, name string) (domain.In
 		matches, _ := filepath.Glob(filepath.Join(root, "projects", "*", "*.jsonl"))
 		if len(matches) == 0 {
 			result.Warnings = append(result.Warnings, "no Claude session files found under projects/*/*.jsonl")
+		}
+	case "codex_sessions":
+		if _, err := config.DecodeRules[config.CodexSessionRules](ingestCfg); err != nil {
+			result.Valid = false
+			result.Errors = append(result.Errors, err.Error())
 		}
 	case "chatgpt_export":
 		rules, err := config.DecodeRules[config.ChatGPTExportRules](ingestCfg)
@@ -399,6 +407,11 @@ func (s *IngestAdminService) Preview(ctx context.Context, name string, limit int
 	_, ingestCfg, _, err := s.loadNamedIngest(name)
 	if err != nil {
 		return domain.IngestPreviewResult{}, err
+	}
+	// Preview exposes raw titles, IDs and locators without private acceptance.
+	// Even redacted transcript material is not authorized for this public path.
+	if domain.IsTranscriptSource(ingestCfg.Kind) {
+		return domain.IngestPreviewResult{}, ValidationError{Msg: "transcript preview is unavailable; material requires owner-private acceptance"}
 	}
 	previewCfg, err := sanitizePreviewIngestConfig(ingestCfg)
 	if err != nil {
