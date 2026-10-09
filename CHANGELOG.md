@@ -20,6 +20,11 @@ This file was backfilled from the git history as a good-faith summary, not an ex
 
 ### Changed
 
+- Adopt published `libs/ui-go`, `libs/plugin-mcp`, `libs/util` and `substrate/llm-core` modules and Tesseract v0.11.0, replacing moved standalone imports without local module replacements.
+- Adapt the existing ingest scheduler to durable fire snapshots and fenced claim recovery. A source-schema migration adds scheduler fire and accepted dispatch records; acceptance atomically writes the fire identity, ingest run and SQLite queue envelope, preventing duplicate dispatch after recovery. Existing schedule rows and configuration remain in place.
+- Align embedded projection writes to the app-owned project scope while recalling legacy user-scope records read-only. Use Tesseract’s supported generic `note` kind with a `fragment` tag, and deduplicate projection hits against current FE records; no user actor is asserted or projection data migrated.
+- Add CI for existing backend, race, vet, frontend build, tests and typecheck commands.
+
 - The MCP surface moved from `mark3labs/mcp-go` to the official `go-mcp` SDK.
 - Relative config and destination paths are anchored to the install directory, not the process working directory.
 - README rewritten as a pre-release identity and stack-fit document.

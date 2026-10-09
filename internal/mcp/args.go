@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	gomcpserver "github.com/hollis-labs/go-mcp/server"
+	gomcpserver "github.com/hollis-labs/libs/plugin-mcp/go-mcp/server"
 )
 
 // argString, argFloat, argBool and argStringSlice replace mark3labs'

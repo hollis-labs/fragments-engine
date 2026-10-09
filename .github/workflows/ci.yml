@@ -1,0 +1,32 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+jobs:
+  verify:
+    runs-on: macos-latest
+    timeout-minutes: 20
+    env:
+      GOWORK: 'off'
+      GOMAXPROCS: '4'
+      GOFLAGS: '-p=2'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: apps/sysop/package-lock.json
+      - run: npm --prefix apps/sysop ci
+      - run: python3 -c 'import subprocess; subprocess.run(["make", "sysop-build"], timeout=300, check=True)'
+      - run: python3 -c 'import subprocess; subprocess.run(["go", "build", "./cmd/fragments-engine"], timeout=180, check=True)'
+      - run: go test -timeout 240s ./...
+      - run: go test -race -timeout 240s ./...
+      - run: python3 -c 'import subprocess; subprocess.run(["make", "lint"], timeout=180, check=True)'
+      - run: python3 -c 'import subprocess; subprocess.run(["npm", "--prefix", "apps/sysop", "run", "test:run"], timeout=180, check=True)'
+      - run: python3 -c 'import subprocess; subprocess.run(["npm", "--prefix", "apps/sysop", "run", "typecheck"], timeout=180, check=True)'

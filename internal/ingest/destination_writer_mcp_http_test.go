@@ -8,8 +8,8 @@ import (
 	"testing"
 
 	"github.com/hollis-labs/fragments-engine/internal/domain"
-	gomcpserver "github.com/hollis-labs/go-mcp/server"
-	httptransport "github.com/hollis-labs/go-mcp/transport/http"
+	gomcpserver "github.com/hollis-labs/libs/plugin-mcp/go-mcp/server"
+	httptransport "github.com/hollis-labs/libs/plugin-mcp/go-mcp/transport/http"
 )
 
 // TestMCPDestinationExecutor_HTTPTransport_TangentHITL proves the "http"

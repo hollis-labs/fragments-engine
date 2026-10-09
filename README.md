@@ -109,3 +109,5 @@ the process.
 Full operator/agent usage guide: [`docs/usage.md`](docs/usage.md). Browser
 capture and the Sysop Reader: [`docs/browser-capture-reader.md`](docs/browser-capture-reader.md).
 Architecture: [`docs/architecture.md`](docs/architecture.md).
+
+Dependency migration and source-schema compatibility are documented in [Published module adoption](docs/published-module-adoption.md).

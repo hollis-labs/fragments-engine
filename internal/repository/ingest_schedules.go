@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"time"
 
-	scheduler "github.com/hollis-labs/go-scheduler"
+	scheduler "github.com/hollis-labs/libs/util/scheduler"
 
 	"github.com/hollis-labs/fragments-engine/internal/domain"
 )
@@ -16,8 +16,7 @@ import (
 const ingestScheduleJobType = "ingest_run"
 
 // IngestScheduleRepository persists ingest cron schedules. It also implements
-// go-scheduler's Store interface (ListDueSchedules / ClaimAndUpdateScheduleRun
-// / SetScheduleNextRun / DisableSchedule) over those rows.
+// the published scheduler Store interface over those rows and durable fires.
 type IngestScheduleRepository struct {
 	db *sql.DB
 }
@@ -124,9 +123,9 @@ func (r *IngestScheduleRepository) ListDueSchedules(ctx context.Context, now tim
 	rows, err := r.db.QueryContext(ctx, `
 SELECT id, ingest_name, cron_expr, last_run, next_run
 FROM ingest_schedules
-WHERE enabled = 1 AND next_run != '' AND next_run <= ?
+WHERE enabled = 1 AND next_run != '' AND julianday(next_run) <= julianday(?)
 ORDER BY next_run ASC
-LIMIT ?`, now.UTC().Format(time.RFC3339), limit)
+LIMIT ?`, now.UTC().Format(time.RFC3339Nano), limit)
 	if err != nil {
 		return nil, fmt.Errorf("list due ingest schedules: %w", err)
 	}
