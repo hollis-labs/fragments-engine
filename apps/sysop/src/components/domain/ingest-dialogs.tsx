@@ -30,6 +30,7 @@ const LABEL = 'text-[10px] font-semibold uppercase tracking-[.18em] text-text-su
 const INGEST_KINDS = [
   'claude_code',
   'codex_sessions',
+  'antigravity',
   'chatgpt_export',
   'url_source',
   'filesystem_docs',
@@ -216,7 +217,7 @@ export function IngestEditDialog({ open, onClose, onSaved, ingest }: IngestEditD
 
   function buildRules(): JsonObject {
     const rules: JsonObject = {}
-    if (kind === 'claude_code' || kind === 'codex_sessions') {
+    if (kind === 'claude_code' || kind === 'codex_sessions' || kind === 'antigravity') {
       const v = numOrUndefined(maxFileSizeMb)
       if (v !== undefined) rules.max_file_size_mb = v
     } else if (kind === 'chatgpt_export') {
@@ -346,7 +347,7 @@ export function IngestEditDialog({ open, onClose, onSaved, ingest }: IngestEditD
           />
 
           {/* Per-kind rules */}
-          {(kind === 'claude_code' || kind === 'codex_sessions') && (
+          {(kind === 'claude_code' || kind === 'codex_sessions' || kind === 'antigravity') && (
             <Field label="Max file size (MB)">
               <input
                 className={FIELD}

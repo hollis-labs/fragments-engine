@@ -152,6 +152,10 @@ type CodexSessionRules struct {
 	MaxFileSizeMB int `json:"max_file_size_mb" yaml:"max_file_size_mb"`
 }
 
+type AntigravityRules struct {
+	MaxFileSizeMB int `json:"max_file_size_mb" yaml:"max_file_size_mb"`
+}
+
 type ChatGPTExportRules struct {
 	MaxFileSizeMB      int    `json:"max_file_size_mb" yaml:"max_file_size_mb"`
 	ArchiveRoot        string `json:"archive_root" yaml:"archive_root"`

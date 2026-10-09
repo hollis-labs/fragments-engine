@@ -15,8 +15,8 @@ decision instead of being filed silently.
 
 ## What it is today
 
-- **Ingests** Claude Code chat history and ChatGPT exports into an explicit private
-  redacted store; filesystem docs,
+- **Ingests** Claude Code, Codex and Antigravity archives and ChatGPT exports
+  into an explicit private redacted store; filesystem docs,
   git changes, saved URLs (single-link or manifest/batch), pre-fetched
   browser captures, and notes read directly out of Nil's per-vault SQLite
   databases.
@@ -35,11 +35,10 @@ decision instead of being filed silently.
 
 ## Private transcript storage
 
-Claude Code and ChatGPT transcript ingests require an explicit
+Claude Code, Codex, Antigravity and ChatGPT transcript ingests require an explicit
 `transcripts.private_root`. An empty value refuses transcript ingestion before
-collecting source files. This also applies to the reserved Codex and Antigravity
-transcript source names when those adapters are added. This source change does
-not activate any importer, schedule, or synced Mac archive.
+collecting source files. All registered transcript adapters enforce this boundary.
+This source change does not activate any importer, schedule, or synced Mac archive.
 
 The destination is a **local owner-only store**, owned by the process's effective
 OS UID. Use a dedicated root with an existing trusted parent. FE creates the
@@ -98,6 +97,39 @@ Acceptance requires the explicit private transcript root and redacts all
 persisted text/metadata before canonical or local index writes. Shared recall,
 routing, inbox and destinations are bypassed. Archives remain read-only, and
 adding this source does not activate it or install a schedule.
+
+### Antigravity archives
+
+The disabled `antigravity` example uses an archive root containing `conversations`
+and `brain`. Conversation `.db` files must contain the observed SQLite `steps`
+layout (`idx`, `step_type`, `step_format`, `step_payload`). Format 0 user input
+(type 14, protobuf field 19: text 2, item text 3.1, fallback query 1) and planner
+response (type 15, field 20.1) are decoded in order. This bounded field mapping is
+based on [firsthand descriptor-derived parser source](https://github.com/skillsynchq/txcript/blob/8cd3b0e63f797b1531a14197f41a0e9eeedec8c6/src/harness/antigravity.rs),
+not a vendor compatibility guarantee. Tools, reasoning, images and opaque
+metadata are omitted; unsupported formats/malformed text fail without payload
+output. There is no heuristic scan for message-like protobuf strings.
+
+SQLite is opened read-only and immutable with temporary storage in memory.
+Nonempty WAL/journal files or unsafe sidecars refuse the collection: pending
+changes must be supplied as a checkpoint-consistent snapshot, never silently
+ignored. Absence of a sidecar alone does not prove a complete sync: the source
+owner must supply a consistent checkpointed snapshot. The importer does not
+checkpoint a source or make raw disk copies.
+Do not ingest a database that is being modified; detected replacement/size/time
+changes refuse collection. Source timestamps are file observations, not invented
+conversation creation times.
+
+Brain `.txt`, `.md`, `.log`, `.json` and `.jsonl` files are imported as UTF-8 text
+artifacts with separate physical-file segment identities, including compact/full
+logs as distinct artifacts rather than inferred conversation turns. Binary files
+and media are not copied. Invalid UTF-8/control bytes fail; symlinks, incomplete
+`.rsync-partial` directories and files over `max_file_size_mb` (default 50 MiB)
+are ignored. The entire collection is prepared in memory before acceptance.
+All accepted text and locators go exclusively through the private redaction store;
+unchanged material is skipped. No shared recall/routing/preview or schedule is
+activated by registering the source. Pattern redaction still cannot recognize
+all encoded secrets, so these artifacts remain owner-private.
 
 ## Where it sits in the stack
 
