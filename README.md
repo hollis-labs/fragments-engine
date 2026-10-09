@@ -78,6 +78,25 @@ skipped. Symlinked projects/files and unrelated nested JSONL files are ignored.
 The source is read-only and uses the same required private transcript store and
 pre-persistence redaction path. Configuring a layout does not activate a schedule.
 
+### Codex session archives
+
+The disabled `codex_sessions` example reads JSONL files recursively under its
+configured archive root, including `sessions/YYYY/MM/DD` and archived sessions.
+Symlinks and files above `max_file_size_mb` (default 50 MiB) are ignored.
+The parser requires `session_meta` with a thread ID and reads user/assistant
+`response_item` text blocks. Event-only rollouts fall back to `user_message` and
+`agent_message` events; duplicated legacy events are ignored when response
+messages exist. Tool traces, reasoning and media are not imported. Malformed
+records or conflicting/missing identity metadata fail without exposing payloads
+in diagnostics. Physical rollout files have distinct segment identities.
+
+The recorded format is based on [Codex's public rollout definitions](https://github.com/openai/codex/blob/5fe4fc8f7cd16688b5c661d8cdb76e2a340b046d/codex-rs/history/src/rollout_payload.rs)
+and [message types](https://github.com/openai/codex/blob/5fe4fc8f7cd16688b5c661d8cdb76e2a340b046d/codex-rs/protocol/src/models.rs).
+Acceptance requires the explicit private transcript root and redacts all
+persisted text/metadata before canonical or local index writes. Shared recall,
+routing, inbox and destinations are bypassed. Archives remain read-only, and
+adding this source does not activate it or install a schedule.
+
 ## Where it sits in the stack
 
 ```

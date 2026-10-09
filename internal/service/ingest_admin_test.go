@@ -349,3 +349,25 @@ func TestIngestAdminService_ValidateNilVault(t *testing.T) {
 		t.Fatalf("expected invalid result for missing config.json: %+v", missingResult)
 	}
 }
+
+func TestIngestAdminService_CodexRulesValidation(t *testing.T) {
+	root := t.TempDir()
+	cfgPath := filepath.Join(t.TempDir(), "fragments.yaml")
+	cfg := config.Config{Database: config.DatabaseConfig{Path: filepath.Join(root, "shared.db")}, Ingests: []config.IngestConfig{{Name: "codex-fixture", Kind: "codex_sessions", Source: config.IngestSource{Root: root}, Rules: map[string]any{"max_file_size_mb": "invalid"}}}}
+	if err := config.Save(cfgPath, cfg); err != nil {
+		t.Fatal(err)
+	}
+	svc := NewIngestAdminService(cfgPath)
+	result, err := svc.Validate(context.Background(), "codex-fixture")
+	if err != nil || result.Valid {
+		t.Fatalf("invalid Codex rules accepted: %+v %v", result, err)
+	}
+	cfg.Ingests[0].Rules = map[string]any{"max_file_size_mb": 50}
+	if err := config.Save(cfgPath, cfg); err != nil {
+		t.Fatal(err)
+	}
+	result, err = svc.Validate(context.Background(), "codex-fixture")
+	if err != nil || !result.Valid {
+		t.Fatalf("valid Codex config refused: %+v %v", result, err)
+	}
+}

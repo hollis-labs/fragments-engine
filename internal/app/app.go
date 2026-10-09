@@ -18,6 +18,7 @@ import (
 	"github.com/hollis-labs/fragments-engine/internal/ingest"
 	"github.com/hollis-labs/fragments-engine/internal/ingest/chatgpt"
 	"github.com/hollis-labs/fragments-engine/internal/ingest/claude"
+	"github.com/hollis-labs/fragments-engine/internal/ingest/codex"
 	"github.com/hollis-labs/fragments-engine/internal/ingest/filesystemdocs"
 	"github.com/hollis-labs/fragments-engine/internal/ingest/gitchanges"
 	"github.com/hollis-labs/fragments-engine/internal/ingest/nilvault"
@@ -137,7 +138,7 @@ func Open(ctx context.Context, cfg config.Config) (*App, error) {
 		ingest.NewRouteStage(fragmentRepo, attachmentRepo, routingRepo, inboxRepo, entityRepo, deliveryQueue),
 		ingest.NewInboxStage(inboxRepo),
 		ingest.NewRecallStage(recallIndex),
-	}, claude.Source{}, chatgpt.Source{}, urlsource.Source{}, filesystemdocs.Source{}, gitchanges.Source{}, nilvault.Source{})
+	}, claude.Source{}, codex.Source{}, chatgpt.Source{}, urlsource.Source{}, filesystemdocs.Source{}, gitchanges.Source{}, nilvault.Source{})
 	var transcriptStore *transcript.Store
 	if cfg.Transcripts.PrivateRoot != "" {
 		transcriptStore, err = transcript.Open(config.ExpandHome(cfg.Transcripts.PrivateRoot))
