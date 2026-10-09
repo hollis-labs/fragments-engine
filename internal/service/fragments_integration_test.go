@@ -293,7 +293,11 @@ func assertTranscriptAttachmentsRefused(t *testing.T, root string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfg.Transcripts.PrivateRoot = filepath.Join(t.TempDir(), "private")
+	privateParent, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.Transcripts.PrivateRoot = filepath.Join(privateParent, "private")
 	instance, err := app.Open(context.Background(), cfg)
 	if err != nil {
 		t.Fatal(err)

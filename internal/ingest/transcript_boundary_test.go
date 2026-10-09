@@ -49,7 +49,7 @@ func TestTranscriptPrivateBoundaryBeforeCollectionAndSharedEffects(t *testing.T)
 	if _, err := p.RunOnce(context.Background(), cfg); !errors.Is(err, transcript.ErrPrivateStoreRequired) || source.collected != 0 {
 		t.Fatalf("unowned collection reached %d %v", source.collected, err)
 	}
-	private, err := transcript.Open(filepath.Join(t.TempDir(), "private"))
+	private, err := transcript.Open(privateTranscriptTestRoot(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,7 +87,7 @@ func TestTranscriptPrivateBoundaryBeforeCollectionAndSharedEffects(t *testing.T)
 }
 
 func TestTranscriptCopyOptionsRefusedBeforeCollection(t *testing.T) {
-	private, err := transcript.Open(filepath.Join(t.TempDir(), "private"))
+	private, err := transcript.Open(privateTranscriptTestRoot(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -109,4 +109,13 @@ func TestTranscriptCandidateCannotUseAnUnclassifiedSourceToBypass(t *testing.T) 
 	if _, err := p.RunOnce(context.Background(), config.IngestConfig{Name: "source", Kind: source.kind}); !errors.Is(err, transcript.ErrPrivateStoreRequired) {
 		t.Fatalf("candidate escaped boundary: %v", err)
 	}
+}
+
+func privateTranscriptTestRoot(t *testing.T) string {
+	t.Helper()
+	parent, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return filepath.Join(parent, "private")
 }

@@ -12,7 +12,10 @@ import (
 )
 
 func TestAppTranscriptPrivateAcceptanceAndIsolation(t *testing.T) {
-	root := t.TempDir()
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	source := filepath.Join(root, "source", "projects", "synthetic")
 	if err := os.MkdirAll(source, 0700); err != nil {
 		t.Fatal(err)

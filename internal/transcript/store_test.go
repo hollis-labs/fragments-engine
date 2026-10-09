@@ -47,7 +47,7 @@ func TestRedactCredentials(t *testing.T) {
 }
 
 func TestPrivateAcceptanceRedactsMaterialAndIndex(t *testing.T) {
-	root := filepath.Join(t.TempDir(), "private")
+	root := filepath.Join(canonicalTempDir(t), "private")
 	st, err := Open(root)
 	if err != nil {
 		t.Fatal(err)
@@ -100,7 +100,7 @@ func TestPrivateAcceptanceRedactsMaterialAndIndex(t *testing.T) {
 func TestPrivateStoreRefusesUnsafeDestinations(t *testing.T) {
 	for _, kind := range []string{"public directory", "symlink directory", "public database", "symlink database", "hardlinked database", "writable ancestor", "foreign database", "symlink journal"} {
 		t.Run(kind, func(t *testing.T) {
-			parent := t.TempDir()
+			parent := canonicalTempDir(t)
 			root := filepath.Join(parent, "private")
 			if err := os.Mkdir(root, 0700); err != nil {
 				t.Fatal(err)
@@ -138,7 +138,11 @@ func TestPrivateStoreRefusesUnsafeDestinations(t *testing.T) {
 			case "writable ancestor":
 				// /tmp is an exposed sticky parent, unlike this session's
 				// owner-only enclosing cache. Create just a synthetic fixture.
-				exposed, err := os.MkdirTemp("/tmp", "fe-unsafe-parent-")
+				tempParent, err := filepath.EvalSymlinks("/tmp")
+				if err != nil {
+					t.Fatal(err)
+				}
+				exposed, err := os.MkdirTemp(tempParent, "fe-unsafe-parent-")
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -183,7 +187,7 @@ func TestPrivateStoreRefusesUnsafeDestinations(t *testing.T) {
 }
 
 func TestPrivateStoreChecksOwnershipAgainAndRefusesOpaqueMaterial(t *testing.T) {
-	root := filepath.Join(t.TempDir(), "private")
+	root := filepath.Join(canonicalTempDir(t), "private")
 	st, err := Open(root)
 	if err != nil {
 		t.Fatal(err)
@@ -210,4 +214,15 @@ func TestPrivateStoreChecksOwnershipAgainAndRefusesOpaqueMaterial(t *testing.T) 
 	if err := st.db.QueryRow(`SELECT count(*) FROM transcripts`).Scan(&count); err != nil || count != 0 {
 		t.Fatalf("failed acceptance wrote %d %v", count, err)
 	}
+}
+
+func canonicalTempDir(t *testing.T) string {
+	t.Helper()
+	// Darwin's standard temporary path has root-owned /var aliases. Resolve
+	// the fixture parent explicitly; production keeps refusing symlink paths.
+	path, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return path
 }
