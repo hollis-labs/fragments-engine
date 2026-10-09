@@ -381,7 +381,7 @@ func TestRoutingService_RouteRenamePreviewAndDelete(t *testing.T) {
 	}
 	route, err := svc.AddRoute(context.Background(), domain.Route{
 		Name:             "preview-route",
-		MatchSource:      "claude",
+		MatchSource:      "fixture-document",
 		MatchType:        "chat",
 		MatchEntityKind:  "repo",
 		MatchEntityValue: "sample-project",
@@ -400,7 +400,7 @@ func TestRoutingService_RouteRenamePreviewAndDelete(t *testing.T) {
 	}
 
 	fragment, err := repository.BuildFragment(domain.PipelineFragment{
-		Source:        "claude",
+		Source:        "fixture-document",
 		SourceType:    "chat",
 		SourceID:      "session-preview",
 		Title:         "Claude session: preview",
@@ -574,7 +574,7 @@ func TestRoutingService_DestinationStatus(t *testing.T) {
 	}
 
 	fragment, err := repository.BuildFragment(domain.PipelineFragment{
-		Source:        "claude",
+		Source:        "fixture-document",
 		SourceType:    "chat",
 		SourceID:      "session-123",
 		Title:         "Claude session: roadmap-review",
@@ -879,7 +879,7 @@ func TestRoutingService_CallbackRoute_DoesNotFireEndToEnd(t *testing.T) {
 	}
 
 	fragment, err := repository.BuildFragment(domain.PipelineFragment{
-		Source:        "claude",
+		Source:        "fixture-document",
 		SourceType:    "chat",
 		SourceID:      "session-callback-1",
 		Title:         "Claude session: callback-test",
@@ -966,7 +966,7 @@ func TestRoutingService_ApplyRouteByEntity_CallbackDestination_NeverFiresSynchro
 	}
 
 	fragment, err := repository.BuildFragment(domain.PipelineFragment{
-		Source:        "claude",
+		Source:        "fixture-document",
 		SourceType:    "chat",
 		SourceID:      "session-callback-apply",
 		Title:         "Claude session: callback apply-route",

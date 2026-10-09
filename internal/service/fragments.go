@@ -20,6 +20,7 @@ import (
 	"github.com/hollis-labs/fragments-engine/internal/legacycapture"
 	"github.com/hollis-labs/fragments-engine/internal/recall"
 	"github.com/hollis-labs/fragments-engine/internal/repository"
+	"github.com/hollis-labs/fragments-engine/internal/transcript"
 )
 
 type FragmentService struct {
@@ -609,6 +610,9 @@ func (s *FragmentService) BackfillPinterestCorpus(ctx context.Context, limit int
 // Intake accepts a manually submitted fragment, writes it to the DB, runs all
 // pipeline stages (route, inbox, recall), and optionally attaches tag entities.
 func (s *FragmentService) Intake(ctx context.Context, req IntakeRequest) (IntakeResult, error) {
+	if domain.IsTranscript(req.Source, req.SourceType, "") {
+		return IntakeResult{}, transcript.ErrPrivateStoreRequired
+	}
 	if strings.TrimSpace(req.Content) == "" {
 		return IntakeResult{}, fmt.Errorf("intake: content is required")
 	}

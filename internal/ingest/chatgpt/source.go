@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"io/fs"
 	"net/url"
 	"os"
@@ -37,6 +36,9 @@ func (Source) Collect(ctx context.Context, cfg config.IngestConfig) ([]domain.Pi
 	if err != nil {
 		return nil, err
 	}
+	if rules.CopyTextExports || rules.DeleteCopiedSource {
+		return nil, fmt.Errorf("transcript: raw archive copying/deletion is forbidden")
+	}
 	if _, err := ValidateArchivePolicy(root, rules); err != nil {
 		return nil, err
 	}
@@ -52,10 +54,7 @@ func (Source) Collect(ctx context.Context, cfg config.IngestConfig) ([]domain.Pi
 		default:
 		}
 
-		parseDir, err := prepareExportDir(exportDir, rules)
-		if err != nil {
-			return nil, fmt.Errorf("prepare export dir %s: %w", exportDir, err)
-		}
+		parseDir := exportDir
 		fileIndex, err := buildAttachmentIndex(exportDir)
 		if err != nil {
 			return nil, fmt.Errorf("build attachment index %s: %w", exportDir, err)
@@ -174,68 +173,6 @@ func conversationFiles(root string) ([]string, error) {
 	}
 	sort.Strings(paths)
 	return paths, nil
-}
-
-func prepareExportDir(sourceDir string, rules config.ChatGPTExportRules) (string, error) {
-	if !rules.CopyTextExports || strings.TrimSpace(rules.ArchiveRoot) == "" {
-		return sourceDir, nil
-	}
-	archiveRoot := config.ExpandHome(rules.ArchiveRoot)
-	targetDir := filepath.Join(archiveRoot, filepath.Base(sourceDir))
-	if err := os.MkdirAll(targetDir, 0o750); err != nil {
-		return "", fmt.Errorf("mkdir archive root: %w", err)
-	}
-	files := exportTextFiles(sourceDir)
-	for _, src := range files {
-		dst := filepath.Join(targetDir, filepath.Base(src))
-		if err := copyFile(src, dst); err != nil {
-			return "", fmt.Errorf("copy export file %s: %w", src, err)
-		}
-	}
-	if rules.DeleteCopiedSource {
-		for _, src := range files {
-			if err := os.Remove(src); err != nil && !os.IsNotExist(err) {
-				return "", fmt.Errorf("delete copied source file %s: %w", src, err)
-			}
-		}
-	}
-	return targetDir, nil
-}
-
-func exportTextFiles(root string) []string {
-	patterns := []string{
-		"conversations-*.json",
-		"shared_conversations.json",
-		"chat.html",
-		"user.json",
-		"message_feedback.json",
-	}
-	var out []string
-	for _, pattern := range patterns {
-		matches, _ := filepath.Glob(filepath.Join(root, pattern))
-		out = append(out, matches...)
-	}
-	sort.Strings(out)
-	return out
-}
-
-func copyFile(src, dst string) error {
-	in, err := os.Open(src)
-	if err != nil {
-		return err
-	}
-	defer in.Close()
-
-	out, err := os.Create(dst)
-	if err != nil {
-		return err
-	}
-	defer out.Close()
-
-	if _, err := io.Copy(out, in); err != nil {
-		return err
-	}
-	return out.Close()
 }
 
 func readUserMeta(root string) exportUserMeta {

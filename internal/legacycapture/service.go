@@ -13,6 +13,7 @@ import (
 
 	"github.com/hollis-labs/fragments-engine/internal/domain"
 	"github.com/hollis-labs/fragments-engine/internal/repository"
+	"github.com/hollis-labs/fragments-engine/internal/transcript"
 )
 
 const (
@@ -86,6 +87,9 @@ type acceptanceSnapshot struct {
 // legacy projection in one repository-owned transaction. A committed exact
 // replay returns before the projection seam and is therefore read-only.
 func (s *Service) Accept(ctx context.Context, req Request) (Result, error) {
+	if domain.IsTranscript(req.Material.Source, req.Material.SourceType, req.Material.SourceIdentity.Provider) || domain.IsTranscript(req.Projection.Source, req.Projection.SourceType, req.Projection.SourceIdentity.Provider) {
+		return Result{}, transcript.ErrPrivateStoreRequired
+	}
 	if s == nil || s.captures == nil {
 		return Result{}, fmt.Errorf("legacy capture: service is not configured")
 	}

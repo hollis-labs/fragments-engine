@@ -13,6 +13,7 @@ import (
 )
 
 type Config struct {
+	Transcripts TranscriptConfig  `json:"transcripts" yaml:"transcripts"`
 	Database    DatabaseConfig    `json:"database" yaml:"database"`
 	Recall      RecallConfig      `json:"recall" yaml:"recall"`
 	Analysis    AnalysisConfig    `json:"analysis" yaml:"analysis"`
@@ -21,6 +22,12 @@ type Config struct {
 	Queue       QueueConfig       `json:"queue" yaml:"queue"`
 	Reviewer    ReviewerConfig    `json:"reviewer" yaml:"reviewer"`
 	Ingests     []IngestConfig    `json:"ingests" yaml:"ingests"`
+}
+
+// TranscriptConfig names the explicit local owner-private destination. Blank
+// means transcript ingestion is unavailable, with no shared-store fallback.
+type TranscriptConfig struct {
+	PrivateRoot string `json:"private_root" yaml:"private_root"`
 }
 
 type DatabaseConfig struct {
@@ -254,6 +261,7 @@ func resolveRelativePaths(configPath string, cfg *Config) {
 	}
 	SetInstallDir(dir)
 	cfg.Database.Path = AnchorPath(dir, cfg.Database.Path)
+	cfg.Transcripts.PrivateRoot = AnchorPath(dir, cfg.Transcripts.PrivateRoot)
 	cfg.Recall.Vanta.Root = AnchorPath(dir, cfg.Recall.Vanta.Root)
 	cfg.Reviewer.DownloadRoot = AnchorPath(dir, cfg.Reviewer.DownloadRoot)
 	cfg.Reviewer.CorpusRoot = AnchorPath(dir, cfg.Reviewer.CorpusRoot)

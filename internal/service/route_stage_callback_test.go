@@ -89,7 +89,7 @@ func TestRouteStage_CallbackDestination_NeverFiresSynchronously(t *testing.T) {
 	}
 
 	fragment, err := repository.BuildFragment(domain.PipelineFragment{
-		Source:        "claude",
+		Source:        "fixture-document",
 		SourceType:    "chat",
 		SourceID:      "session-callback-hot-path",
 		Title:         "Claude session: callback hot path",

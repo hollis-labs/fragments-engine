@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/hollis-labs/fragments-engine/internal/domain"
+	"github.com/hollis-labs/fragments-engine/internal/transcript"
 )
 
 type FragmentRepository struct {
@@ -155,6 +156,9 @@ func (r *FragmentRepository) UpsertResolved(ctx context.Context, fragment domain
 // helper lets capture acceptance compose fragment/revision resolution with the
 // attempt and additive context in one BEGIN IMMEDIATE transaction.
 func upsertFragmentResolved(ctx context.Context, conn fragmentWriteConn, fragment domain.Fragment) (domain.Fragment, UpsertOutcome, error) {
+	if domain.IsTranscript(fragment.Source, fragment.SourceType, fragment.SourceIdentity.Provider) {
+		return domain.Fragment{}, "", transcript.ErrPrivateStoreRequired
+	}
 	identity := fragment.SourceIdentity
 	if identity.SourceRegistrationID == "" || identity.SourceItemKey == "" || identity.SegmentKey == "" {
 		return domain.Fragment{}, "", fmt.Errorf("upsert fragment: stable source identity is incomplete")

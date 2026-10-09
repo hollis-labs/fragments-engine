@@ -60,7 +60,7 @@ func TestSourceCollect(t *testing.T) {
 	}
 }
 
-func TestSourceCollect_WithArchiveCopy(t *testing.T) {
+func TestSourceCollect_RefusesRawArchiveCopy(t *testing.T) {
 	fixtureRoot, err := filepath.Abs(filepath.Join("..", "..", "..", "testdata", "chatgpt-export", "export-001"))
 	if err != nil {
 		t.Fatalf("resolve fixture root: %v", err)
@@ -79,7 +79,7 @@ func TestSourceCollect_WithArchiveCopy(t *testing.T) {
 		}
 	}
 
-	archiveRoot := filepath.Join(config.ExpandHome("~/Documents/corpus/ai-chat-logs/chatgpt/logs"), "fe-test-archive-copy")
+	archiveRoot := filepath.Join(t.TempDir(), "must-remain-absent")
 	fragments, err := Source{}.Collect(context.Background(), config.IngestConfig{
 		Name:   "chatgpt-archive-test",
 		Kind:   kind,
@@ -90,16 +90,17 @@ func TestSourceCollect_WithArchiveCopy(t *testing.T) {
 			"delete_copied_source": false,
 		},
 	})
-	if err != nil {
-		t.Fatalf("collect with archive copy: %v", err)
+
+	if err == nil || len(fragments) != 0 {
+		t.Fatal("raw archive copy was not refused")
 	}
-	if len(fragments) != 1 {
-		t.Fatalf("expected 1 fragment, got %d", len(fragments))
+	if _, err := os.Stat(archiveRoot); !os.IsNotExist(err) {
+		t.Fatal("raw archive destination was touched")
 	}
-	copied := filepath.Join(archiveRoot, filepath.Base(sourceRoot), "conversations-000.json")
-	if _, err := os.Stat(copied); err != nil {
-		t.Fatalf("expected copied archive file at %s: %v", copied, err)
+	if _, err := os.Stat(filepath.Join(sourceRoot, "conversations-000.json")); err != nil {
+		t.Fatal("source was modified")
 	}
+
 }
 
 func TestValidateArchivePolicy(t *testing.T) {

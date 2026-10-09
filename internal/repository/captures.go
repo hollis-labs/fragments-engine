@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/hollis-labs/fragments-engine/internal/domain"
+	"github.com/hollis-labs/fragments-engine/internal/transcript"
 )
 
 type CaptureRepository struct {
@@ -95,6 +96,9 @@ func (e *CuratedNoteConflictError) Error() string {
 // retry is read-only and returns the immutable outcome snapshot stored on the
 // first acceptance.
 func (r *CaptureRepository) Accept(ctx context.Context, write CaptureWrite) (domain.CaptureAcceptance, error) {
+	if domain.IsTranscript(write.Fragment.Source, write.Fragment.SourceType, write.Fragment.SourceIdentity.Provider) {
+		return domain.CaptureAcceptance{}, transcript.ErrPrivateStoreRequired
+	}
 	if err := validateCaptureWrite(write); err != nil {
 		return domain.CaptureAcceptance{}, err
 	}
