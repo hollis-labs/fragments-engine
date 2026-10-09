@@ -25,7 +25,7 @@ func (Source) Kind() string {
 
 func (Source) Collect(ctx context.Context, cfg config.IngestConfig) ([]domain.PipelineFragment, error) {
 	root := config.ExpandHome(cfg.Source.Root)
-	paths, err := sessionFiles(root)
+	paths, err := sessionFiles(ctx, root)
 	if err != nil {
 		return nil, err
 	}
@@ -46,8 +46,8 @@ func (Source) Collect(ctx context.Context, cfg config.IngestConfig) ([]domain.Pi
 			return nil, ctx.Err()
 		default:
 		}
-		info, err := os.Stat(path)
-		if err != nil || info.Size() > maxSizeBytes {
+		info, err := os.Lstat(path)
+		if err != nil || !info.Mode().IsRegular() || info.Size() > maxSizeBytes {
 			continue
 		}
 		fragment, err := parseSessionFile(path)
@@ -56,6 +56,11 @@ func (Source) Collect(ctx context.Context, cfg config.IngestConfig) ([]domain.Pi
 		}
 		if strings.TrimSpace(fragment.Content) == "" {
 			continue
+		}
+		if segment := subagentSegment(root, path); segment != "" {
+			fragment.SourceIdentity.SegmentKey = segment
+			fragment.Metadata["subagent_segment"] = segment
+			fragment.CanonicalPath += "/" + segment
 		}
 		out = append(out, fragment)
 	}
@@ -71,14 +76,85 @@ type event struct {
 	Message   map[string]any `json:"message"`
 }
 
-func sessionFiles(root string) ([]string, error) {
-	glob := filepath.Join(root, "projects", "*", "*.jsonl")
-	paths, err := filepath.Glob(glob)
+// Native roots contain projects/<project>; synced archives contain <project>.
+// Only session JSONL files and <session>/subagents/**/*.jsonl are collected.
+// Directory and file symlinks are not followed.
+func sessionFiles(ctx context.Context, root string) ([]string, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	entries, err := os.ReadDir(root)
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
 	if err != nil {
-		return nil, fmt.Errorf("glob claude sessions: %w", err)
+		return nil, fmt.Errorf("read claude root: %w", err)
+	}
+	var projects []string
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		path := filepath.Join(root, entry.Name())
+		if entry.Name() == "projects" {
+			native, err := os.ReadDir(path)
+			if err != nil {
+				return nil, fmt.Errorf("read claude projects: %w", err)
+			}
+			for _, project := range native {
+				if project.IsDir() {
+					projects = append(projects, filepath.Join(path, project.Name()))
+				}
+			}
+		} else {
+			projects = append(projects, path)
+		}
+	}
+	var paths []string
+	for _, project := range projects {
+		if err := filepath.WalkDir(project, func(path string, entry os.DirEntry, walkErr error) error {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			if walkErr != nil {
+				return walkErr
+			}
+			rel, err := filepath.Rel(project, path)
+			if err != nil {
+				return err
+			}
+			parts := strings.Split(filepath.ToSlash(rel), "/")
+			if entry.IsDir() {
+				if len(parts) == 2 && parts[1] != "subagents" {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+			if entry.Type().IsRegular() && filepath.Ext(path) == ".jsonl" && (len(parts) == 1 || len(parts) >= 3 && parts[1] == "subagents") {
+				paths = append(paths, path)
+			}
+			return nil
+		}); err != nil {
+			return nil, fmt.Errorf("enumerate claude sessions: %w", err)
+		}
 	}
 	sort.Strings(paths)
 	return paths, nil
+}
+
+func subagentSegment(root, path string) string {
+	rel, err := filepath.Rel(root, path)
+	if err != nil {
+		return ""
+	}
+	parts := strings.Split(filepath.ToSlash(rel), "/")
+	if len(parts) > 0 && parts[0] == "projects" {
+		parts = parts[1:]
+	}
+	if len(parts) < 4 || parts[2] != "subagents" {
+		return ""
+	}
+	return "subagent/" + strings.Join(parts[1:], "/")
 }
 
 func parseSessionFile(path string) (domain.PipelineFragment, error) {
