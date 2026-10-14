@@ -2059,14 +2059,21 @@ func containsString(list []string, v string) bool {
 }
 
 func enrichPricing(p config.EnrichmentPricing) enrich.Pricing {
-	return enrich.Pricing{InputPerMTok: p.InputPerMTok, OutputPerMTok: p.OutputPerMTok, CacheReadPerMTok: p.CacheReadPerMTok, CacheWritePerMTok: p.CacheWritePerMTok}
+	out := enrich.Pricing{InputPerMTok: p.InputPerMTok, OutputPerMTok: p.OutputPerMTok, CacheReadPerMTok: p.CacheReadPerMTok,
+		CacheWritePerMTok: p.CacheWritePerMTok, LongThreshold: p.LongPromptThresholdTokens}
+	if p.Long != nil {
+		long := enrichPricing(*p.Long)
+		out.Long = &long
+	}
+	return out
 }
 
 // buildEnrichGateway returns the model backend for a provider id: the direct
 // Anthropic API, or the Tether AI gateway for any other id.
 func buildEnrichGateway(ec config.EnrichmentConfig, provider string) (enrich.Gateway, error) {
 	if provider == enrich.AnthropicDirectProvider {
-		return enrich.NewAnthropicGateway(ec.Anthropic.BaseURL, ec.Anthropic.APIKeyEnv, ec.Anthropic.Version, enrichPricing(ec.Anthropic.Pricing), os.Getenv)
+		return enrich.NewAnthropicGateway(ec.Anthropic.BaseURL, ec.Anthropic.APIKeyEnv, ec.Anthropic.Version, enrichPricing(ec.Anthropic.Pricing),
+			enrich.AnthropicOptions{Thinking: ec.Anthropic.Thinking, Effort: ec.Anthropic.Effort}, os.Getenv)
 	}
 	if ec.Gateway.Address == "" {
 		return nil, fmt.Errorf("transcripts.enrichment.gateway.address is not configured")

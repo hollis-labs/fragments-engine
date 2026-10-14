@@ -89,8 +89,9 @@ type Plan struct {
 	Calls          int
 	EstInputTokens int // characters/4: an estimate, not a tokenizer count
 	MaxOutputToks  int
-	// EstMaxCostUSD is an upper bound from the configured prices: estimated
-	// input plus the full output cap on every call. Zero without prices.
+	// EstMaxCostUSD is an upper bound from the configured prices, summed per
+	// call: estimated input (with a tokenizer allowance) plus the full output
+	// cap. Zero without prices.
 	EstMaxCostUSD float64
 	TrimmedTurns  int
 }
@@ -194,23 +195,29 @@ func (r *Runner) Run(ctx context.Context) (Summary, error) {
 	}
 	// Calls and token estimates follow what will actually be sent.
 	sum.Calls, sum.EstInputTokens, sum.MapReduce = 0, 0, 0
+	// Each request is priced on its own (prompt-length tiers), so the dollar
+	// bound is summed per call. chars/4 undercounts on newer tokenizers
+	// (Anthropic documents about 30% more tokens), so each prompt gets a 1.3x
+	// allowance, and every call is assumed to use its full output cap.
+	call := func(promptTokens int) {
+		sum.Calls++
+		sum.EstInputTokens += promptTokens
+		if o.EstPricing.Configured() {
+			sum.EstMaxCostUSD += o.EstPricing.Cost(promptTokens*13/10, o.MaxOutputTokens, 0, 0)
+		}
+	}
 	for _, w := range pending {
 		if len(w.chunks) == 0 {
-			sum.Calls++
-			sum.EstInputTokens += w.prompt.EstTokens
+			call(w.prompt.EstTokens)
 			continue
 		}
 		sum.MapReduce++
-		sum.Calls += len(w.chunks) + 1
 		for _, c := range w.chunks {
-			sum.EstInputTokens += c.EstTokens
+			call(c.EstTokens)
 		}
-		sum.EstInputTokens += len(w.chunks) * (o.MaxOutputTokens / 2) // reduce reads the partials
+		call(len(w.chunks) * (o.MaxOutputTokens / 2)) // the reduce call reads the partials
 	}
 	sum.MaxOutputToks = sum.Calls * o.MaxOutputTokens
-	if o.EstPricing.Configured() {
-		sum.EstMaxCostUSD = o.EstPricing.Cost(sum.EstInputTokens, sum.MaxOutputToks, 0, 0)
-	}
 	if o.DryRun {
 		return sum, nil
 	}

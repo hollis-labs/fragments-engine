@@ -61,10 +61,15 @@ type EnrichmentConfig struct {
 // "anthropic-direct"). The API key is read from the environment variable named
 // by APIKeyEnv at startup; it is never stored in this file, logged or persisted.
 type EnrichmentAnthropic struct {
-	BaseURL   string            `json:"base_url" yaml:"base_url"` // default https://api.anthropic.com; https only
-	APIKeyEnv string            `json:"api_key_env" yaml:"api_key_env"`
-	Version   string            `json:"version" yaml:"version"` // anthropic-version header; default 2023-06-01
-	Pricing   EnrichmentPricing `json:"pricing" yaml:"pricing"`
+	BaseURL   string `json:"base_url" yaml:"base_url"` // default https://api.anthropic.com; https only
+	APIKeyEnv string `json:"api_key_env" yaml:"api_key_env"`
+	Version   string `json:"version" yaml:"version"` // anthropic-version header; default 2023-06-01
+	// Thinking is "disabled" (default) or "adaptive". Haiku 5.5 thinks by default
+	// and thinking tokens count toward max_tokens; a bounded JSON summary does
+	// not need it. Effort optionally sets output_config.effort.
+	Thinking string            `json:"thinking" yaml:"thinking"`
+	Effort   string            `json:"effort" yaml:"effort"`
+	Pricing  EnrichmentPricing `json:"pricing" yaml:"pricing"`
 }
 
 // EnrichmentPricing is USD per million tokens. There are no built-in defaults:
@@ -75,6 +80,10 @@ type EnrichmentPricing struct {
 	OutputPerMTok     float64 `json:"output_per_mtok" yaml:"output_per_mtok"`
 	CacheReadPerMTok  float64 `json:"cache_read_per_mtok" yaml:"cache_read_per_mtok"`
 	CacheWritePerMTok float64 `json:"cache_write_per_mtok" yaml:"cache_write_per_mtok"`
+	// LongPromptThresholdTokens and Long describe a higher tier for requests whose
+	// prompt (input plus cache reads and writes) exceeds the threshold.
+	LongPromptThresholdTokens int                `json:"long_prompt_threshold_tokens" yaml:"long_prompt_threshold_tokens"`
+	Long                      *EnrichmentPricing `json:"long" yaml:"long"`
 }
 
 // EnrichmentEmbedding selects a local embedding server. Provider is

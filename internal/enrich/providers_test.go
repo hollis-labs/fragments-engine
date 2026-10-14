@@ -54,7 +54,7 @@ func newAnthropic(t *testing.T, stub *anthropicStub, key string) (*AnthropicGate
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(stub.handler))
 	t.Cleanup(srv.Close)
-	g, err := NewAnthropicGateway(srv.URL, "SYNTHETIC_KEY_VAR", "", testPricing, env(map[string]string{"SYNTHETIC_KEY_VAR": key}))
+	g, err := NewAnthropicGateway(srv.URL, "SYNTHETIC_KEY_VAR", "", testPricing, AnthropicOptions{}, env(map[string]string{"SYNTHETIC_KEY_VAR": key}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -77,6 +77,16 @@ func TestAnthropicRequestShapeUsageAndCost(t *testing.T) {
 	if req["model"] != "claude-haiku-5-5" || req["system"] != "sys" || req["max_tokens"] != float64(321) || len(msgs) != 1 || msgs[0].(map[string]any)["role"] != "user" || msgs[0].(map[string]any)["content"] != "usr" {
 		t.Fatalf("body %v", req)
 	}
+	// Haiku 5.5 thinks by default and thinking counts toward max_tokens, so the
+	// default request disables it; sampling parameters are omitted (they error).
+	if th, _ := req["thinking"].(map[string]any); th["type"] != "disabled" {
+		t.Fatalf("thinking not disabled: %v", req["thinking"])
+	}
+	for _, k := range []string{"temperature", "top_p", "top_k", "output_config"} {
+		if _, ok := req[k]; ok {
+			t.Fatalf("%s must not be sent by default", k)
+		}
+	}
 	if !strings.Contains(resp.Text, `"title"`) || resp.InputTokens != 1000 || resp.OutputTokens != 200 || resp.CacheReadTokens != 8000 || resp.CacheWriteTokens != 400 {
 		t.Fatalf("usage %+v", resp)
 	}
@@ -89,25 +99,25 @@ func TestAnthropicRequestShapeUsageAndCost(t *testing.T) {
 
 func TestAnthropicFailsClosedWithoutKeyPricesOrHTTPS(t *testing.T) {
 	good := map[string]string{"K": syntheticKey}
-	if _, err := NewAnthropicGateway("", "", "", testPricing, env(good)); err == nil {
+	if _, err := NewAnthropicGateway("", "", "", testPricing, AnthropicOptions{}, env(good)); err == nil {
 		t.Fatal("an unset api_key_env must be refused")
 	}
-	_, err := NewAnthropicGateway("", "K_MISSING", "", testPricing, env(good))
+	_, err := NewAnthropicGateway("", "K_MISSING", "", testPricing, AnthropicOptions{}, env(good))
 	if err == nil || !strings.Contains(err.Error(), "K_MISSING") || strings.Contains(err.Error(), syntheticKey) {
 		t.Fatalf("missing key error should name the variable only: %v", err)
 	}
-	if _, err := NewAnthropicGateway("", "K", "", Pricing{}, env(good)); err == nil || !strings.Contains(err.Error(), "pricing") {
+	if _, err := NewAnthropicGateway("", "K", "", Pricing{}, AnthropicOptions{}, env(good)); err == nil || !strings.Contains(err.Error(), "pricing") {
 		t.Fatalf("missing prices must be refused: %v", err)
 	}
-	if _, err := NewAnthropicGateway("", "K", "", Pricing{InputPerMTok: 1}, env(good)); err == nil {
+	if _, err := NewAnthropicGateway("", "K", "", Pricing{InputPerMTok: 1}, AnthropicOptions{}, env(good)); err == nil {
 		t.Fatal("an output price is required too")
 	}
 	for _, bad := range []string{"http://api.example.invalid", "ftp://x", "://", "http://192.0.2.1:80"} {
-		if _, err := NewAnthropicGateway(bad, "K", "", testPricing, env(good)); err == nil {
+		if _, err := NewAnthropicGateway(bad, "K", "", testPricing, AnthropicOptions{}, env(good)); err == nil {
 			t.Fatalf("%q must be refused: transcript text must not travel in the clear", bad)
 		}
 	}
-	if _, err := NewAnthropicGateway("https://api.anthropic.com", "K", "", testPricing, env(good)); err != nil {
+	if _, err := NewAnthropicGateway("https://api.anthropic.com", "K", "", testPricing, AnthropicOptions{}, env(good)); err != nil {
 		t.Fatalf("the default endpoint must be accepted: %v", err)
 	}
 }
@@ -203,8 +213,8 @@ func TestDryRunPrintsAnUpperBoundFromConfiguredPrices(t *testing.T) {
 	o := opts()
 	o.DryRun, o.EstPricing = true, testPricing
 	s, err := (&Runner{Store: st, Opts: o}).Run(context.Background())
-	want := testPricing.Cost(s.EstInputTokens, s.MaxOutputToks, 0, 0)
-	if err != nil || s.EstMaxCostUSD <= 0 || math.Abs(s.EstMaxCostUSD-want) > 1e-12 {
+	want := testPricing.Cost(s.EstInputTokens*13/10, s.MaxOutputToks, 0, 0) // one call here; includes the tokenizer allowance
+	if err != nil || s.Calls != 1 || s.EstMaxCostUSD <= 0 || math.Abs(s.EstMaxCostUSD-want) > 1e-12 {
 		t.Fatalf("%+v %v", s, err)
 	}
 	o.EstPricing = Pricing{}
@@ -335,5 +345,91 @@ func TestEmbeddingFormatOrModelChangeReindexes(t *testing.T) {
 	}
 	if hits, _ := st.NearestSummaries(ctx, "model-a", "doc-other/v9", vec, 3); len(hits) != 0 {
 		t.Fatal("vectors of another format must not be compared")
+	}
+}
+
+func TestAnthropicThinkingAndEffortOptions(t *testing.T) {
+	stub := &anthropicStub{}
+	srv := httptest.NewServer(http.HandlerFunc(stub.handler))
+	defer srv.Close()
+	mk := func(o AnthropicOptions) (*AnthropicGateway, error) {
+		return NewAnthropicGateway(srv.URL, "K", "", testPricing, o, env(map[string]string{"K": syntheticKey}))
+	}
+	g, err := mk(AnthropicOptions{Thinking: "adaptive", Effort: "high"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := g.Chat(context.Background(), Request{Model: "m", System: "s", User: "u", MaxOutputTokens: 10}); err != nil {
+		t.Fatal(err)
+	}
+	req := stub.reqs[0]
+	if _, ok := req["thinking"]; ok {
+		t.Fatal("adaptive thinking is the default and is requested by omitting the field")
+	}
+	if oc, _ := req["output_config"].(map[string]any); oc["effort"] != "high" {
+		t.Fatalf("effort not sent: %v", req["output_config"])
+	}
+	if _, err := mk(AnthropicOptions{Effort: "max"}); err == nil {
+		t.Fatal("effort max with disabled thinking is a 400 on the API and must be refused up front")
+	}
+	if _, err := mk(AnthropicOptions{Thinking: "adaptive", Effort: "max"}); err != nil {
+		t.Fatalf("max with adaptive thinking is valid: %v", err)
+	}
+	for _, bad := range []AnthropicOptions{{Thinking: "extended"}, {Effort: "turbo"}} {
+		if _, err := mk(bad); err == nil {
+			t.Fatalf("%+v must be refused", bad)
+		}
+	}
+}
+
+// Claude Haiku 5.5 prices a request by its prompt length: input plus cache
+// reads and writes over the threshold pays the higher tier, per request.
+func TestPricingTiersByPromptLength(t *testing.T) {
+	p := Pricing{InputPerMTok: 0.10, OutputPerMTok: 0.50, CacheReadPerMTok: 0.01, CacheWritePerMTok: 0.125, LongThreshold: 100000,
+		Long: &Pricing{InputPerMTok: 0.50, OutputPerMTok: 2.50, CacheReadPerMTok: 0.05, CacheWritePerMTok: 0.625}}
+	if !p.Configured() {
+		t.Fatal("a complete two-tier price list is configured")
+	}
+	near := func(a, b float64) bool { return math.Abs(a-b) < 1e-12 }
+	// Exactly at the threshold is still the base tier.
+	if got, want := p.Cost(60000, 1000, 40000, 0), (60000*0.10+1000*0.50+40000*0.01)/1e6; !near(got, want) {
+		t.Fatalf("at threshold: %v want %v", got, want)
+	}
+	// One token over (cache reads count toward the prompt) switches the whole request.
+	if got, want := p.Cost(60000, 1000, 40001, 0), (60000*0.50+1000*2.50+40001*0.05)/1e6; !near(got, want) {
+		t.Fatalf("over threshold: %v want %v", got, want)
+	}
+	if got, want := p.Cost(90000, 0, 0, 10001), (90000*0.50+10001*0.625)/1e6; !near(got, want) {
+		t.Fatalf("cache writes count toward prompt length too: %v want %v", got, want)
+	}
+	if (Pricing{InputPerMTok: 1, OutputPerMTok: 1, LongThreshold: 100}).Configured() {
+		t.Fatal("a threshold without a long tier is a misconfiguration and must not count as configured")
+	}
+	if _, err := NewAnthropicGateway("", "K", "", Pricing{InputPerMTok: 1, OutputPerMTok: 1, LongThreshold: 100}, AnthropicOptions{}, env(map[string]string{"K": syntheticKey})); err == nil {
+		t.Fatal("the gateway must refuse an incomplete tier table")
+	}
+}
+
+// Prompt-length tiers apply per request, so a plan made of many modest calls
+// must not be priced as one giant prompt.
+func TestDryRunBoundPricesEachCallOnItsOwnTier(t *testing.T) {
+	st := openStore(t)
+	for i := 0; i < 5; i++ {
+		addSession(t, st, fmt.Sprintf("S%d", i), old, strings.Repeat("word ", 4000), "ok")
+	}
+	tiered := Pricing{InputPerMTok: 1, OutputPerMTok: 1, LongThreshold: 8000, Long: &Pricing{InputPerMTok: 1000, OutputPerMTok: 1000}}
+	o := opts()
+	o.DryRun, o.EstPricing = true, tiered
+	s, err := (&Runner{Store: st, Opts: o}).Run(context.Background())
+	if err != nil || s.Calls != 5 {
+		t.Fatalf("%+v %v", s, err)
+	}
+	per := s.EstInputTokens / s.Calls
+	if per*13/10 > tiered.LongThreshold {
+		t.Fatalf("fixture too big (%d tokens per call)", per)
+	}
+	want := float64(s.Calls) * tiered.Cost(per*13/10, o.MaxOutputTokens, 0, 0)
+	if want > 1 || math.Abs(s.EstMaxCostUSD-want) > 0.05 {
+		t.Fatalf("bound %v want about %v (each call is under the threshold)", s.EstMaxCostUSD, want)
 	}
 }

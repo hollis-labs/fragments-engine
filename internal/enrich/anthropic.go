@@ -24,15 +24,34 @@ const AnthropicDirectProvider = "anthropic-direct"
 // the spend caps are computed from them.
 type Pricing struct {
 	InputPerMTok, OutputPerMTok, CacheReadPerMTok, CacheWritePerMTok float64
+	// LongThreshold and Long model prompt-length tiers (Claude Haiku 5.5 charges
+	// higher prices for a request whose prompt is over 100,000 tokens). A
+	// request's prompt length is its input tokens plus cache reads and writes,
+	// and each request is priced on its own. Zero means a single tier.
+	LongThreshold int
+	Long          *Pricing
 }
 
-// Configured reports whether the two prices every call needs are present.
-func (p Pricing) Configured() bool { return p.InputPerMTok > 0 && p.OutputPerMTok > 0 }
+// Configured reports whether the two prices every call needs are present, and
+// that a configured long-prompt tier is complete too.
+func (p Pricing) Configured() bool {
+	if !(p.InputPerMTok > 0 && p.OutputPerMTok > 0) {
+		return false
+	}
+	if p.LongThreshold > 0 {
+		return p.Long != nil && p.Long.InputPerMTok > 0 && p.Long.OutputPerMTok > 0
+	}
+	return true
+}
 
-// Cost prices one call's tokens.
+// Cost prices one call's tokens, choosing the tier by the call's prompt length.
 func (p Pricing) Cost(input, output, cacheRead, cacheWrite int) float64 {
-	return (float64(input)*p.InputPerMTok + float64(output)*p.OutputPerMTok +
-		float64(cacheRead)*p.CacheReadPerMTok + float64(cacheWrite)*p.CacheWritePerMTok) / 1e6
+	tier := p
+	if p.LongThreshold > 0 && p.Long != nil && input+cacheRead+cacheWrite > p.LongThreshold {
+		tier = *p.Long
+	}
+	return (float64(input)*tier.InputPerMTok + float64(output)*tier.OutputPerMTok +
+		float64(cacheRead)*tier.CacheReadPerMTok + float64(cacheWrite)*tier.CacheWritePerMTok) / 1e6
 }
 
 // AnthropicGateway calls POST /v1/messages. The API key is read from the
@@ -44,6 +63,17 @@ type AnthropicGateway struct {
 	key     string
 	version string
 	pricing Pricing
+	// thinking is "disabled" (the default: summaries are a bounded JSON task and
+	// thinking tokens would count toward max_tokens) or "adaptive". effort, when
+	// set, is sent as output_config.effort.
+	thinking string
+	effort   string
+}
+
+// AnthropicOptions are the request-shaping settings.
+type AnthropicOptions struct {
+	Thinking string // "", "disabled" or "adaptive"
+	Effort   string // "", low, medium, high, xhigh or max
 }
 
 const defaultAnthropicVersion = "2023-06-01"
@@ -51,7 +81,7 @@ const defaultAnthropicVersion = "2023-06-01"
 // NewAnthropicGateway builds the client. getenv is os.Getenv in production.
 // The base URL must be https (plain http is accepted only on loopback, for
 // tests), so transcript text is never sent in the clear.
-func NewAnthropicGateway(baseURL, apiKeyEnv, version string, pricing Pricing, getenv func(string) string) (*AnthropicGateway, error) {
+func NewAnthropicGateway(baseURL, apiKeyEnv, version string, pricing Pricing, opt AnthropicOptions, getenv func(string) string) (*AnthropicGateway, error) {
 	if strings.TrimSpace(apiKeyEnv) == "" {
 		return nil, errors.New("anthropic: transcripts.enrichment.anthropic.api_key_env is not set")
 	}
@@ -76,16 +106,40 @@ func NewAnthropicGateway(baseURL, apiKeyEnv, version string, pricing Pricing, ge
 	if version == "" {
 		version = defaultAnthropicVersion
 	}
-	return &AnthropicGateway{client: &http.Client{Timeout: 180 * time.Second}, base: strings.TrimRight(baseURL, "/"), key: key, version: version, pricing: pricing}, nil
+	thinking := opt.Thinking
+	if thinking == "" {
+		thinking = "disabled"
+	}
+	if thinking != "disabled" && thinking != "adaptive" {
+		return nil, errors.New("anthropic: thinking must be disabled or adaptive")
+	}
+	switch opt.Effort {
+	case "", "low", "medium", "high":
+	case "xhigh", "max":
+		if thinking == "disabled" {
+			return nil, errors.New("anthropic: effort xhigh/max requires thinking: adaptive (the API rejects disabled thinking there)")
+		}
+	default:
+		return nil, errors.New("anthropic: unknown effort level")
+	}
+	return &AnthropicGateway{client: &http.Client{Timeout: 180 * time.Second}, base: strings.TrimRight(baseURL, "/"), key: key, version: version,
+		pricing: pricing, thinking: thinking, effort: opt.Effort}, nil
 }
 
 var errType = regexp.MustCompile(`^[a-z_]{1,40}$`)
 
 func (g *AnthropicGateway) Chat(ctx context.Context, r Request) (Response, error) {
-	body, err := json.Marshal(map[string]any{
+	payload := map[string]any{
 		"model": r.Model, "max_tokens": r.MaxOutputTokens, "system": r.System,
 		"messages": []map[string]any{{"role": "user", "content": r.User}},
-	})
+	}
+	if g.thinking == "disabled" {
+		payload["thinking"] = map[string]string{"type": "disabled"}
+	}
+	if g.effort != "" {
+		payload["output_config"] = map[string]string{"effort": g.effort}
+	}
+	body, err := json.Marshal(payload)
 	if err != nil {
 		return Response{}, &GatewayError{Class: "encode"}
 	}

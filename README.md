@@ -144,12 +144,19 @@ transcripts:
     max_cost_usd: 2                     # per run, a hard stop
     max_total_cost_usd: 10              # across all runs, from the spend ledger; a hard stop
     anthropic:
-      api_key_env: ANTHROPIC_API_KEY    # NAME of the environment variable; the key is never in this file
-      pricing:                          # USD per million tokens; no defaults.
-        input_per_mtok: 0               # Confirm every number against Anthropic's published
-        output_per_mtok: 0              # pricing before the first live call: the caps are
-        cache_read_per_mtok: 0          # computed from these values, and a run refuses to
-        cache_write_per_mtok: 0         # start while input and output are unset.
+      api_key_env: FE_ANTHROPIC_API_KEY # NAME of the environment variable; the key is never in this file
+      thinking: disabled                # Haiku 5.5 thinks by default and thinking counts toward max_tokens
+      pricing:                          # USD per million tokens. No built-in defaults: a run refuses to
+        input_per_mtok: 0.10            # start while input and output are unset. These are claude-haiku-5-5's
+        output_per_mtok: 0.50           # published prices as read from Anthropic's pricing page on
+        cache_read_per_mtok: 0.01       # 2026-10-14 (platform.claude.com/docs/en/about-claude/pricing and
+        cache_write_per_mtok: 0.125     # .../models/haiku-5-5/overview): 5-minute cache writes. Re-confirm
+        long_prompt_threshold_tokens: 100000   # before relying on them: a request whose prompt (input plus
+        long:                                  # cache reads and writes) is over 100,000 tokens pays the
+          input_per_mtok: 0.50                 # higher tier, priced per request.
+          output_per_mtok: 2.50
+          cache_read_per_mtok: 0.05
+          cache_write_per_mtok: 0.625
     embedding:
       provider: openai_compat_local     # or ollama; both refuse any host that is not on this machine
       base_url: http://127.0.0.1:8183
@@ -160,7 +167,12 @@ transcripts:
 
 The Anthropic key is read from the named environment variable at startup, like
 other service keys (FE never loads a `.env` file); it is not logged, stored or
-included in any error. Every call, including a rejected reply, is written to the
+included in any error, and provider errors are reduced to a status and
+Anthropic's fixed error type (never a header, request body or response body).
+To keep the key out of a shell, run enrichment under a transient user unit that
+loads an owner-only env file: `systemd-run --user --pipe --wait --collect -p
+EnvironmentFile=/path/to/enrich.env -- /path/to/fragments-engine transcript
+enrich --config ...`. Every call, including a rejected reply, is written to the
 append-only `tx_enrichment_spend` ledger with its tokens (cache reads and writes
 separately) and the cost computed from the configured prices, and both caps are
 enforced from that ledger. Embeddings use a local OpenAI-style `/v1/embeddings`
