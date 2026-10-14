@@ -232,10 +232,37 @@ Symlinks and `.rsync-partial` transfer directories are ignored.
 The parser requires `session_meta` with a thread ID and reads user/assistant
 `response_item` text blocks. Event-only rollouts fall back to `user_message` and
 `agent_message` events; duplicated legacy events are ignored when response
-messages exist. Tool traces, reasoning and media are not imported. Physical
+messages exist. Media is not imported. Physical
 rollout files have distinct segment identities. A forked rollout starts with its
 own `session_meta` and then replays its parent's: the first record is the file's
 identity and a later one for another thread is recorded as `parent_thread_id`.
+
+Each rollout also fills the structured tables Claude sessions use (`tx_sessions`,
+`tx_turns`, `tx_tool_calls`, `tx_usage`, `tx_cursors`), with the same redaction:
+
+- **Sessions:** the thread id is the session; a rollout whose `session_meta`
+  names `source.subagent.thread_spawn` is a `subagent` of that parent thread
+  (`agent_type` is its role), anything else is `main`. A fork records
+  `forked_from_id` as its parent. A parent already stored is linked by native id;
+  a child read before its parent keeps `parent_native_id` to join on.
+- **Turns:** the user and assistant messages, the same text the searchable record
+  holds, so a session's id and enrichment digest do not change when this capture
+  is switched on. Reasoning is kept as presence and the byte length of its
+  readable summary, never text.
+- **Tool calls:** `function_call`, `custom_tool_call`, search calls and their
+  outputs, joined by call id; `exec_command_end`, `patch_apply_end` and MCP end
+  events supply the status (non-zero exit, failed patch, MCP error). Inputs are
+  redacted and capped; an `apply_patch` input is reduced to the files it names
+  and its size. A redacted result excerpt is off by default
+  (`rules.tool_result_excerpt_bytes`, at most 2048).
+- **Usage:** one row per model response (`token_usage_record`) where the rollout
+  has them, otherwise one row per distinct running total of the repeated
+  `token_count` events, so an idle session's repeated count is not summed.
+  Cached input tokens are reported as cache reads and removed from `input`; output
+  includes reasoning tokens.
+- **Cursor:** byte offset just after the last complete line, as for Claude. A
+  half-written final line is counted (`incomplete_tail`) and read once complete;
+  a rewritten or truncated file is read again from the start.
 
 Limits bound what is kept, not what is read. Rollouts are mostly tool output and
 images, so a 300 MiB file can hold a few hundred KiB of messages. A line over
