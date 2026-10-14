@@ -533,7 +533,7 @@ func (s *Store) distinct(ctx context.Context, column string) []string {
 // enrichmentTags lists the most used topics across current enrichments.
 func (s *Store) enrichmentTags(ctx context.Context) []TagCount {
 	out := []TagCount{}
-	rows, err := s.db.QueryContext(ctx, `SELECT j.value, COUNT(*) FROM tx_enrichment en, json_each(COALESCE(NULLIF(en.result_json, ''), '{}'), '$.topics') j
+	rows, err := s.db.QueryContext(ctx, `SELECT j.value, COUNT(*) FROM tx_enrichment en JOIN tx_sessions xs ON xs.session_pk = en.session_pk, json_each(COALESCE(NULLIF(en.result_json, ''), '{}'), '$.topics') j
  WHERE en.tier = 1 AND en.status = 'ok' AND en.id = (SELECT e.id FROM tx_enrichment e WHERE e.session_pk = en.session_pk AND e.tier = 1 AND e.status = 'ok' ORDER BY e.created_at DESC, e.id DESC LIMIT 1)
  GROUP BY j.value ORDER BY COUNT(*) DESC, j.value LIMIT 200`)
 	if err != nil {
@@ -560,7 +560,7 @@ func (s *Store) SessionFacets(ctx context.Context) (Facets, error) {
 	for i, t := range f.TagCounts {
 		f.Tags[i] = t.Tag
 	}
-	_ = s.db.QueryRowContext(ctx, `SELECT COUNT(DISTINCT session_pk) FROM tx_enrichment WHERE tier = 1 AND status = 'ok'`).Scan(&f.Enriched)
+	_ = s.db.QueryRowContext(ctx, `SELECT COUNT(DISTINCT e.session_pk) FROM tx_enrichment e JOIN tx_sessions xs ON xs.session_pk = e.session_pk WHERE e.tier = 1 AND e.status = 'ok'`).Scan(&f.Enriched)
 	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM tx_sessions`).Scan(&f.Total); err != nil {
 		return Facets{}, errors.New("transcript: cannot count sessions")
 	}
