@@ -1858,7 +1858,7 @@ func skipReasons(reasons map[string]int) string {
 // input or tool output is ever printed.
 func runTranscript(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: fragments-engine transcript <tool-calls|usage|enrich|embed|search> --config PATH [flags]")
+		return fmt.Errorf("usage: fragments-engine transcript <tool-calls|usage|enrich|embed|search|show> --config PATH [flags]")
 	}
 	fs := flag.NewFlagSet("transcript "+args[0], flag.ContinueOnError)
 	configPath := fs.String("config", "fragments.example.yaml", "path to config file")
@@ -1900,6 +1900,8 @@ func runTranscript(args []string) error {
 	case "enrich":
 		return runTranscriptEnrich(cfg, store, enrichFlags{dryRun: *dryRun, limit: *limit, session: *session, model: *model, provider: *provider,
 			force: *force, maxCost: *maxCost, concurrency: *concurrency, sessions: *sessions, sample: *sample, stopAfter: *stopAfter})
+	case "show":
+		return runTranscriptShow(store, *session)
 	case "embed":
 		return runTranscriptEmbed(cfg, store, *embedModel, *limit)
 	case "search":
@@ -2197,5 +2199,40 @@ func runTranscriptSearch(cfg config.Config, store *transcript.Store, query strin
 		fmt.Printf("%.4f\t%s\t%s\n", h.Rank, h.NativeSessionID, h.Title)
 	}
 	fmt.Printf("results=%d\n", len(hits))
+	return nil
+}
+
+// runTranscriptShow prints a session's stored Tier 0 facts and newest Tier 1
+// result as JSON, for the owner to review in their own terminal.
+func runTranscriptShow(store *transcript.Store, nativeID string) error {
+	if nativeID == "" {
+		return fmt.Errorf("transcript show requires --session")
+	}
+	refs, err := store.MainSessions(context.Background(), 0, time.Time{}, nativeID)
+	if err != nil {
+		return err
+	}
+	legacy, err := store.LegacySessions(context.Background(), nativeID)
+	if err != nil {
+		return err
+	}
+	refs = append(refs, legacy...)
+	if len(refs) == 0 {
+		return fmt.Errorf("no such session")
+	}
+	for _, tier := range []int{0, 1} {
+		rec, ok, err := store.LatestEnrichment(context.Background(), refs[0].SessionPK, tier)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			fmt.Printf("tier %d: none\n", tier)
+			continue
+		}
+		var v any
+		_ = json.Unmarshal([]byte(rec.ResultJSON), &v)
+		pretty, _ := json.MarshalIndent(v, "", "  ")
+		fmt.Printf("tier %d (prompt=%s model=%s):\n%s\n", tier, rec.PromptVersion, rec.Model, pretty)
+	}
 	return nil
 }
