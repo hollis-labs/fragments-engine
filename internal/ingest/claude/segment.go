@@ -180,11 +180,12 @@ func applySubagentMeta(path string, session *domain.TranscriptSession) {
 		return
 	}
 	var meta struct {
-		AgentType  string `json:"agentType"`
-		ToolUseID  string `json:"toolUseId"`
-		SpawnDepth int    `json:"spawnDepth"`
-		IsFork     bool   `json:"isFork"`
-		Model      string `json:"model"`
+		AgentType   string `json:"agentType"`
+		ToolUseID   string `json:"toolUseId"`
+		SpawnDepth  int    `json:"spawnDepth"`
+		IsFork      bool   `json:"isFork"`
+		Model       string `json:"model"`
+		Description string `json:"description"`
 	}
 	if json.Unmarshal(raw, &meta) != nil {
 		return
@@ -194,6 +195,7 @@ func applySubagentMeta(path string, session *domain.TranscriptSession) {
 	if meta.Model != "" {
 		session.Model = meta.Model
 	}
+	session.Description = meta.Description
 }
 
 func digestHex(b []byte) string {

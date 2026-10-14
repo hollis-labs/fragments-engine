@@ -18,12 +18,13 @@ import (
 // structure (who, when, which tool, how many tokens), not raw material:
 // thinking text is never kept, tool results are status and size unless the
 // ingest asked for a bounded redacted excerpt, and tool inputs are capped.
-const derivedSchemaVersion = 1
+const derivedSchemaVersion = 2
 
 const (
 	maxToolInputBytes     = 4 << 10
 	maxToolExcerptBytes   = 2 << 10
 	maxSearchContentBytes = 12 << 20
+	maxDescriptionBytes   = 1 << 10
 )
 
 const derivedSchema = `
@@ -35,7 +36,8 @@ CREATE TABLE IF NOT EXISTS tx_sessions (
  spawn_depth INTEGER NOT NULL DEFAULT 0, spawn_tool_use_id TEXT NOT NULL DEFAULT '',
  is_fork INTEGER NOT NULL DEFAULT 0, model TEXT NOT NULL DEFAULT '', cwd TEXT NOT NULL DEFAULT '',
  git_branch TEXT NOT NULL DEFAULT '', entrypoint TEXT NOT NULL DEFAULT '',
- started_at TEXT NOT NULL DEFAULT '', ended_at TEXT NOT NULL DEFAULT '', turn_count INTEGER NOT NULL DEFAULT 0
+ started_at TEXT NOT NULL DEFAULT '', ended_at TEXT NOT NULL DEFAULT '', turn_count INTEGER NOT NULL DEFAULT 0,
+ description_redacted TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS tx_sessions_native ON tx_sessions (native_session_id);
 CREATE INDEX IF NOT EXISTS tx_sessions_parent ON tx_sessions (parent_session_pk);
@@ -69,7 +71,9 @@ CREATE TABLE IF NOT EXISTS tx_cursors (
  byte_offset INTEGER NOT NULL, line_no INTEGER NOT NULL, tail_digest TEXT NOT NULL, source_id TEXT NOT NULL DEFAULT ''
 );`
 
-var derivedTables = []string{"tx_meta", "tx_sessions", "tx_turns", "tx_tool_calls", "tx_usage", "tx_cursors"}
+var derivedTables = []string{"tx_meta", "tx_sessions", "tx_turns", "tx_tool_calls", "tx_usage", "tx_cursors",
+	"tx_enrichment", "tx_enrichment_spend", "tx_embeddings", "tx_enrichment_search", "tx_enrichment_search_data", "tx_enrichment_search_idx",
+	"tx_enrichment_search_content", "tx_enrichment_search_docsize", "tx_enrichment_search_config"}
 
 func stamp(t time.Time) string {
 	if t.IsZero() {
@@ -162,20 +166,21 @@ func applyDetail(ctx context.Context, tx *sql.Tx, registration, source, sourceID
 	}
 	ss := d.Session
 	if _, err := tx.ExecContext(ctx, `INSERT INTO tx_sessions (session_pk, tool, native_session_id, segment_key, kind, parent_session_pk, parent_native_id,
- agent_type, spawn_depth, spawn_tool_use_id, is_fork, model, cwd, git_branch, entrypoint, started_at, ended_at)
- VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+ agent_type, spawn_depth, spawn_tool_use_id, is_fork, model, cwd, git_branch, entrypoint, started_at, ended_at, description_redacted)
+ VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
  ON CONFLICT(session_pk) DO UPDATE SET
   model = CASE WHEN tx_sessions.model = '' THEN excluded.model ELSE tx_sessions.model END,
   cwd = CASE WHEN tx_sessions.cwd = '' THEN excluded.cwd ELSE tx_sessions.cwd END,
   git_branch = CASE WHEN tx_sessions.git_branch = '' THEN excluded.git_branch ELSE tx_sessions.git_branch END,
   entrypoint = CASE WHEN tx_sessions.entrypoint = '' THEN excluded.entrypoint ELSE tx_sessions.entrypoint END,
+  description_redacted = CASE WHEN excluded.description_redacted <> '' THEN excluded.description_redacted ELSE tx_sessions.description_redacted END,
   agent_type = excluded.agent_type, spawn_depth = excluded.spawn_depth, spawn_tool_use_id = excluded.spawn_tool_use_id,
   is_fork = excluded.is_fork, parent_session_pk = excluded.parent_session_pk, parent_native_id = excluded.parent_native_id,
   started_at = CASE WHEN tx_sessions.started_at = '' OR (excluded.started_at <> '' AND excluded.started_at < tx_sessions.started_at) THEN excluded.started_at ELSE tx_sessions.started_at END,
   ended_at = CASE WHEN excluded.ended_at > tx_sessions.ended_at THEN excluded.ended_at ELSE tx_sessions.ended_at END`,
 		pk, Redact(ss.Tool), Redact(ss.NativeSessionID), Redact(segment), Redact(ss.Kind), parentPK, Redact(ss.ParentNativeID),
 		Redact(ss.AgentType), ss.SpawnDepth, Redact(ss.SpawnToolUseID), boolInt(ss.IsFork), Redact(ss.Model), Redact(ss.CWD),
-		Redact(ss.GitBranch), Redact(ss.Entrypoint), stamp(ss.StartedAt), stamp(ss.EndedAt)); err != nil {
+		Redact(ss.GitBranch), Redact(ss.Entrypoint), stamp(ss.StartedAt), stamp(ss.EndedAt), clip(Redact(ss.Description), maxDescriptionBytes)); err != nil {
 		return "", err
 	}
 	var seq int
@@ -183,6 +188,11 @@ func applyDetail(ctx context.Context, tx *sql.Tx, registration, source, sourceID
 		return "", err
 	}
 	for _, t := range d.Turns {
+		// ON CONFLICT(session_pk, event_uuid) would silently merge turns that
+		// share an empty id; a source must always supply one.
+		if strings.TrimSpace(t.EventUUID) == "" {
+			return "", errors.New("transcript: turn without an event id")
+		}
 		res, err := tx.ExecContext(ctx, `INSERT INTO tx_turns (session_pk, seq, event_uuid, parent_uuid, role, ts, request_id, is_sidechain,
  stop_reason, text_redacted, has_thinking, thinking_bytes) VALUES (?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(session_pk, event_uuid) DO NOTHING`,
 			pk, seq+1, Redact(t.EventUUID), Redact(t.ParentUUID), Redact(t.Role), stamp(t.TS), Redact(t.RequestID), boolInt(t.IsSidechain),

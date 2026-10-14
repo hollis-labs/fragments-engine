@@ -15,6 +15,7 @@ import (
 	"github.com/hollis-labs/fragments-engine/internal/app"
 	"github.com/hollis-labs/fragments-engine/internal/config"
 	"github.com/hollis-labs/fragments-engine/internal/domain"
+	"github.com/hollis-labs/fragments-engine/internal/enrich"
 	mcpserver "github.com/hollis-labs/fragments-engine/internal/mcp"
 	"github.com/hollis-labs/fragments-engine/internal/service"
 	"github.com/hollis-labs/fragments-engine/internal/transcript"
@@ -1857,7 +1858,7 @@ func skipReasons(reasons map[string]int) string {
 // input or tool output is ever printed.
 func runTranscript(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: fragments-engine transcript <tool-calls|usage> --config PATH [flags]")
+		return fmt.Errorf("usage: fragments-engine transcript <tool-calls|usage|enrich|embed|search|show> --config PATH [flags]")
 	}
 	fs := flag.NewFlagSet("transcript "+args[0], flag.ContinueOnError)
 	configPath := fs.String("config", "fragments.example.yaml", "path to config file")
@@ -1866,7 +1867,19 @@ func runTranscript(args []string) error {
 	since := fs.String("since", "", "start time (RFC3339)")
 	until := fs.String("until", "", "end time, exclusive (RFC3339)")
 	status := fs.String("status", "", "ok, error or none")
-	limit := fs.Int("limit", 100, "max rows")
+	limit := fs.Int("limit", 0, "max rows (tool-calls, default 100) or max sessions (enrich, default no limit)")
+	dryRun := fs.Bool("dry-run", false, "enrich: plan only; makes no model call")
+	model := fs.String("model", "", "enrich: model (default from config)")
+	provider := fs.String("provider", "", "enrich: gateway provider (default from config)")
+	force := fs.Bool("force", false, "enrich: redo sessions that already have a result")
+	maxCost := fs.Float64("max-cost-usd", 0, "enrich: per-run cost cap in USD (default from config)")
+	concurrency := fs.Int("concurrency", 1, "enrich: parallel calls")
+	stopAfter := fs.Int("stop-after-failures", 3, "enrich: halt after this many consecutive failed sessions (0 disables)")
+	sessions := fs.String("sessions", "", "enrich: comma-separated native session ids to restrict the run to")
+	sample := fs.Bool("sample", false, "enrich: restrict the run to the reproducible verification sample (prints ids by bucket)")
+	query := fs.String("query", "", "search: text to find in enriched summaries")
+	semantic := fs.Bool("semantic", false, "search: rank by embedding similarity instead of text")
+	embedModel := fs.String("embed-model", "", "embed/search --semantic: local embedding model (default from config)")
 	if err := fs.Parse(args[1:]); err != nil {
 		return err
 	}
@@ -1884,6 +1897,15 @@ func runTranscript(args []string) error {
 		return fmt.Errorf("transcript: no private root configured")
 	}
 	switch args[0] {
+	case "enrich":
+		return runTranscriptEnrich(cfg, store, enrichFlags{dryRun: *dryRun, limit: *limit, session: *session, model: *model, provider: *provider,
+			force: *force, maxCost: *maxCost, concurrency: *concurrency, sessions: *sessions, sample: *sample, stopAfter: *stopAfter})
+	case "show":
+		return runTranscriptShow(store, *session)
+	case "embed":
+		return runTranscriptEmbed(cfg, store, *embedModel, *limit)
+	case "search":
+		return runTranscriptSearch(cfg, store, *query, *semantic, *embedModel, *limit)
 	case "tool-calls":
 		filter := transcript.ToolCallFilter{Name: *name, NativeSessionID: *session, Status: *status, Limit: *limit}
 		for _, bound := range []struct {
@@ -1920,4 +1942,297 @@ func runTranscript(args []string) error {
 	default:
 		return fmt.Errorf("unknown transcript command %q", args[0])
 	}
+}
+
+type enrichFlags struct {
+	dryRun          bool
+	limit           int
+	session         string
+	model, provider string
+	force           bool
+	maxCost         float64
+	concurrency     int
+	sessions        string
+	sample          bool
+	stopAfter       int
+}
+
+// runTranscriptEnrich plans or runs transcript enrichment. A dry run needs no
+// gateway and makes no model call; a real run needs the provider to be listed
+// in transcripts.enrichment.allowed_providers. Output is counts only.
+func runTranscriptEnrich(cfg config.Config, store *transcript.Store, f enrichFlags) error {
+	ec := cfg.Transcripts.Enrichment
+	pick := func(flagVal, cfgVal, def string) string {
+		if flagVal != "" {
+			return flagVal
+		}
+		if cfgVal != "" {
+			return cfgVal
+		}
+		return def
+	}
+	maxRun := f.maxCost
+	if maxRun <= 0 {
+		maxRun = ec.MaxCostUSD
+	}
+	if maxRun <= 0 {
+		maxRun = 2
+	}
+	total := ec.MaxTotalCostUSD
+	if total <= 0 {
+		total = 10
+	}
+	idle := ec.MinIdleMinutes
+	if idle <= 0 {
+		idle = 30
+	}
+	opts := enrich.Options{
+		DryRun: f.dryRun, Limit: f.limit, NativeSessionID: f.session, Force: f.force,
+		Provider: pick(f.provider, ec.Provider, enrich.AnthropicDirectProvider), Model: pick(f.model, ec.Model, "claude-haiku-5-5"),
+		PromptVersion: ec.PromptVersion, MaxCostUSD: maxRun, TotalCapUSD: total, MaxOutputTokens: ec.MaxOutputTokens,
+		MinIdle: time.Duration(idle) * time.Minute, AllowedProviders: ec.AllowedProviders, Concurrency: f.concurrency,
+		ExcludeSessions: ec.ExcludeSessions, ExcludeCWDPrefixes: ec.ExcludeCWDPrefixes,
+		StopAfterFailures: f.stopAfter, MaxFailureRate: 0.2, MinAttemptsForRate: 5,
+	}
+	if f.sessions != "" {
+		for _, id := range strings.Split(f.sessions, ",") {
+			if id = strings.TrimSpace(id); id != "" {
+				opts.NativeSessionIDs = append(opts.NativeSessionIDs, id)
+			}
+		}
+	}
+	if f.sample {
+		cands, err := (&enrich.Runner{Store: store, Opts: opts}).Candidates(context.Background())
+		if err != nil {
+			return err
+		}
+		picked := enrich.PickSample(cands)
+		fmt.Printf("sample: %d sessions (ids only)\n", len(picked))
+		for _, it := range picked {
+			fmt.Printf("  bucket=%s tool=%s id=%s est_tokens=%d calls=%d map_reduce=%t tool_calls=%d subagents=%d\n",
+				it.Bucket, it.Tool, it.NativeSessionID, it.EstTokens, it.Calls, it.MapReduce, it.ToolCalls, it.Subagents)
+			opts.NativeSessionIDs = append(opts.NativeSessionIDs, it.NativeSessionID)
+		}
+		if len(picked) == 0 {
+			return fmt.Errorf("no sessions matched the sample buckets")
+		}
+	}
+	if opts.Provider == enrich.AnthropicDirectProvider {
+		opts.EstPricing = enrichPricing(ec.Anthropic.Pricing)
+	}
+	var gw enrich.Gateway
+	if !f.dryRun {
+		// The allow-list is checked before any credential is read.
+		if !containsString(ec.AllowedProviders, opts.Provider) {
+			return fmt.Errorf("enrichment: provider %q is not in transcripts.enrichment.allowed_providers; nothing is sent", opts.Provider)
+		}
+		g, err := buildEnrichGateway(ec, opts.Provider)
+		if err != nil {
+			return err
+		}
+		gw = g
+	}
+	s, err := (&enrich.Runner{Store: store, GW: gw, Opts: opts}).Run(context.Background())
+	mode := "run"
+	if f.dryRun {
+		mode = "dry-run"
+	}
+	fmt.Printf("enrich %s: provider=%s model=%s prompt=%s per_run_cap_usd=%.2f total_cap_usd=%.2f prior_spend_usd=%.4f\n",
+		mode, opts.Provider, opts.Model, enrich.PromptVersion, maxRun, total, s.PriorCostUSD)
+	fmt.Printf("sessions=%d already_done=%d excluded=%d map_reduce=%d pending=%d calls=%d est_input_tokens=%d (chars/4 estimate) max_output_tokens=%d trimmed_turns=%d\n",
+		s.Sessions, s.AlreadyDone, s.Excluded, s.MapReduce, s.Pending, s.Calls, s.EstInputTokens, s.MaxOutputToks, s.TrimmedTurns)
+	if s.EstMaxCostUSD > 0 {
+		fmt.Printf("est_max_cost_usd=%.4f (upper bound from the configured prices: estimated input + full output cap per call)\n", s.EstMaxCostUSD)
+	}
+	if !f.dryRun {
+		fmt.Printf("attempted=%d ok=%d failed=%d retries=%d tokens_in=%d tokens_out=%d gateway_cost_usd=%.4f facts_saved=%d stopped_by=%s\n",
+			s.Attempted, s.OK, s.Failed, s.Retries, s.TokensIn, s.TokensOut, s.CostUSD, s.FactsSaved, s.StoppedBy)
+		for class, n := range s.Errors {
+			fmt.Printf("error_class=%s count=%d\n", class, n)
+		}
+		if s.Attempted > 0 {
+			fmt.Printf("json_valid_first_try=%d/%d json_valid_after_retry=%d/%d\n", s.FirstTryValid, s.Attempted, s.OK, s.Attempted)
+			if s.Cites > 0 {
+				fmt.Printf("citations=%d grounded=%d (%.1f%%)\n", s.Cites, s.Cites-s.UngroundedCites, 100*float64(s.Cites-s.UngroundedCites)/float64(s.Cites))
+			}
+			if s.EntitiesChecked > 0 {
+				fmt.Printf("project_repo_entities=%d grounded_in_source=%d (%.1f%%) truncated_fields=%d\n", s.EntitiesChecked, s.EntitiesChecked-s.UngroundedEntities,
+					100*float64(s.EntitiesChecked-s.UngroundedEntities)/float64(s.EntitiesChecked), s.Truncated)
+			}
+			if len(s.SessionCosts) > 0 {
+				mn, mx := s.SessionCosts[0], s.SessionCosts[0]
+				for _, c := range s.SessionCosts {
+					if c < mn {
+						mn = c
+					}
+					if c > mx {
+						mx = c
+					}
+				}
+				fmt.Printf("session_cost_usd min=%.5f median=%.5f max=%.5f\n", mn, enrich.MedianFloat(s.SessionCosts), mx)
+			}
+			if len(s.LatenciesMS) > 0 {
+				mn, mx := s.LatenciesMS[0], s.LatenciesMS[0]
+				for _, l := range s.LatenciesMS {
+					if l < mn {
+						mn = l
+					}
+					if l > mx {
+						mx = l
+					}
+				}
+				fmt.Printf("call_latency_ms min=%d median=%d max=%d calls=%d\n", mn, enrich.MedianInt(s.LatenciesMS), mx, len(s.LatenciesMS))
+			}
+		}
+	}
+	return err
+}
+
+func containsString(list []string, v string) bool {
+	for _, s := range list {
+		if s == v {
+			return true
+		}
+	}
+	return false
+}
+
+func enrichPricing(p config.EnrichmentPricing) enrich.Pricing {
+	out := enrich.Pricing{InputPerMTok: p.InputPerMTok, OutputPerMTok: p.OutputPerMTok, CacheReadPerMTok: p.CacheReadPerMTok,
+		CacheWritePerMTok: p.CacheWritePerMTok, LongThreshold: p.LongPromptThresholdTokens}
+	if p.Long != nil {
+		long := enrichPricing(*p.Long)
+		out.Long = &long
+	}
+	return out
+}
+
+// buildEnrichGateway returns the model backend for a provider id: the direct
+// Anthropic API, or the Tether AI gateway for any other id.
+func buildEnrichGateway(ec config.EnrichmentConfig, provider string) (enrich.Gateway, error) {
+	if provider == enrich.AnthropicDirectProvider {
+		return enrich.NewAnthropicGateway(ec.Anthropic.BaseURL, ec.Anthropic.APIKeyEnv, ec.Anthropic.Version, enrichPricing(ec.Anthropic.Pricing),
+			enrich.AnthropicOptions{Thinking: ec.Anthropic.Thinking, Effort: ec.Anthropic.Effort}, os.Getenv)
+	}
+	if ec.Gateway.Address == "" {
+		return nil, fmt.Errorf("transcripts.enrichment.gateway.address is not configured")
+	}
+	token := ""
+	if ec.Gateway.TokenEnv != "" {
+		token = os.Getenv(ec.Gateway.TokenEnv)
+	}
+	return enrich.NewHTTPGateway(ec.Gateway.Address, token)
+}
+
+// buildEnrichEmbedder returns a local embedder and the model to use. Both
+// supported providers refuse hosts that are not on this machine.
+func buildEnrichEmbedder(ec config.EnrichmentConfig, modelFlag string) (enrich.Embedder, string, error) {
+	emb := ec.Embedding
+	model := modelFlag
+	if model == "" {
+		model = emb.Model
+	}
+	switch emb.Provider {
+	case "openai_compat_local":
+		if model == "" {
+			return nil, "", fmt.Errorf("transcripts.enrichment.embedding.model is required for openai_compat_local")
+		}
+		e, err := enrich.NewOpenAICompatEmbedder(emb.BaseURL, emb.Dim, emb.QueryInstruction, emb.BatchSize)
+		return e, model, err
+	case "", "ollama":
+		if model == "" {
+			model = "nomic-embed-text"
+		}
+		host := emb.BaseURL
+		if host == "" {
+			host = os.Getenv("OLLAMA_HOST")
+		}
+		e, err := enrich.NewOllamaEmbedder(host)
+		return e, model, err
+	default:
+		return nil, "", fmt.Errorf("unknown embedding provider %q", emb.Provider)
+	}
+}
+
+// runTranscriptEmbed embeds enriched summaries with a local embedding server;
+// it never calls a hosted model.
+func runTranscriptEmbed(cfg config.Config, store *transcript.Store, modelFlag string, limit int) error {
+	e, model, err := buildEnrichEmbedder(cfg.Transcripts.Enrichment, modelFlag)
+	if err != nil {
+		return err
+	}
+	start := time.Now()
+	s, err := enrich.EmbedSummaries(context.Background(), store, e, model, limit)
+	fmt.Printf("embed: model=%s candidates=%d embedded=%d skipped=%d failed=%d elapsed=%s\n", model, s.Candidates, s.Embedded, s.Skipped, s.Failed, time.Since(start).Round(time.Millisecond))
+	return err
+}
+
+// runTranscriptSearch finds sessions by their enriched title, summary, topics
+// and entities. It prints titles because the owner is reading their own store.
+func runTranscriptSearch(cfg config.Config, store *transcript.Store, query string, semantic bool, modelFlag string, limit int) error {
+	if strings.TrimSpace(query) == "" {
+		return fmt.Errorf("transcript search requires --query")
+	}
+	var hits []transcript.SearchHit
+	var err error
+	if semantic {
+		e, model, eerr := buildEnrichEmbedder(cfg.Transcripts.Enrichment, modelFlag)
+		if eerr != nil {
+			return eerr
+		}
+		vec, eerr := enrich.EmbedQuery(context.Background(), e, model, query)
+		if eerr != nil {
+			return eerr
+		}
+		format := "plain"
+		if f, ok := e.(enrich.Formatter); ok {
+			format = f.Format()
+		}
+		hits, err = store.NearestSummaries(context.Background(), model, format, vec, limit)
+	} else {
+		hits, err = store.SearchEnriched(context.Background(), query, limit)
+	}
+	if err != nil {
+		return err
+	}
+	for _, h := range hits {
+		fmt.Printf("%.4f\t%s\t%s\n", h.Rank, h.NativeSessionID, h.Title)
+	}
+	fmt.Printf("results=%d\n", len(hits))
+	return nil
+}
+
+// runTranscriptShow prints a session's stored Tier 0 facts and newest Tier 1
+// result as JSON, for the owner to review in their own terminal.
+func runTranscriptShow(store *transcript.Store, nativeID string) error {
+	if nativeID == "" {
+		return fmt.Errorf("transcript show requires --session")
+	}
+	refs, err := store.MainSessions(context.Background(), 0, time.Time{}, nativeID)
+	if err != nil {
+		return err
+	}
+	legacy, err := store.LegacySessions(context.Background(), nativeID)
+	if err != nil {
+		return err
+	}
+	refs = append(refs, legacy...)
+	if len(refs) == 0 {
+		return fmt.Errorf("no such session")
+	}
+	for _, tier := range []int{0, 1} {
+		rec, ok, err := store.LatestEnrichment(context.Background(), refs[0].SessionPK, tier)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			fmt.Printf("tier %d: none\n", tier)
+			continue
+		}
+		var v any
+		_ = json.Unmarshal([]byte(rec.ResultJSON), &v)
+		pretty, _ := json.MarshalIndent(v, "", "  ")
+		fmt.Printf("tier %d (prompt=%s model=%s):\n%s\n", tier, rec.PromptVersion, rec.Model, pretty)
+	}
+	return nil
 }

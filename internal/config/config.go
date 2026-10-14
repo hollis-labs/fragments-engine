@@ -27,7 +27,84 @@ type Config struct {
 // TranscriptConfig names the explicit local owner-private destination. Blank
 // means transcript ingestion is unavailable, with no shared-store fallback.
 type TranscriptConfig struct {
-	PrivateRoot string `json:"private_root" yaml:"private_root"`
+	PrivateRoot string           `json:"private_root" yaml:"private_root"`
+	Enrichment  EnrichmentConfig `json:"enrichment" yaml:"enrichment"`
+}
+
+// EnrichmentConfig drives transcript enrichment. Nothing leaves the machine
+// unless a provider is listed in AllowedProviders: the default is empty.
+type EnrichmentConfig struct {
+	Gateway   EnrichmentGateway   `json:"gateway" yaml:"gateway"`
+	Anthropic EnrichmentAnthropic `json:"anthropic" yaml:"anthropic"`
+	Embedding EnrichmentEmbedding `json:"embedding" yaml:"embedding"`
+	// AllowedProviders are the gateway provider ids that may receive redacted
+	// transcript text. Empty means no model call is made.
+	AllowedProviders []string `json:"allowed_providers" yaml:"allowed_providers"`
+	Provider         string   `json:"provider" yaml:"provider"`
+	Model            string   `json:"model" yaml:"model"`
+	PromptVersion    string   `json:"prompt_version" yaml:"prompt_version"`
+	// MaxCostUSD caps one run; MaxTotalCostUSD caps all runs together, from the
+	// spend ledger. Both are hard stops enforced by FE regardless of any
+	// gateway budget.
+	MaxCostUSD      float64 `json:"max_cost_usd" yaml:"max_cost_usd"`
+	MaxTotalCostUSD float64 `json:"max_total_cost_usd" yaml:"max_total_cost_usd"`
+	// ExcludeSessions (native session ids) and ExcludeCWDPrefixes (project
+	// paths) are the never-send switch: matching sessions are never given to a
+	// model.
+	ExcludeSessions    []string `json:"exclude_sessions" yaml:"exclude_sessions"`
+	ExcludeCWDPrefixes []string `json:"exclude_cwd_prefixes" yaml:"exclude_cwd_prefixes"`
+	MinIdleMinutes     int      `json:"min_idle_minutes" yaml:"min_idle_minutes"`
+	MaxOutputTokens    int      `json:"max_output_tokens" yaml:"max_output_tokens"`
+}
+
+// EnrichmentAnthropic configures the direct Anthropic provider (allow-list id
+// "anthropic-direct"). The API key is read from the environment variable named
+// by APIKeyEnv at startup; it is never stored in this file, logged or persisted.
+type EnrichmentAnthropic struct {
+	BaseURL   string `json:"base_url" yaml:"base_url"` // default https://api.anthropic.com; https only
+	APIKeyEnv string `json:"api_key_env" yaml:"api_key_env"`
+	Version   string `json:"version" yaml:"version"` // anthropic-version header; default 2023-06-01
+	// Thinking is "disabled" (default) or "adaptive". Haiku 5.5 thinks by default
+	// and thinking tokens count toward max_tokens; a bounded JSON summary does
+	// not need it. Effort optionally sets output_config.effort.
+	Thinking string            `json:"thinking" yaml:"thinking"`
+	Effort   string            `json:"effort" yaml:"effort"`
+	Pricing  EnrichmentPricing `json:"pricing" yaml:"pricing"`
+}
+
+// EnrichmentPricing is USD per million tokens. There are no built-in defaults:
+// the values must be confirmed against Anthropic's published pricing before the
+// first live call, and spend caps are computed from them.
+type EnrichmentPricing struct {
+	InputPerMTok      float64 `json:"input_per_mtok" yaml:"input_per_mtok"`
+	OutputPerMTok     float64 `json:"output_per_mtok" yaml:"output_per_mtok"`
+	CacheReadPerMTok  float64 `json:"cache_read_per_mtok" yaml:"cache_read_per_mtok"`
+	CacheWritePerMTok float64 `json:"cache_write_per_mtok" yaml:"cache_write_per_mtok"`
+	// LongPromptThresholdTokens and Long describe a higher tier for requests whose
+	// prompt (input plus cache reads and writes) exceeds the threshold.
+	LongPromptThresholdTokens int                `json:"long_prompt_threshold_tokens" yaml:"long_prompt_threshold_tokens"`
+	Long                      *EnrichmentPricing `json:"long" yaml:"long"`
+}
+
+// EnrichmentEmbedding selects a local embedding server. Provider is
+// "openai_compat_local" (an OpenAI-style /v1/embeddings server on this machine,
+// e.g. llama.cpp) or "ollama" (the default). Both refuse non-local hosts.
+type EnrichmentEmbedding struct {
+	Provider         string `json:"provider" yaml:"provider"`
+	BaseURL          string `json:"base_url" yaml:"base_url"`
+	Model            string `json:"model" yaml:"model"`
+	Dim              int    `json:"dim" yaml:"dim"`
+	QueryInstruction string `json:"query_instruction" yaml:"query_instruction"`
+	BatchSize        int    `json:"batch_size" yaml:"batch_size"`
+}
+
+// EnrichmentGateway locates the Tether AI gateway. Address is "unix:/path" or
+// an http://127.0.0.1:PORT loopback URL. The bearer token, if the daemon
+// enforces identity, is read from the environment variable named by TokenEnv,
+// never from this file.
+type EnrichmentGateway struct {
+	Address  string `json:"address" yaml:"address"`
+	TokenEnv string `json:"token_env" yaml:"token_env"`
 }
 
 type DatabaseConfig struct {

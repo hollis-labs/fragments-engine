@@ -249,3 +249,37 @@ func TestBusyErrorsAreRecognisedAndOthersAreNot(t *testing.T) {
 		t.Fatalf("non-busy errors must not retry: %v calls=%d", err, calls)
 	}
 }
+
+// A version-1 database (no subagent description column, no enrichment tables)
+// is upgraded in place.
+func TestOpenUpgradesVersionOneInPlace(t *testing.T) {
+	root := freshRoot(t)
+	conn := other(t, root)
+	ctx := context.Background()
+	for _, q := range []string{
+		`DROP TABLE tx_enrichment`, `DROP TABLE tx_enrichment_spend`, `DROP TABLE tx_embeddings`, `DROP TABLE tx_enrichment_search`,
+		`ALTER TABLE tx_sessions DROP COLUMN description_redacted`, `UPDATE tx_meta SET value = '1' WHERE key = 'schema_version'`,
+	} {
+		if _, err := conn.ExecContext(ctx, q); err != nil {
+			t.Fatalf("%s: %v", q, err)
+		}
+	}
+	conn.Close()
+	st, err := Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	if n := count(t, st, `SELECT COUNT(*) FROM pragma_table_info('tx_sessions') WHERE name = 'description_redacted'`); n != 1 {
+		t.Fatal("description column not added")
+	}
+	for _, table := range derivedTables {
+		if n := count(t, st, `SELECT COUNT(*) FROM sqlite_master WHERE name = ?`, table); n != 1 {
+			t.Fatalf("table %s missing after upgrade", table)
+		}
+	}
+	var v string
+	if err := st.db.QueryRow(`SELECT value FROM tx_meta WHERE key = 'schema_version'`).Scan(&v); err != nil || v != fmt.Sprint(derivedSchemaVersion) {
+		t.Fatalf("version %q %v", v, err)
+	}
+}
