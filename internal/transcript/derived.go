@@ -163,6 +163,18 @@ func applyDetail(ctx context.Context, tx *sql.Tx, registration, source, sourceID
 	parentPK := ""
 	if d.Session.ParentNativeID != "" {
 		parentPK = sessionPK(registration, source, d.Session.ParentNativeID, "")
+		// A tool whose sessions carry a segment key (Codex: one per rollout file)
+		// has no empty-segment parent id; resolve its parent by native id when the
+		// parent is already stored. An unresolved parent keeps the computed id and
+		// parent_native_id, which a reader can still join on.
+		var present int
+		if tx.QueryRowContext(ctx, `SELECT 1 FROM tx_sessions WHERE session_pk = ?`, parentPK).Scan(&present) != nil {
+			var found string
+			if tx.QueryRowContext(ctx, `SELECT session_pk FROM tx_sessions WHERE native_session_id = ? AND tool = ? AND kind = 'main' ORDER BY started_at, session_pk LIMIT 1`,
+				Redact(d.Session.ParentNativeID), Redact(d.Session.Tool)).Scan(&found) == nil {
+				parentPK = found
+			}
+		}
 	}
 	ss := d.Session
 	if _, err := tx.ExecContext(ctx, `INSERT INTO tx_sessions (session_pk, tool, native_session_id, segment_key, kind, parent_session_pk, parent_native_id,

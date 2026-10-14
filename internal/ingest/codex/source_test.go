@@ -138,7 +138,7 @@ func TestParserEnforcesReadBudget(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := parseSession(context.Background(), path, info.ModTime(), int64(len(syntheticRollout)-1)); err == nil {
+	if _, _, _, err := collectSegment(context.Background(), path, "rollout.jsonl", info, int64(len(syntheticRollout)-1), 0); err == nil {
 		t.Fatal("read beyond budget accepted")
 	}
 }

@@ -149,7 +149,8 @@ func TestAppCodexPrivateAcceptanceAndRetry(t *testing.T) {
 		t.Fatalf("private acceptance: %+v %v", runs, err)
 	}
 	runs, err = instance.Fragments.RunAllIngests(context.Background(), cfg)
-	if err != nil || len(runs) != 1 || runs[0].Skipped != 1 {
+	// A file unchanged since its stored cursor is not re-submitted at all.
+	if err != nil || len(runs) != 1 || runs[0].Inserted != 0 || runs[0].Updated != 0 {
 		t.Fatalf("retry: %+v %v", runs, err)
 	}
 	db, err := sql.Open("sqlite", filepath.Join(cfg.Transcripts.PrivateRoot, "transcripts.db"))

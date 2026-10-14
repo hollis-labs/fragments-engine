@@ -267,6 +267,14 @@ func (s *Store) SessionFacts(ctx context.Context, pk string) (SessionFacts, erro
 				seen[v]++
 			}
 		}
+		// Codex's apply_patch records the files it names as a list.
+		if list, ok := in["paths"].([]any); ok {
+			for _, item := range list {
+				if v, ok := item.(string); ok && v != "" && len(v) < 400 {
+					seen[v]++
+				}
+			}
+		}
 	}
 	if err := rows.Err(); err != nil {
 		return f, errors.New("transcript: cannot read tool inputs")

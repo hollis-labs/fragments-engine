@@ -3,17 +3,14 @@ package codex
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
-	"time"
 
 	"github.com/hollis-labs/fragments-engine/internal/config"
 	"github.com/hollis-labs/fragments-engine/internal/domain"
@@ -107,7 +104,7 @@ func (Source) Collect(ctx context.Context, cfg config.IngestConfig) ([]domain.Pi
 			domain.NoteSkip(ctx, "size_limit", rel)
 			continue
 		}
-		fragment, tail, err := parseSession(ctx, path, info.ModTime(), maxBytes)
+		fragment, class, tail, err := collectSegment(ctx, path, rel, info, maxBytes, rules.ToolResultExcerptBytes)
 		if err != nil {
 			if cerr := ctx.Err(); cerr != nil {
 				return nil, cerr
@@ -129,7 +126,8 @@ func (Source) Collect(ctx context.Context, cfg config.IngestConfig) ([]domain.Pi
 			// its bytes change.
 			domain.NoteSkipAt(ctx, "incomplete_tail", rel, tail.line, tail.offset)
 		}
-		if fragment.Content == "" {
+		if class != "" {
+			// Nothing new since the stored cursor, or nothing to import yet.
 			continue
 		}
 		// A thread can have multiple physical rollout files (fork/revert histories).
@@ -145,15 +143,6 @@ type line struct {
 	Type      string          `json:"type"`
 	Payload   json.RawMessage `json:"payload"`
 }
-type sessionMeta struct {
-	ID             string `json:"id"`
-	SessionID      string `json:"session_id"`
-	Timestamp      string `json:"timestamp"`
-	CWD            string `json:"cwd"`
-	CLIVersion     string `json:"cli_version"`
-	ParentThreadID string `json:"parent_thread_id"`
-	ForkedFromID   string `json:"forked_from_id"`
-}
 type contentBlock struct {
 	Type string `json:"type"`
 	Text string `json:"text"`
@@ -164,7 +153,6 @@ type message struct {
 	Content []contentBlock `json:"content"`
 	Message string         `json:"message"`
 }
-type textMessage struct{ role, text string }
 
 // tailInfo marks a final line that was cut off mid-write.
 type tailInfo struct {
@@ -190,167 +178,3 @@ func readLine(r *bufio.Reader, lineNo int, offset int64) ([]byte, error) {
 }
 
 const maxLineBytes = 10 << 20
-
-func parseSession(ctx context.Context, path string, modTime time.Time, maxBytes int64) (domain.PipelineFragment, *tailInfo, error) {
-	file, err := os.Open(path)
-	if err != nil {
-		class := "unreadable_file"
-		if os.IsNotExist(err) {
-			class = "vanished"
-		}
-		return domain.PipelineFragment{}, nil, &domain.CollectionError{Class: class}
-	}
-	defer file.Close()
-	limited := &io.LimitedReader{R: file, N: maxBytes + 1}
-	reader := bufio.NewReaderSize(limited, 1<<20)
-	var meta sessionMeta
-	var responses, events []textMessage
-	var created time.Time
-	lineNo := 0
-	var retained int
-	var tail *tailInfo
-	var lineStart, next int64 // byte offsets: current line start, following line start
-	fail := func(class string) error {
-		return &domain.CollectionError{Class: class, Line: lineNo, Offset: lineStart}
-	}
-	for {
-		if err := ctx.Err(); err != nil {
-			return domain.PipelineFragment{}, nil, err
-		}
-		rawLine, readErr := readLine(reader, lineNo+1, next)
-		if readErr != nil && readErr != io.EOF {
-			var ce *domain.CollectionError
-			if errors.As(readErr, &ce) {
-				return domain.PipelineFragment{}, nil, readErr
-			}
-			return domain.PipelineFragment{}, nil, &domain.CollectionError{Class: "read_error", Line: lineNo + 1, Offset: next}
-		}
-		if len(rawLine) == 0 {
-			break
-		}
-		lineNo++
-		lineStart = next
-		next += int64(len(rawLine))
-		terminated := bytes.HasSuffix(rawLine, []byte("\n"))
-		raw := bytes.TrimSpace(rawLine)
-		if len(raw) == 0 {
-			if readErr == io.EOF {
-				break
-			}
-			continue
-		}
-		if !terminated && !json.Valid(raw) {
-			// No trailing newline and not valid JSON: the writer was still
-			// appending when this copy was made. This is the only line that can
-			// be in that state; stop here and keep what is complete.
-			tail = &tailInfo{line: lineNo, offset: lineStart}
-			break
-		}
-		var record line
-		// Never include a decoder error or raw record in diagnostics.
-		if json.Unmarshal(raw, &record) != nil || record.Type == "" {
-			return domain.PipelineFragment{}, nil, fail("invalid_record")
-		}
-		if ts, err := time.Parse(time.RFC3339Nano, record.Timestamp); err == nil && (created.IsZero() || ts.Before(created)) {
-			created = ts
-		}
-		switch record.Type {
-		case "session_meta":
-			var next sessionMeta
-			if json.Unmarshal(record.Payload, &next) != nil || next.ID == "" {
-				return domain.PipelineFragment{}, nil, fail("invalid_session_meta")
-			}
-			if meta.ID != "" && meta.ID != next.ID {
-				// A forked rollout replays its parent's session_meta after its own.
-				// The first record names this file's thread; a later record for
-				// another thread is ancestry, never a competing identity.
-				if meta.ParentThreadID == "" {
-					meta.ParentThreadID = next.ID
-				}
-				continue
-			}
-			if next.ParentThreadID == "" {
-				next.ParentThreadID = next.ForkedFromID
-			}
-			meta = next
-			if ts, err := time.Parse(time.RFC3339Nano, meta.Timestamp); err == nil {
-				created = ts
-			}
-		case "response_item":
-			var msg message
-			if json.Unmarshal(record.Payload, &msg) != nil {
-				return domain.PipelineFragment{}, nil, fail("invalid_response_item")
-			}
-			if msg.Type != "message" || (msg.Role != "user" && msg.Role != "assistant") {
-				continue
-			}
-			var parts []string
-			for _, block := range msg.Content {
-				if (block.Type == "input_text" || block.Type == "output_text") && strings.TrimSpace(block.Text) != "" {
-					parts = append(parts, block.Text)
-				}
-			}
-			if len(parts) > 0 {
-				text := strings.Join(parts, "\n")
-				if retained += len(text); retained > maxRetainedText {
-					return domain.PipelineFragment{}, nil, fail("size_limit")
-				}
-				responses = append(responses, textMessage{msg.Role, text})
-			}
-		case "event_msg":
-			var msg message
-			if json.Unmarshal(record.Payload, &msg) != nil {
-				return domain.PipelineFragment{}, nil, fail("invalid_event")
-			}
-			role := ""
-			switch msg.Type {
-			case "user_message":
-				role = "user"
-			case "agent_message":
-				role = "assistant"
-			}
-			if role != "" && strings.TrimSpace(msg.Message) != "" {
-				if retained += len(msg.Message); retained > maxRetainedText {
-					return domain.PipelineFragment{}, nil, fail("size_limit")
-				}
-				events = append(events, textMessage{role, msg.Message})
-			}
-		}
-		if readErr == io.EOF {
-			break
-		}
-	}
-	if limited.N == 0 {
-		return domain.PipelineFragment{}, nil, &domain.CollectionError{Class: "size_limit", Offset: maxBytes}
-	}
-	if meta.ID == "" {
-		if tail != nil {
-			// A brand-new file whose first line is still being written has nothing
-			// to import yet.
-			return domain.PipelineFragment{}, tail, nil
-		}
-		return domain.PipelineFragment{}, nil, &domain.CollectionError{Class: "missing_session_meta"}
-	}
-	// Legacy event messages duplicate response items; prefer response material.
-	messages := responses
-	if len(messages) == 0 {
-		messages = events
-	}
-	if len(messages) == 0 {
-		return domain.PipelineFragment{}, tail, nil
-	}
-	var parts []string
-	for _, msg := range messages {
-		parts = append(parts, "## "+msg.role+"\n\n"+msg.text)
-	}
-	if created.IsZero() {
-		created = modTime
-	}
-	created = created.UTC()
-	return domain.PipelineFragment{
-		Source: "codex", SourceType: "transcript", SourceID: meta.ID, Title: "Codex session: " + meta.ID,
-		Content: strings.Join(parts, "\n\n"), CreatedAt: created.UTC(),
-		Metadata:      map[string]any{"thread_id": meta.ID, "session_id": meta.SessionID, "cwd": meta.CWD, "cli_version": meta.CLIVersion, "parent_thread_id": meta.ParentThreadID, "source_file": path},
-		CanonicalPath: filepath.ToSlash(filepath.Join("fragments", "chats", "codex", created.Format("2006-01-02"), meta.ID)),
-	}, tail, nil
-}
