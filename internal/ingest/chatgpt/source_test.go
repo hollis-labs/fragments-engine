@@ -126,3 +126,50 @@ func TestValidateArchivePolicy(t *testing.T) {
 		t.Fatalf("expected nested source error, got %v", err)
 	}
 }
+
+func TestExtractTextParts(t *testing.T) {
+	cases := []struct {
+		name        string
+		content     exportContent
+		wantText    string
+		wantNonText int
+	}{
+		{"text", exportContent{ContentType: "text", Parts: []any{"hello", " ", "world"}}, "hello\nworld", 0},
+		{"multimodal keeps text and counts non-text", exportContent{ContentType: "multimodal_text", Parts: []any{
+			map[string]any{"content_type": "image_asset_pointer"}, "caption", map[string]any{"content_type": "image_asset_pointer"},
+		}}, "caption", 2},
+		{"multimodal with only non-text", exportContent{ContentType: "multimodal_text", Parts: []any{map[string]any{"x": 1}}}, "", 1},
+		{"nil part is not counted", exportContent{ContentType: "multimodal_text", Parts: []any{nil, "t"}}, "t", 0},
+		{"thoughts ignored", exportContent{ContentType: "thoughts", Parts: []any{"secret chain"}}, "", 0},
+		{"reasoning_recap ignored", exportContent{ContentType: "reasoning_recap", Parts: []any{"recap"}}, "", 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			text, nonText := extractTextParts(tc.content)
+			if text != tc.wantText || nonText != tc.wantNonText {
+				t.Fatalf("got (%q, %d), want (%q, %d)", text, nonText, tc.wantText, tc.wantNonText)
+			}
+		})
+	}
+}
+
+func TestBuildConversationFragmentRecordsNonTextParts(t *testing.T) {
+	conv := exportConversation{
+		ID:          "conv-mm",
+		CurrentNode: "n2",
+		Mapping: map[string]conversationNode{
+			"n1": {ID: "n1", Message: exportMessage{ID: "m1", Author: exportAuthor{Role: "user"}, Content: exportContent{ContentType: "multimodal_text", Parts: []any{"look", map[string]any{"content_type": "image_asset_pointer"}}}}},
+			"n2": {ID: "n2", Parent: "n1", Message: exportMessage{ID: "m2", Author: exportAuthor{Role: "assistant"}, Content: exportContent{ContentType: "text", Parts: []any{"ok"}}}},
+		},
+	}
+	frag, ok := buildConversationFragment(conv, "f.json", "dir", exportUserMeta{}, map[string]string{})
+	if !ok {
+		t.Fatal("expected a fragment")
+	}
+	if !strings.Contains(frag.Content, "look") {
+		t.Fatalf("multimodal text part missing: %q", frag.Content)
+	}
+	if frag.Metadata["non_text_parts_skipped"] != 1 {
+		t.Fatalf("expected non_text_parts_skipped=1, got %#v", frag.Metadata["non_text_parts_skipped"])
+	}
+}

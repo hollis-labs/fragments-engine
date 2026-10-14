@@ -216,8 +216,9 @@ func buildConversationFragment(conv exportConversation, sourceFile, exportDir st
 		return domain.PipelineFragment{}, false
 	}
 	var (
-		blocks      []string
-		attachments []domain.PipelineAttachment
+		blocks       []string
+		attachments  []domain.PipelineAttachment
+		nonTextParts int
 	)
 	createdAt := timeFromUnixFloat(conv.CreateTime)
 	for _, msg := range messages {
@@ -225,7 +226,8 @@ func buildConversationFragment(conv exportConversation, sourceFile, exportDir st
 		if role != "user" && role != "assistant" {
 			continue
 		}
-		text := extractTextParts(msg.Content)
+		text, nonText := extractTextParts(msg.Content)
+		nonTextParts += nonText
 		if text == "" {
 			continue
 		}
@@ -251,6 +253,9 @@ func buildConversationFragment(conv exportConversation, sourceFile, exportDir st
 		"export_dir":      exportDir,
 		"source_file":     sourceFile,
 		"current_node":    conv.CurrentNode,
+	}
+	if nonTextParts > 0 {
+		meta["non_text_parts_skipped"] = nonTextParts
 	}
 	if userMeta.ID != "" {
 		meta["user_id"] = userMeta.ID
@@ -319,19 +324,31 @@ func reverseMessages(in []exportMessage) {
 	}
 }
 
-func extractTextParts(content exportContent) string {
-	if content.ContentType != "" && content.ContentType != "text" {
-		return ""
+// extractTextParts keeps the string parts of text and multimodal_text content
+// and returns how many non-string parts (images, asset pointers) were skipped.
+// Other content types (thoughts, reasoning_recap, ...) yield nothing.
+func extractTextParts(content exportContent) (string, int) {
+	switch content.ContentType {
+	case "", "text", "multimodal_text":
+	default:
+		return "", 0
 	}
 	parts := make([]string, 0, len(content.Parts))
+	nonText := 0
 	for _, part := range content.Parts {
 		text, ok := part.(string)
-		if !ok || strings.TrimSpace(text) == "" {
+		if !ok {
+			if part != nil {
+				nonText++
+			}
+			continue
+		}
+		if strings.TrimSpace(text) == "" {
 			continue
 		}
 		parts = append(parts, strings.TrimSpace(text))
 	}
-	return strings.TrimSpace(strings.Join(parts, "\n"))
+	return strings.TrimSpace(strings.Join(parts, "\n")), nonText
 }
 
 func timeFromUnixFloat(v float64) time.Time {
