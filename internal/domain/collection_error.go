@@ -70,13 +70,17 @@ func WithSkipCollector(ctx context.Context, c *SkipCollector) context.Context {
 
 // NoteSkip records a per-file skip. Without a collector it is a no-op, which
 // keeps a source usable outside the pipeline.
-func NoteSkip(ctx context.Context, class, rel string) {
+func NoteSkip(ctx context.Context, class, rel string) { NoteSkipAt(ctx, class, rel, 0, 0) }
+
+// NoteSkipAt is NoteSkip with the position of the problem in the file: a line
+// number and byte offset, so an operator can find it without the content.
+func NoteSkipAt(ctx context.Context, class, rel string, line int, offset int64) {
 	c, _ := ctx.Value(skipKey{}).(*SkipCollector)
 	if c == nil {
 		return
 	}
 	c.mu.Lock()
-	c.Skips = append(c.Skips, CollectionError{Class: class, PathHash: HashPath(rel)})
+	c.Skips = append(c.Skips, CollectionError{Class: class, PathHash: HashPath(rel), Line: line, Offset: offset})
 	c.mu.Unlock()
 }
 

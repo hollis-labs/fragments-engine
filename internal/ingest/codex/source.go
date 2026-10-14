@@ -3,6 +3,7 @@ package codex
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -51,10 +52,21 @@ func (Source) Collect(ctx context.Context, cfg config.IngestConfig) ([]domain.Pi
 			return err
 		}
 		if walkErr != nil {
-			if path == root && os.IsNotExist(walkErr) {
-				return nil
+			if path == root {
+				if os.IsNotExist(walkErr) {
+					return nil
+				}
+				return walkErr
 			}
-			return walkErr
+			// One unreadable or just-vanished directory (rsync is writing here)
+			// must not abort the whole source.
+			if rel, err := filepath.Rel(root, path); err == nil {
+				domain.NoteSkip(ctx, "unreadable_dir", filepath.ToSlash(rel))
+			}
+			if entry != nil && entry.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
 		}
 		if entry.IsDir() && entry.Name() == ".rsync-partial" {
 			return filepath.SkipDir
@@ -73,30 +85,49 @@ func (Source) Collect(ctx context.Context, cfg config.IngestConfig) ([]domain.Pi
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		info, err := os.Lstat(path)
-		if err != nil {
-			return nil, fmt.Errorf("inspect codex session: %w", err)
-		}
-		if !info.Mode().IsRegular() {
-			continue
-		}
 		rel, err := filepath.Rel(root, path)
 		if err != nil {
 			return nil, fmt.Errorf("codex session locator: %w", err)
 		}
 		rel = filepath.ToSlash(rel)
+		info, err := os.Lstat(path)
+		if err != nil {
+			// Gone between enumeration and now, or unreadable: this file only.
+			class := "unreadable_file"
+			if os.IsNotExist(err) {
+				class = "vanished"
+			}
+			domain.NoteSkip(ctx, class, rel)
+			continue
+		}
+		if !info.Mode().IsRegular() {
+			continue
+		}
 		if info.Size() > maxBytes {
 			domain.NoteSkip(ctx, "size_limit", rel)
 			continue
 		}
-		fragment, err := parseSession(ctx, path, info.ModTime(), maxBytes)
+		fragment, tail, err := parseSession(ctx, path, info.ModTime(), maxBytes)
 		if err != nil {
-			var diag *domain.CollectionError
-			if errors.As(err, &diag) && diag.Class == "size_limit" {
-				domain.NoteSkip(ctx, diag.Class, rel)
-				continue
+			if cerr := ctx.Err(); cerr != nil {
+				return nil, cerr
 			}
-			return nil, domain.AttributeFile(err, rel)
+			// A bad record, an unreadable line or an I/O problem costs this file
+			// its place in this run, never the other files: it is counted with
+			// its class, path hash, line and byte offset.
+			var diag *domain.CollectionError
+			if errors.As(err, &diag) {
+				domain.NoteSkipAt(ctx, diag.Class, rel, diag.Line, diag.Offset)
+			} else {
+				domain.NoteSkip(ctx, "unreadable_file", rel)
+			}
+			continue
+		}
+		if tail != nil {
+			// The final line was still being written when the file was copied.
+			// Everything before it is imported; the file is picked up again when
+			// its bytes change.
+			domain.NoteSkipAt(ctx, "incomplete_tail", rel, tail.line, tail.offset)
 		}
 		if fragment.Content == "" {
 			continue
@@ -135,39 +166,90 @@ type message struct {
 }
 type textMessage struct{ role, text string }
 
-func parseSession(ctx context.Context, path string, modTime time.Time, maxBytes int64) (domain.PipelineFragment, error) {
+// tailInfo marks a final line that was cut off mid-write.
+type tailInfo struct {
+	line   int
+	offset int64
+}
+
+// readLine returns one line including its newline, if it has one. A line over
+// the cap is an unreadable_line failure that carries only its position.
+func readLine(r *bufio.Reader, lineNo int, offset int64) ([]byte, error) {
+	var buf []byte
+	for {
+		chunk, err := r.ReadSlice('\n')
+		buf = append(buf, chunk...)
+		if len(buf) > maxLineBytes {
+			return nil, &domain.CollectionError{Class: "unreadable_line", Line: lineNo, Offset: offset}
+		}
+		if err == bufio.ErrBufferFull {
+			continue
+		}
+		return buf, err
+	}
+}
+
+const maxLineBytes = 10 << 20
+
+func parseSession(ctx context.Context, path string, modTime time.Time, maxBytes int64) (domain.PipelineFragment, *tailInfo, error) {
 	file, err := os.Open(path)
 	if err != nil {
-		return domain.PipelineFragment{}, fmt.Errorf("open codex session: %w", err)
+		class := "unreadable_file"
+		if os.IsNotExist(err) {
+			class = "vanished"
+		}
+		return domain.PipelineFragment{}, nil, &domain.CollectionError{Class: class}
 	}
 	defer file.Close()
 	limited := &io.LimitedReader{R: file, N: maxBytes + 1}
-	scanner := bufio.NewScanner(limited)
-	scanner.Buffer(make([]byte, 64*1024), 10*1024*1024)
+	reader := bufio.NewReaderSize(limited, 1<<20)
 	var meta sessionMeta
 	var responses, events []textMessage
 	var created time.Time
 	lineNo := 0
 	var retained int
+	var tail *tailInfo
 	var lineStart, next int64 // byte offsets: current line start, following line start
 	fail := func(class string) error {
 		return &domain.CollectionError{Class: class, Line: lineNo, Offset: lineStart}
 	}
-	for scanner.Scan() {
+	for {
 		if err := ctx.Err(); err != nil {
-			return domain.PipelineFragment{}, err
+			return domain.PipelineFragment{}, nil, err
+		}
+		rawLine, readErr := readLine(reader, lineNo+1, next)
+		if readErr != nil && readErr != io.EOF {
+			var ce *domain.CollectionError
+			if errors.As(readErr, &ce) {
+				return domain.PipelineFragment{}, nil, readErr
+			}
+			return domain.PipelineFragment{}, nil, &domain.CollectionError{Class: "read_error", Line: lineNo + 1, Offset: next}
+		}
+		if len(rawLine) == 0 {
+			break
 		}
 		lineNo++
-		raw := scanner.Bytes()
 		lineStart = next
-		next += int64(len(raw)) + 1
-		if len(strings.TrimSpace(string(raw))) == 0 {
+		next += int64(len(rawLine))
+		terminated := bytes.HasSuffix(rawLine, []byte("\n"))
+		raw := bytes.TrimSpace(rawLine)
+		if len(raw) == 0 {
+			if readErr == io.EOF {
+				break
+			}
 			continue
+		}
+		if !terminated && !json.Valid(raw) {
+			// No trailing newline and not valid JSON: the writer was still
+			// appending when this copy was made. This is the only line that can
+			// be in that state; stop here and keep what is complete.
+			tail = &tailInfo{line: lineNo, offset: lineStart}
+			break
 		}
 		var record line
 		// Never include a decoder error or raw record in diagnostics.
 		if json.Unmarshal(raw, &record) != nil || record.Type == "" {
-			return domain.PipelineFragment{}, fail("invalid_record")
+			return domain.PipelineFragment{}, nil, fail("invalid_record")
 		}
 		if ts, err := time.Parse(time.RFC3339Nano, record.Timestamp); err == nil && (created.IsZero() || ts.Before(created)) {
 			created = ts
@@ -176,7 +258,7 @@ func parseSession(ctx context.Context, path string, modTime time.Time, maxBytes 
 		case "session_meta":
 			var next sessionMeta
 			if json.Unmarshal(record.Payload, &next) != nil || next.ID == "" {
-				return domain.PipelineFragment{}, fail("invalid_session_meta")
+				return domain.PipelineFragment{}, nil, fail("invalid_session_meta")
 			}
 			if meta.ID != "" && meta.ID != next.ID {
 				// A forked rollout replays its parent's session_meta after its own.
@@ -197,7 +279,7 @@ func parseSession(ctx context.Context, path string, modTime time.Time, maxBytes 
 		case "response_item":
 			var msg message
 			if json.Unmarshal(record.Payload, &msg) != nil {
-				return domain.PipelineFragment{}, fail("invalid_response_item")
+				return domain.PipelineFragment{}, nil, fail("invalid_response_item")
 			}
 			if msg.Type != "message" || (msg.Role != "user" && msg.Role != "assistant") {
 				continue
@@ -211,14 +293,14 @@ func parseSession(ctx context.Context, path string, modTime time.Time, maxBytes 
 			if len(parts) > 0 {
 				text := strings.Join(parts, "\n")
 				if retained += len(text); retained > maxRetainedText {
-					return domain.PipelineFragment{}, fail("size_limit")
+					return domain.PipelineFragment{}, nil, fail("size_limit")
 				}
 				responses = append(responses, textMessage{msg.Role, text})
 			}
 		case "event_msg":
 			var msg message
 			if json.Unmarshal(record.Payload, &msg) != nil {
-				return domain.PipelineFragment{}, fail("invalid_event")
+				return domain.PipelineFragment{}, nil, fail("invalid_event")
 			}
 			role := ""
 			switch msg.Type {
@@ -229,23 +311,25 @@ func parseSession(ctx context.Context, path string, modTime time.Time, maxBytes 
 			}
 			if role != "" && strings.TrimSpace(msg.Message) != "" {
 				if retained += len(msg.Message); retained > maxRetainedText {
-					return domain.PipelineFragment{}, fail("size_limit")
+					return domain.PipelineFragment{}, nil, fail("size_limit")
 				}
 				events = append(events, textMessage{role, msg.Message})
 			}
 		}
-	}
-	if scanner.Err() != nil {
-		// The line that overflowed the scanner starts at the running offset.
-		lineNo++
-		lineStart = next
-		return domain.PipelineFragment{}, fail("unreadable_line")
+		if readErr == io.EOF {
+			break
+		}
 	}
 	if limited.N == 0 {
-		return domain.PipelineFragment{}, &domain.CollectionError{Class: "size_limit", Offset: maxBytes}
+		return domain.PipelineFragment{}, nil, &domain.CollectionError{Class: "size_limit", Offset: maxBytes}
 	}
 	if meta.ID == "" {
-		return domain.PipelineFragment{}, &domain.CollectionError{Class: "missing_session_meta"}
+		if tail != nil {
+			// A brand-new file whose first line is still being written has nothing
+			// to import yet.
+			return domain.PipelineFragment{}, tail, nil
+		}
+		return domain.PipelineFragment{}, nil, &domain.CollectionError{Class: "missing_session_meta"}
 	}
 	// Legacy event messages duplicate response items; prefer response material.
 	messages := responses
@@ -253,7 +337,7 @@ func parseSession(ctx context.Context, path string, modTime time.Time, maxBytes 
 		messages = events
 	}
 	if len(messages) == 0 {
-		return domain.PipelineFragment{}, nil
+		return domain.PipelineFragment{}, tail, nil
 	}
 	var parts []string
 	for _, msg := range messages {
@@ -268,5 +352,5 @@ func parseSession(ctx context.Context, path string, modTime time.Time, maxBytes 
 		Content: strings.Join(parts, "\n\n"), CreatedAt: created.UTC(),
 		Metadata:      map[string]any{"thread_id": meta.ID, "session_id": meta.SessionID, "cwd": meta.CWD, "cli_version": meta.CLIVersion, "parent_thread_id": meta.ParentThreadID, "source_file": path},
 		CanonicalPath: filepath.ToSlash(filepath.Join("fragments", "chats", "codex", created.Format("2006-01-02"), meta.ID)),
-	}, nil
+	}, tail, nil
 }

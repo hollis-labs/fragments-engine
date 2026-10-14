@@ -153,8 +153,9 @@ func (p *Pipeline) RunOnce(ctx context.Context, ingestCfg config.IngestConfig) (
 	if reasons := skips.ByClass(); len(reasons) > 0 && private {
 		run.SkipReasons = reasons
 		for class, n := range reasons {
-			// trimmed_tail inputs were imported; the class only keeps them visible.
-			if class != "trimmed_tail" {
+			// trimmed_tail and incomplete_tail inputs were imported (up to the last
+			// complete record); the class only keeps them visible.
+			if class != "trimmed_tail" && class != "incomplete_tail" {
 				run.Skipped += n
 			}
 			// Unchanged and empty inputs are the steady state, not news.
@@ -162,12 +163,39 @@ func (p *Pipeline) RunOnce(ctx context.Context, ingestCfg config.IngestConfig) (
 				log.Printf("ingest %s: skipped %d input(s) class=%s", ingestCfg.Name, n, class)
 			}
 		}
+		// Say where each real failure is (class, file hash, line, offset; never
+		// content), capped so a bad archive cannot flood the log.
+		logged := 0
+		for _, s := range skips.Skips {
+			switch s.Class {
+			case "unchanged", "empty", "trimmed_tail", "incomplete_tail", "size_limit":
+				continue
+			}
+			if logged++; logged > 20 {
+				break
+			}
+			skipped := s
+			log.Printf("ingest %s: skipped input (%s)", ingestCfg.Name, &skipped)
+		}
 	}
 	now := p.now().UTC()
 	for _, materialCandidate := range collected {
 		if private || domain.IsTranscript(materialCandidate.Source, materialCandidate.SourceType, materialCandidate.SourceIdentity.Provider) {
 			outcome, err := p.transcripts.Accept(ctx, ingestCfg.Name, materialCandidate)
 			if err != nil {
+				// One record the store refuses (too large, attachments) must not
+				// block every other source file: count it and go on. Store
+				// failures such as ownership or I/O still abort the run.
+				if errors.Is(err, transcript.ErrRecordRejected) {
+					run.Skipped++
+					if run.SkipReasons == nil {
+						run.SkipReasons = map[string]int{}
+					}
+					run.SkipReasons["record_rejected"]++
+					log.Printf("ingest %s: record rejected by the private store (record=%s)", ingestCfg.Name,
+						domain.HashPath(materialCandidate.SourceID+"/"+materialCandidate.SourceIdentity.SegmentKey))
+					continue
+				}
 				return domain.IngestRun{}, err
 			}
 			switch outcome {

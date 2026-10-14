@@ -76,12 +76,18 @@ func (Source) Collect(ctx context.Context, cfg config.IngestConfig) ([]domain.Pi
 		}
 		fragment, skip, err := collectSegment(ctx, root, path, relPath, info, excerpt)
 		if err != nil {
-			var diag *domain.CollectionError
-			if errors.As(err, &diag) && diag.Class == "unreadable_line" {
-				domain.NoteSkip(ctx, diag.Class, relPath)
-				continue
+			if cerr := ctx.Err(); cerr != nil {
+				return nil, cerr
 			}
-			return nil, domain.AttributeFile(err, relPath)
+			// One bad or unreadable file costs only itself: counted with its class
+			// and position, never the other files.
+			var diag *domain.CollectionError
+			if errors.As(err, &diag) {
+				domain.NoteSkipAt(ctx, diag.Class, relPath, diag.Line, diag.Offset)
+			} else {
+				domain.NoteSkip(ctx, "unreadable_file", relPath)
+			}
+			continue
 		}
 		if skip != "" {
 			domain.NoteSkip(ctx, skip, relPath)
@@ -133,7 +139,18 @@ func sessionFiles(ctx context.Context, root string) ([]string, error) {
 				return err
 			}
 			if walkErr != nil {
-				return walkErr
+				if path == project {
+					return walkErr
+				}
+				// One unreadable or just-vanished directory (rsync is writing
+				// here) must not abort the whole source.
+				if r, e := filepath.Rel(root, path); e == nil {
+					domain.NoteSkip(ctx, "unreadable_dir", filepath.ToSlash(r))
+				}
+				if entry != nil && entry.IsDir() {
+					return filepath.SkipDir
+				}
+				return nil
 			}
 			rel, err := filepath.Rel(project, path)
 			if err != nil {

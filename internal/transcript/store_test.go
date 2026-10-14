@@ -226,3 +226,32 @@ func canonicalTempDir(t *testing.T) string {
 	}
 	return path
 }
+
+func TestRejectedRecordsAreDistinguishableFromStoreFailures(t *testing.T) {
+	root := filepath.Join(canonicalTempDir(t), "private")
+	st, err := Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	huge := strings.Repeat("a", 17<<20)
+	for name, in := range map[string]domain.PipelineFragment{
+		"oversized":   {Source: "codex", SourceID: "x", Content: huge},
+		"no identity": {Source: "", SourceID: "x", Content: "text"},
+		"attachments": {Source: "codex", SourceID: "x", Content: "text", Attachments: []domain.PipelineAttachment{{Name: "a"}}},
+	} {
+		if _, err := st.Accept(context.Background(), "reg", in); !errors.Is(err, ErrRecordRejected) {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if name == "attachments" {
+			if _, err := st.Accept(context.Background(), "reg", in); !errors.Is(err, ErrAttachments) {
+				t.Fatal("the original error must stay matchable")
+			}
+		}
+	}
+	// A store failure is NOT a rejected record: the caller must still abort.
+	_ = st.Close()
+	if _, err := st.Accept(context.Background(), "reg", domain.PipelineFragment{Source: "codex", SourceID: "ok", Content: "text"}); err == nil || errors.Is(err, ErrRecordRejected) {
+		t.Fatalf("a closed store must fail as a store error: %v", err)
+	}
+}
