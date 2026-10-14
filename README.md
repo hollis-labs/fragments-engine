@@ -78,6 +78,45 @@ skipped. Symlinked projects/files and unrelated nested JSONL files are ignored.
 The source is read-only and uses the same required private transcript store and
 pre-persistence redaction path. Configuring a layout does not activate a schedule.
 
+### Claude transcript structure and incremental capture
+
+Besides the searchable text, a Claude ingest keeps the structure of each session
+in the same owner-private `transcripts.db`: `tx_sessions` (main and subagent
+sessions, keyed so `native_session_id` joins to Tether's), `tx_turns` (uuid,
+parent, role, timestamp, request id), `tx_tool_calls`, `tx_usage` and
+`tx_cursors`. Every string goes through the same redaction before it is stored.
+The raw JSONL stays the immutable source of truth; nothing here is a copy of it,
+and none of it reaches shared recall, routing or destinations.
+
+- **Thinking** is kept as presence and byte length only, never text.
+- **Tool calls** keep name, redacted input (capped at 4 KiB; over the cap only
+  the top-level keys and size), start/end time, and the result's status and byte
+  size. A redacted result excerpt is off by default; set
+  `rules.tool_result_excerpt_bytes` (at most 2048) to keep one.
+- **Usage** is tokens only (input, output, cache read, cache creation), one row
+  per request id. A response split over several lines repeats its usage, so rows
+  merge by maximum rather than summing lines. Prices and task or workstream
+  dimensions belong to whoever joins on the session id.
+- **Subagents** (`<session>/subagents/**`) are sessions of their own, linked to
+  the parent session and, through `spawn_tool_use_id` from the sibling
+  `.meta.json`, to the tool call that spawned them.
+- **Incremental capture:** each file has a cursor (byte offset after the last
+  complete line, plus a digest of the bytes before it). An unchanged file costs
+  a stat; an appended file is read from its offset; a truncated or rewritten
+  file fails the digest check and is re-parsed whole, replacing its rows. A
+  half-written final line waits for the next run.
+- A file over `max_file_size_mb` (default 1 GiB), a line over 10 MiB
+  (`unreadable_line`) or a malformed line (`malformed_line`) is skipped and
+  counted, never silent; unchanged files count as `unchanged`.
+- The search text is rebuilt from the stored turns and capped at 12 MiB per
+  session segment; `tx_turns` keeps every turn.
+
+`fragments-engine transcript tool-calls --config PATH [--name N] [--session ID]
+[--since T] [--until T] [--status ok|error|none]` and `transcript usage
+--session ID` print metadata only (no text, input or output). Opening a
+`transcripts.db` that has these tables with a build that predates them is
+refused, so keep a backup before the first run of a new build on a live store.
+
 ### Codex session archives
 
 The disabled `codex_sessions` example reads JSONL files recursively under its

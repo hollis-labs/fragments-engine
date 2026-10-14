@@ -121,7 +121,14 @@ func (p *Pipeline) RunOnce(ctx context.Context, ingestCfg config.IngestConfig) (
 	}
 	startedAt := p.now().UTC()
 	skips := &domain.SkipCollector{}
-	collected, err := source.Collect(domain.WithSkipCollector(ctx, skips), ingestCfg)
+	collectCtx := domain.WithSkipCollector(ctx, skips)
+	if private {
+		// Lets an incremental source resume from what the store already holds.
+		collectCtx = domain.WithCursorLookup(collectCtx, func(path string) (domain.TranscriptCursor, bool) {
+			return p.transcripts.Cursor(ctx, ingestCfg.Name, path)
+		})
+	}
+	collected, err := source.Collect(collectCtx, ingestCfg)
 	if err != nil {
 		if private {
 			if ctx.Err() != nil {
@@ -147,7 +154,10 @@ func (p *Pipeline) RunOnce(ctx context.Context, ingestCfg config.IngestConfig) (
 		run.SkipReasons = reasons
 		for class, n := range reasons {
 			run.Skipped += n
-			log.Printf("ingest %s: skipped %d input(s) class=%s", ingestCfg.Name, n, class)
+			// Unchanged and empty inputs are the steady state, not news.
+			if class != "unchanged" && class != "empty" {
+				log.Printf("ingest %s: skipped %d input(s) class=%s", ingestCfg.Name, n, class)
+			}
 		}
 	}
 	now := p.now().UTC()

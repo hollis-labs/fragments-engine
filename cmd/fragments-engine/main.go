@@ -17,6 +17,7 @@ import (
 	"github.com/hollis-labs/fragments-engine/internal/domain"
 	mcpserver "github.com/hollis-labs/fragments-engine/internal/mcp"
 	"github.com/hollis-labs/fragments-engine/internal/service"
+	"github.com/hollis-labs/fragments-engine/internal/transcript"
 )
 
 func main() {
@@ -51,6 +52,8 @@ func run(args []string) error {
 		return runQueue(args[1:])
 	case "recall":
 		return runRecall(args[1:])
+	case "transcript":
+		return runTranscript(args[1:])
 	case "serve-api":
 		return runServeAPI(args[1:])
 	case "serve-mcp":
@@ -114,8 +117,8 @@ func runIngestRun(args []string) error {
 		return err
 	}
 	for _, run := range runs {
-		fmt.Printf("%s (%s): inserted=%d skipped=%d%s started=%s finished=%s\n",
-			run.Name, run.Kind, run.Inserted, run.Skipped, skipReasons(run.SkipReasons),
+		fmt.Printf("%s (%s): inserted=%d updated=%d skipped=%d%s started=%s finished=%s\n",
+			run.Name, run.Kind, run.Inserted, run.Updated, run.Skipped, skipReasons(run.SkipReasons),
 			run.StartedAt.Format("2006-01-02T15:04:05Z07:00"),
 			run.FinishedAt.Format("2006-01-02T15:04:05Z07:00"),
 		)
@@ -1756,7 +1759,7 @@ func runQueuePurge(args []string) error {
 }
 
 func usageError() error {
-	return fmt.Errorf("usage: fragments-engine <init|ingest|search|fragment|entity|inbox|route|queue|recall|serve-api|serve-mcp>")
+	return fmt.Errorf("usage: fragments-engine <init|ingest|search|fragment|entity|inbox|route|queue|recall|transcript|serve-api|serve-mcp>")
 }
 
 func printDestinationStatus(item domain.DestinationStatus) {
@@ -1847,4 +1850,74 @@ func skipReasons(reasons map[string]int) string {
 		parts = append(parts, fmt.Sprintf("%s=%d", class, reasons[class]))
 	}
 	return " (" + strings.Join(parts, " ") + ")"
+}
+
+// runTranscript reads structure from the owner-private transcript store. It
+// prints metadata only (names, ids, times, counts); no transcript text, tool
+// input or tool output is ever printed.
+func runTranscript(args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("usage: fragments-engine transcript <tool-calls|usage> --config PATH [flags]")
+	}
+	fs := flag.NewFlagSet("transcript "+args[0], flag.ContinueOnError)
+	configPath := fs.String("config", "fragments.example.yaml", "path to config file")
+	name := fs.String("name", "", "tool name")
+	session := fs.String("session", "", "native session id")
+	since := fs.String("since", "", "start time (RFC3339)")
+	until := fs.String("until", "", "end time, exclusive (RFC3339)")
+	status := fs.String("status", "", "ok, error or none")
+	limit := fs.Int("limit", 100, "max rows")
+	if err := fs.Parse(args[1:]); err != nil {
+		return err
+	}
+	cfg, err := config.Load(*configPath)
+	if err != nil {
+		return err
+	}
+	instance, err := app.Open(context.Background(), cfg)
+	if err != nil {
+		return err
+	}
+	defer instance.Close()
+	store := instance.Transcripts()
+	if store == nil {
+		return fmt.Errorf("transcript: no private root configured")
+	}
+	switch args[0] {
+	case "tool-calls":
+		filter := transcript.ToolCallFilter{Name: *name, NativeSessionID: *session, Status: *status, Limit: *limit}
+		for _, bound := range []struct {
+			raw string
+			dst *time.Time
+		}{{*since, &filter.Since}, {*until, &filter.Until}} {
+			if bound.raw == "" {
+				continue
+			}
+			ts, err := time.Parse(time.RFC3339, bound.raw)
+			if err != nil {
+				return fmt.Errorf("invalid time %q", bound.raw)
+			}
+			*bound.dst = ts
+		}
+		calls, err := store.QueryToolCalls(context.Background(), filter)
+		if err != nil {
+			return err
+		}
+		for _, c := range calls {
+			fmt.Printf("%s\t%s\t%s\t%s\t%s\t%s\tresult_bytes=%d\n", c.StartedAt, c.Name, c.Status, c.NativeSessionID, c.SessionKind, c.ToolUseID, c.ResultBytes)
+		}
+		return nil
+	case "usage":
+		if *session == "" {
+			return fmt.Errorf("transcript usage requires --session")
+		}
+		t, err := store.SessionUsage(context.Background(), *session)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("requests=%d input=%d output=%d cache_read=%d cache_creation=%d\n", t.Requests, t.Input, t.Output, t.CacheRead, t.CacheCreation)
+		return nil
+	default:
+		return fmt.Errorf("unknown transcript command %q", args[0])
+	}
 }
