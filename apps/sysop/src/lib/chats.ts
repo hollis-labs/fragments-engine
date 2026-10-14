@@ -25,6 +25,10 @@ export interface ChatSession {
 export interface ChatSessionPage {
   items: ChatSession[]
   next_cursor?: string
+  /** 'too_broad' when a search could not finish in time; refine it. */
+  hint?: string
+  /** Results listed without a snippet (very large documents or time budget). */
+  snippets_skipped?: number
 }
 
 export interface ChatToolCall {
@@ -89,9 +93,14 @@ export interface ChatDetail {
 export interface ChatFacets {
   tools: string[]
   models: string[]
-  projects: string[]
+  project_count: number
   tags?: string[]
   total: number
+}
+
+export interface ChatProjectCount {
+  project: string
+  sessions: number
 }
 
 export interface ChatStatus {

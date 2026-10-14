@@ -292,7 +292,16 @@ private store for its owner: `GET /v1/transcripts/status`, `/sessions` (filters
 `until`; `sort` of `started|turns|tokens|tool_calls|errors` with `order`; `q`
 for full-text search with snippets; `limit` and `cursor`), `/sessions/{id}`
 (paged turns, tool-call metadata, usage, subagent tree, and enrichment with turn
-citations once it has run) and `/facets`. Semantic search is not offered yet.
+citations once it has run), `/facets` (tools, models, tags, counts) and
+`/projects?q=` (working directories containing `q`, most used first, for
+search-as-you-type). Semantic search is not offered yet.
+
+Reads share the database file with the ingest writers and, in DELETE journal
+mode, a reader blocks their commits, so every search is short. Results are ranked
+first; snippets then fill in rank order inside a 700 ms budget and are skipped for
+documents over 256 KiB (`snippets_skipped` counts them); a search that cannot
+finish in 4 s returns `hint: "too_broad"` instead of holding the lock. A session
+with no title and no user text is named `Untitled session · <tool> · <date>`.
 
 This is the one deliberate exception to "the API never serves transcript
 content", so it is fenced:

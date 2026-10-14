@@ -27,6 +27,7 @@ func (s *Server) registerTranscriptRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET "+transcriptsPrefix+"/sessions", s.transcriptsGuard(s.handleTranscriptSessions))
 	mux.HandleFunc("GET "+transcriptsPrefix+"/sessions/{id}", s.transcriptsGuard(s.handleTranscriptSession))
 	mux.HandleFunc("GET "+transcriptsPrefix+"/facets", s.transcriptsGuard(s.handleTranscriptFacets))
+	mux.HandleFunc("GET "+transcriptsPrefix+"/projects", s.transcriptsGuard(s.handleTranscriptProjects))
 	// Any other method on the prefix must look like an unknown route when the
 	// feature is off, and be refused when it is on.
 	mux.HandleFunc(transcriptsPrefix+"/", s.transcriptsGuard(func(w http.ResponseWriter, _ *http.Request, _ *service.TranscriptBrowseService) {
@@ -228,4 +229,14 @@ func (s *Server) handleTranscriptFacets(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 	writeJSON(w, http.StatusOK, f)
+}
+
+func (s *Server) handleTranscriptProjects(w http.ResponseWriter, r *http.Request, svc *service.TranscriptBrowseService) {
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	items, err := svc.Projects(r.Context(), strings.TrimSpace(r.URL.Query().Get("q")), limit)
+	if err != nil {
+		http.Error(w, "cannot read projects", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
 }

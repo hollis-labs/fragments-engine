@@ -21,6 +21,7 @@ import type {
 import type {
   ChatDetail,
   ChatFacets,
+  ChatProjectCount,
   ChatSessionPage,
   ChatStatus,
 } from './chats'
@@ -1527,6 +1528,19 @@ export function fetchTranscriptFacets(options?: ApiRequestOptions): Promise<Chat
   })
 }
 
+/** Working directories containing q, most used first (search-as-you-type). */
+export async function fetchTranscriptProjects(
+  q: string,
+  options?: ApiRequestOptions,
+): Promise<ChatProjectCount[]> {
+  const data = await apiFetch<{ items?: ChatProjectCount[] }>(
+    '/v1/transcripts/projects',
+    { signal: options?.signal, headers: transcriptHeaders() },
+    { q, limit: 20 },
+  )
+  return data.items ?? []
+}
+
 export const apiClient = {
   fetchInbox,
   fetchInboxEntities,
@@ -1536,6 +1550,7 @@ export const apiClient = {
   fetchTranscriptSessions,
   fetchTranscriptSession,
   fetchTranscriptFacets,
+  fetchTranscriptProjects,
   fetchReaderItems,
   fetchReaderItem,
   executeReaderCommand,

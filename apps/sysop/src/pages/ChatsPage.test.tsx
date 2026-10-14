@@ -10,12 +10,14 @@ const row = (id: string, title: string): ChatSession => ({
   id, tool: 'claude', kind: 'main', title, turns: 1, tokens: 10, tool_calls: 0, errors: 0,
 })
 
-function setup() {
-  const fetchTranscriptSessions = vi.fn().mockResolvedValue({ items: [row('a'.repeat(64), 'first synthetic')], next_cursor: 'c1' })
+function setup(sessionsResult: unknown = { items: [row('a'.repeat(64), 'first synthetic')], next_cursor: 'c1' }) {
+  const fetchTranscriptSessions = vi.fn().mockResolvedValue(sessionsResult)
+  const fetchTranscriptProjects = vi.fn().mockResolvedValue([{ project: '/synthetic/deep/project-0699', sessions: 3 }])
   const client = {
     ...apiClient,
     fetchTranscriptSessions,
-    fetchTranscriptFacets: vi.fn().mockResolvedValue({ tools: ['claude', 'codex'], models: [], projects: [], total: 7 }),
+    fetchTranscriptFacets: vi.fn().mockResolvedValue({ tools: ['claude', 'codex'], models: [], project_count: 835, total: 7 }),
+    fetchTranscriptProjects,
   } as unknown as typeof apiClient
   render(
     <ApiProvider client={client}>
@@ -24,14 +26,14 @@ function setup() {
       </MemoryRouter>
     </ApiProvider>,
   )
-  return fetchTranscriptSessions
+  return { fetchTranscriptSessions, fetchTranscriptProjects }
 }
 
 describe('ChatsPage', () => {
   beforeEach(() => localStorage.clear())
 
   it('loads sessions sorted newest first and pages with the cursor', async () => {
-    const fetchSessions = setup()
+    const { fetchTranscriptSessions: fetchSessions } = setup()
     await screen.findByText('first synthetic')
     expect(fetchSessions.mock.calls[0][0]).toMatchObject({ sort: 'started', order: 'desc', limit: 50 })
     fireEvent.click(screen.getByRole('button', { name: 'Load more' }))
@@ -39,7 +41,7 @@ describe('ChatsPage', () => {
   })
 
   it('applies filters and sort to the query and persists them', async () => {
-    const fetchSessions = setup()
+    const { fetchTranscriptSessions: fetchSessions } = setup()
     await screen.findByText('first synthetic')
     await screen.findByRole('option', { name: 'codex' })
     fireEvent.change(screen.getByLabelText('Tool'), { target: { value: 'codex' } })
@@ -51,14 +53,27 @@ describe('ChatsPage', () => {
   })
 
   it('filters by enrichment state', async () => {
-    const fetchSessions = setup()
+    const { fetchTranscriptSessions: fetchSessions } = setup()
     await screen.findByText('first synthetic')
     fireEvent.change(screen.getByLabelText('Enriched'), { target: { value: 'yes' } })
     await waitFor(() => expect(fetchSessions.mock.calls.at(-1)?.[0]).toMatchObject({ has_enrichment: 'true' }))
   })
 
+  it('suggests projects as the owner types, beyond any fixed list', async () => {
+    const { fetchTranscriptProjects } = setup()
+    await screen.findByText('first synthetic')
+    fireEvent.change(screen.getByLabelText('Project'), { target: { value: 'project-0699' } })
+    await waitFor(() => expect(fetchTranscriptProjects.mock.calls.at(-1)?.[0]).toBe('project-0699'))
+    await waitFor(() => expect(document.querySelector('#chat-projects option[value="/synthetic/deep/project-0699"]')).not.toBeNull())
+  })
+
+  it('tells the owner to refine a search that was too broad', async () => {
+    setup({ items: [], hint: 'too_broad' })
+    expect(await screen.findByText('That search is too broad')).toBeTruthy()
+  })
+
   it('sends the search box text as q after a pause', async () => {
-    const fetchSessions = setup()
+    const { fetchTranscriptSessions: fetchSessions } = setup()
     await screen.findByText('first synthetic')
     fireEvent.change(screen.getByLabelText('Search chats'), { target: { value: 'zebra' } })
     await waitFor(() => expect(fetchSessions.mock.calls.at(-1)?.[0]).toMatchObject({ q: 'zebra' }))
