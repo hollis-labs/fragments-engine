@@ -4,11 +4,8 @@ package antigravity
 
 import (
 	"context"
-	"database/sql"
 	"errors"
-	"fmt"
 	"io"
-	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -38,6 +35,13 @@ func (Source) Collect(ctx context.Context, cfg config.IngestConfig) ([]domain.Pi
 			return nil, errors.New("Antigravity file limit exceeds 1024 MiB")
 		}
 		maxBytes = int64(rules.MaxFileSizeMB) * 1024 * 1024
+	}
+	excerpt := rules.ToolResultExcerptBytes
+	if excerpt < 0 {
+		excerpt = 0
+	}
+	if excerpt > maxExcerpt {
+		excerpt = maxExcerpt
 	}
 	if strings.TrimSpace(cfg.Source.Root) == "" {
 		return nil, errors.New("Antigravity source root is required")
@@ -73,11 +77,13 @@ func (Source) Collect(ctx context.Context, cfg config.IngestConfig) ([]domain.Pi
 				continue
 			}
 			var (
-				content string
-				trimmed bool
+				content  string
+				trimmed  bool
+				captured domain.PipelineFragment
+				skip     string
 			)
 			if section == "conversations" {
-				content, err = conversation(ctx, path, maxBytes)
+				captured, skip, err = captureConversation(ctx, filepath.Join(root, "brain"), path, relPath, before, maxBytes, excerpt)
 			} else {
 				content, trimmed, err = brain(ctx, path, maxBytes)
 			}
@@ -99,6 +105,14 @@ func (Source) Collect(ctx context.Context, cfg config.IngestConfig) ([]domain.Pi
 			after, err := os.Lstat(path)
 			if err != nil || !os.SameFile(before, after) || before.Size() != after.Size() || !before.ModTime().Equal(after.ModTime()) {
 				return nil, errors.New("Antigravity input changed during collection")
+			}
+			if section == "conversations" {
+				if skip != "" {
+					domain.NoteSkip(ctx, skip, relPath)
+					continue
+				}
+				out = append(out, captured)
+				continue
 			}
 			if strings.TrimSpace(content) == "" {
 				continue
@@ -212,61 +226,4 @@ func snapshotReady(path string) error {
 		}
 	}
 	return nil
-}
-
-func conversation(ctx context.Context, path string, maxBytes int64) (string, error) {
-	if err := snapshotReady(path); err != nil {
-		return "", err
-	}
-	// immutable avoids source locks, journals and SHM writes. Pending WAL must
-	// therefore be rejected explicitly, rather than silently ignored.
-	u := url.URL{Scheme: "file", Path: path, RawQuery: "mode=ro&immutable=1"}
-	db, err := sql.Open("sqlite", u.String())
-	if err != nil {
-		return "", errors.New("cannot open Antigravity database")
-	}
-	defer db.Close()
-	db.SetMaxOpenConns(1)
-	// ORDER BY may need temporary storage; raw text must stay in memory.
-	if _, err := db.ExecContext(ctx, `PRAGMA temp_store=MEMORY`); err != nil {
-		return "", errors.New("cannot configure Antigravity read-only database")
-	}
-	rows, err := db.QueryContext(ctx, `SELECT step_type, step_format, length(step_payload), CASE WHEN length(step_payload) <= 10485760 THEN step_payload END FROM steps WHERE step_type IN (14,15) ORDER BY idx`)
-	if err != nil {
-		return "", errors.New("unsupported Antigravity database schema")
-	}
-	defer rows.Close()
-	var out strings.Builder
-	for rows.Next() {
-		var stepType, format, size int
-		var raw []byte
-		if rows.Scan(&stepType, &format, &size, &raw) != nil || format != 0 || size > 10*1024*1024 {
-			return "", errPayload
-		}
-		text, err := stepText(stepType, raw)
-		if err != nil {
-			return "", err
-		}
-		if strings.TrimSpace(text) == "" {
-			continue
-		}
-		role := "user"
-		if stepType == 15 {
-			role = "assistant"
-		}
-		if int64(out.Len()+len(text)+20) > maxBytes {
-			return "", errors.New("Antigravity conversation exceeds size limit")
-		}
-		fmt.Fprintf(&out, "## %s\n\n%s\n\n", role, text)
-	}
-	if rows.Err() != nil {
-		return "", errors.New("cannot read Antigravity conversation")
-	}
-	if err := ctx.Err(); err != nil {
-		return "", err
-	}
-	if err := snapshotReady(path); err != nil {
-		return "", err
-	}
-	return strings.TrimSpace(out.String()), nil
 }

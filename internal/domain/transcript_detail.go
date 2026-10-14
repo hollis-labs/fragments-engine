@@ -92,6 +92,14 @@ type TranscriptUsage struct {
 // TranscriptCursor records how far a segment was consumed. ByteOffset sits just
 // after the last complete line; TailDigest covers the bytes before it so a
 // rewritten or truncated source is detected rather than trusted.
+//
+// Antigravity conversation databases are replaced wholesale by each snapshot, so
+// there ByteOffset is the idx of the first step that has not been consumed (steps
+// with a smaller idx are stored; a trailing run of running or aborted steps is
+// left unconsumed so it is read again), LineNo is the number of steps parsed on
+// the last pass, and TailDigest identifies the last consumed step by immutable
+// facts. A snapshot whose digest at ByteOffset-1 differs was rewritten and is
+// re-parsed whole.
 type TranscriptCursor struct {
 	FileSize   int64
 	ModTime    time.Time

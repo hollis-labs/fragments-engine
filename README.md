@@ -268,9 +268,9 @@ layout (`idx`, `step_type`, `step_format`, `step_payload`). Format 0 user input
 (type 14, protobuf field 19: text 2, item text 3.1, fallback query 1) and planner
 response (type 15, field 20.1) are decoded in order. This bounded field mapping is
 based on [firsthand descriptor-derived parser source](https://github.com/skillsynchq/txcript/blob/8cd3b0e63f797b1531a14197f41a0e9eeedec8c6/src/harness/antigravity.rs),
-not a vendor compatibility guarantee. Tools, reasoning, images and opaque
-metadata are omitted; unsupported formats/malformed text fail without payload
-output. There is no heuristic scan for message-like protobuf strings.
+not a vendor compatibility guarantee. Reasoning, images and opaque metadata are
+not part of the searchable text (tool calls and usage are captured structurally,
+see below); unsupported formats/malformed text fail without payload output. There is no heuristic scan for message-like protobuf strings.
 
 SQLite is opened read-only and immutable with temporary storage in memory.
 A database with a nonempty WAL/journal sidecar is skipped (`pending_wal`), not
@@ -285,6 +285,41 @@ complete sync.
 Do not ingest a database that is being modified; detected replacement/size/time
 changes refuse collection. Source timestamps are file observations, not invented
 conversation creation times.
+
+### Antigravity structured capture
+
+Besides the searchable text, each conversation database is captured into the same
+`tx_*` tables as Claude (see above), with `tool = antigravity`. All of it passes
+through the same redaction, and none of it is a copy of the source.
+
+- **Session:** `native_session_id` is the conversation id (the `.db` file name,
+  which equals `trajectory_meta.cascade_id` and the `brain/<id>` directory). The
+  workspace path is the first path in `trajectory_metadata_blob` (`cwd`); the
+  model is the first model seen. There are no subagent or parent links, git
+  branch or entrypoint in this format, so `kind` is always `main`.
+- **Turns:** one per user (step type 14) and planner (15) step, keyed by step
+  `idx` (the metadata uuid is shared by the steps of one model turn, so it cannot
+  be a key). Timestamps come from the step metadata. Thinking text is never kept,
+  only presence and byte length.
+- **Usage:** input, output and cache-read tokens from the planner step metadata,
+  one row per response id; the model name joins from `gen_metadata` by that id.
+- **Tool calls:** name and redacted arguments from the planner step; the result is
+  the matching type-132 step, linked by call id. Status is `ok` for step status 3,
+  `error` when the step has error details (status 4 or 7), otherwise `none`. The
+  size is that of `brain/<id>/.system_generated/steps/<idx>/output.txt`; an excerpt
+  is off by default and, like Claude, bounded to 2048 redacted bytes by
+  `rules.tool_result_excerpt_bytes`.
+- **Other step types** (17, 23, 90, 101, and any new one) are skipped and counted
+  per type (`unsupported_step_<type>`); they do not count as skipped inputs.
+- **Cursor:** a snapshot replaces the whole file, so `ByteOffset` is the `idx` of
+  the first step not yet consumed, and `TailDigest` identifies the last consumed
+  step. An unchanged snapshot is not opened; appended steps are read from the
+  cursor; a snapshot whose digest at the cursor differs was rewritten and is
+  re-parsed whole, replacing its derived rows. A trailing run of running or
+  aborted steps (status 2, 6, 7) is left unconsumed so it is read again once the
+  producer syncs its final state. A conversation is read in passes of at most 20,000
+  steps or 64 MiB of step text (`batch_continues`) and continues on the next fire.
+- `pending_wal`, `trimmed_tail` and `not_utf8` behave as described above.
 
 Brain `.txt`, `.md`, `.log`, `.json` and `.jsonl` files are imported as UTF-8 text
 artifacts with separate physical-file segment identities, including compact/full
