@@ -2,6 +2,8 @@ package chatgpt
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"os"
 	"path/filepath"
 	"strings"
@@ -46,17 +48,33 @@ func TestSourceCollect(t *testing.T) {
 	if item.Metadata["user_email"] != "tester@example.com" {
 		t.Fatalf("expected user email metadata, got %#v", item.Metadata["user_email"])
 	}
-	if len(item.Attachments) != 3 {
-		t.Fatalf("expected 3 attachments, got %d", len(item.Attachments))
+	if len(item.Attachments) != 0 {
+		t.Fatalf("private transcript path must not emit attachments, got %d", len(item.Attachments))
 	}
-	if item.Attachments[0].Kind != "image" || item.Attachments[0].SourcePath == "" {
-		t.Fatalf("expected local image attachment, got %+v", item.Attachments[0])
+	if item.Metadata["attachment_count"] != 2 {
+		t.Fatalf("expected attachment_count=2, got %#v", item.Metadata["attachment_count"])
 	}
-	if item.Attachments[1].Kind != "markdown" || !strings.HasSuffix(item.Attachments[1].SourcePath, "roadmap-note.md") {
-		t.Fatalf("expected local markdown attachment, got %+v", item.Attachments[1])
+	if item.Metadata["url_refs_skipped"] != 1 {
+		t.Fatalf("expected url_refs_skipped=1, got %#v", item.Metadata["url_refs_skipped"])
 	}
-	if item.Attachments[2].Kind != "pdf" || item.Attachments[2].ExternalURL != "https://example.com/roadmap.pdf" {
-		t.Fatalf("expected referenced pdf attachment, got %+v", item.Attachments[2])
+	refs, ok := item.Metadata["attachment_refs"].([]any)
+	if !ok || len(refs) != 2 {
+		t.Fatalf("expected 2 attachment refs, got %#v", item.Metadata["attachment_refs"])
+	}
+	first := refs[0].(map[string]any)
+	if first["kind"] != "image" || first["mime"] != "image/png" {
+		t.Fatalf("unexpected first ref: %#v", first)
+	}
+	sum := sha256.Sum256([]byte("diagram.png"))
+	if first["name_sha256"] != hex.EncodeToString(sum[:]) {
+		t.Fatalf("name hash mismatch: %#v", first["name_sha256"])
+	}
+	for _, ref := range refs {
+		for key, value := range ref.(map[string]any) {
+			if text, ok := value.(string); ok && (strings.Contains(text, "diagram.png") || strings.Contains(text, "roadmap-note.md") || strings.Contains(text, "/") && key != "mime") {
+				t.Fatalf("ref %q leaks a name or path", key)
+			}
+		}
 	}
 }
 
@@ -124,5 +142,52 @@ func TestValidateArchivePolicy(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "source.root must not be inside archive_root") {
 		t.Fatalf("expected nested source error, got %v", err)
+	}
+}
+
+func TestExtractTextParts(t *testing.T) {
+	cases := []struct {
+		name        string
+		content     exportContent
+		wantText    string
+		wantNonText int
+	}{
+		{"text", exportContent{ContentType: "text", Parts: []any{"hello", " ", "world"}}, "hello\nworld", 0},
+		{"multimodal keeps text and counts non-text", exportContent{ContentType: "multimodal_text", Parts: []any{
+			map[string]any{"content_type": "image_asset_pointer"}, "caption", map[string]any{"content_type": "image_asset_pointer"},
+		}}, "caption", 2},
+		{"multimodal with only non-text", exportContent{ContentType: "multimodal_text", Parts: []any{map[string]any{"x": 1}}}, "", 1},
+		{"nil part is not counted", exportContent{ContentType: "multimodal_text", Parts: []any{nil, "t"}}, "t", 0},
+		{"thoughts ignored", exportContent{ContentType: "thoughts", Parts: []any{"secret chain"}}, "", 0},
+		{"reasoning_recap ignored", exportContent{ContentType: "reasoning_recap", Parts: []any{"recap"}}, "", 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			text, nonText := extractTextParts(tc.content)
+			if text != tc.wantText || nonText != tc.wantNonText {
+				t.Fatalf("got (%q, %d), want (%q, %d)", text, nonText, tc.wantText, tc.wantNonText)
+			}
+		})
+	}
+}
+
+func TestBuildConversationFragmentRecordsNonTextParts(t *testing.T) {
+	conv := exportConversation{
+		ID:          "conv-mm",
+		CurrentNode: "n2",
+		Mapping: map[string]conversationNode{
+			"n1": {ID: "n1", Message: exportMessage{ID: "m1", Author: exportAuthor{Role: "user"}, Content: exportContent{ContentType: "multimodal_text", Parts: []any{"look", map[string]any{"content_type": "image_asset_pointer"}}}}},
+			"n2": {ID: "n2", Parent: "n1", Message: exportMessage{ID: "m2", Author: exportAuthor{Role: "assistant"}, Content: exportContent{ContentType: "text", Parts: []any{"ok"}}}},
+		},
+	}
+	frag, ok := buildConversationFragment(conv, "f.json", "dir", exportUserMeta{}, &collectStats{})
+	if !ok {
+		t.Fatal("expected a fragment")
+	}
+	if !strings.Contains(frag.Content, "look") {
+		t.Fatalf("multimodal text part missing: %q", frag.Content)
+	}
+	if frag.Metadata["non_text_parts_skipped"] != 1 {
+		t.Fatalf("expected non_text_parts_skipped=1, got %#v", frag.Metadata["non_text_parts_skipped"])
 	}
 }
