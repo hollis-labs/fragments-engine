@@ -15,6 +15,7 @@ import (
 	"github.com/hollis-labs/fragments-engine/internal/app"
 	"github.com/hollis-labs/fragments-engine/internal/config"
 	"github.com/hollis-labs/fragments-engine/internal/domain"
+	"github.com/hollis-labs/fragments-engine/internal/enrich"
 	mcpserver "github.com/hollis-labs/fragments-engine/internal/mcp"
 	"github.com/hollis-labs/fragments-engine/internal/service"
 	"github.com/hollis-labs/fragments-engine/internal/transcript"
@@ -1857,7 +1858,7 @@ func skipReasons(reasons map[string]int) string {
 // input or tool output is ever printed.
 func runTranscript(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: fragments-engine transcript <tool-calls|usage> --config PATH [flags]")
+		return fmt.Errorf("usage: fragments-engine transcript <tool-calls|usage|enrich> --config PATH [flags]")
 	}
 	fs := flag.NewFlagSet("transcript "+args[0], flag.ContinueOnError)
 	configPath := fs.String("config", "fragments.example.yaml", "path to config file")
@@ -1866,7 +1867,13 @@ func runTranscript(args []string) error {
 	since := fs.String("since", "", "start time (RFC3339)")
 	until := fs.String("until", "", "end time, exclusive (RFC3339)")
 	status := fs.String("status", "", "ok, error or none")
-	limit := fs.Int("limit", 100, "max rows")
+	limit := fs.Int("limit", 0, "max rows (tool-calls, default 100) or max sessions (enrich, default no limit)")
+	dryRun := fs.Bool("dry-run", false, "enrich: plan only; makes no model call")
+	model := fs.String("model", "", "enrich: model (default from config)")
+	provider := fs.String("provider", "", "enrich: gateway provider (default from config)")
+	force := fs.Bool("force", false, "enrich: redo sessions that already have a result")
+	maxCost := fs.Float64("max-cost-usd", 0, "enrich: per-run cost cap in USD (default from config)")
+	concurrency := fs.Int("concurrency", 1, "enrich: parallel calls")
 	if err := fs.Parse(args[1:]); err != nil {
 		return err
 	}
@@ -1884,6 +1891,9 @@ func runTranscript(args []string) error {
 		return fmt.Errorf("transcript: no private root configured")
 	}
 	switch args[0] {
+	case "enrich":
+		return runTranscriptEnrich(cfg, store, enrichFlags{dryRun: *dryRun, limit: *limit, session: *session, model: *model, provider: *provider,
+			force: *force, maxCost: *maxCost, concurrency: *concurrency})
 	case "tool-calls":
 		filter := transcript.ToolCallFilter{Name: *name, NativeSessionID: *session, Status: *status, Limit: *limit}
 		for _, bound := range []struct {
@@ -1920,4 +1930,84 @@ func runTranscript(args []string) error {
 	default:
 		return fmt.Errorf("unknown transcript command %q", args[0])
 	}
+}
+
+type enrichFlags struct {
+	dryRun          bool
+	limit           int
+	session         string
+	model, provider string
+	force           bool
+	maxCost         float64
+	concurrency     int
+}
+
+// runTranscriptEnrich plans or runs transcript enrichment. A dry run needs no
+// gateway and makes no model call; a real run needs the provider to be listed
+// in transcripts.enrichment.allowed_providers. Output is counts only.
+func runTranscriptEnrich(cfg config.Config, store *transcript.Store, f enrichFlags) error {
+	ec := cfg.Transcripts.Enrichment
+	pick := func(flagVal, cfgVal, def string) string {
+		if flagVal != "" {
+			return flagVal
+		}
+		if cfgVal != "" {
+			return cfgVal
+		}
+		return def
+	}
+	maxRun := f.maxCost
+	if maxRun <= 0 {
+		maxRun = ec.MaxCostUSD
+	}
+	if maxRun <= 0 {
+		maxRun = 2
+	}
+	total := ec.MaxTotalCostUSD
+	if total <= 0 {
+		total = 10
+	}
+	idle := ec.MinIdleMinutes
+	if idle <= 0 {
+		idle = 30
+	}
+	opts := enrich.Options{
+		DryRun: f.dryRun, Limit: f.limit, NativeSessionID: f.session, Force: f.force,
+		Provider: pick(f.provider, ec.Provider, "anthropic-work"), Model: pick(f.model, ec.Model, "claude-haiku-5-5"),
+		PromptVersion: ec.PromptVersion, MaxCostUSD: maxRun, TotalCapUSD: total, MaxOutputTokens: ec.MaxOutputTokens,
+		MinIdle: time.Duration(idle) * time.Minute, AllowedProviders: ec.AllowedProviders, Concurrency: f.concurrency,
+		ExcludeSessions: ec.ExcludeSessions, ExcludeCWDPrefixes: ec.ExcludeCWDPrefixes,
+	}
+	var gw enrich.Gateway
+	if !f.dryRun {
+		if ec.Gateway.Address == "" {
+			return fmt.Errorf("transcripts.enrichment.gateway.address is not configured")
+		}
+		token := ""
+		if ec.Gateway.TokenEnv != "" {
+			token = os.Getenv(ec.Gateway.TokenEnv)
+		}
+		g, err := enrich.NewHTTPGateway(ec.Gateway.Address, token)
+		if err != nil {
+			return err
+		}
+		gw = g
+	}
+	s, err := (&enrich.Runner{Store: store, GW: gw, Opts: opts}).Run(context.Background())
+	mode := "run"
+	if f.dryRun {
+		mode = "dry-run"
+	}
+	fmt.Printf("enrich %s: provider=%s model=%s prompt=%s per_run_cap_usd=%.2f total_cap_usd=%.2f prior_spend_usd=%.4f\n",
+		mode, opts.Provider, opts.Model, enrich.PromptVersion, maxRun, total, s.PriorCostUSD)
+	fmt.Printf("sessions=%d already_done=%d excluded=%d needs_map_reduce=%d pending=%d calls=%d est_input_tokens=%d (chars/4 estimate) max_output_tokens=%d trimmed_turns=%d\n",
+		s.Sessions, s.AlreadyDone, s.Excluded, s.NeedsMapReduce, s.Pending, s.Calls, s.EstInputTokens, s.MaxOutputToks, s.TrimmedTurns)
+	if !f.dryRun {
+		fmt.Printf("attempted=%d ok=%d failed=%d retries=%d tokens_in=%d tokens_out=%d gateway_cost_usd=%.4f facts_saved=%d stopped_by=%s\n",
+			s.Attempted, s.OK, s.Failed, s.Retries, s.TokensIn, s.TokensOut, s.CostUSD, s.FactsSaved, s.StoppedBy)
+		for class, n := range s.Errors {
+			fmt.Printf("error_class=%s count=%d\n", class, n)
+		}
+	}
+	return err
 }

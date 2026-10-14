@@ -40,11 +40,13 @@ type TranscriptSession struct {
 	SpawnToolUseID  string
 	IsFork          bool
 	Model           string
-	CWD             string
-	GitBranch       string
-	Entrypoint      string
-	StartedAt       time.Time
-	EndedAt         time.Time
+	// Description is the subagent's purpose line from its .meta.json.
+	Description string
+	CWD         string
+	GitBranch   string
+	Entrypoint  string
+	StartedAt   time.Time
+	EndedAt     time.Time
 }
 
 type TranscriptTurn struct {

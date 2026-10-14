@@ -27,7 +27,41 @@ type Config struct {
 // TranscriptConfig names the explicit local owner-private destination. Blank
 // means transcript ingestion is unavailable, with no shared-store fallback.
 type TranscriptConfig struct {
-	PrivateRoot string `json:"private_root" yaml:"private_root"`
+	PrivateRoot string           `json:"private_root" yaml:"private_root"`
+	Enrichment  EnrichmentConfig `json:"enrichment" yaml:"enrichment"`
+}
+
+// EnrichmentConfig drives transcript enrichment. Nothing leaves the machine
+// unless a provider is listed in AllowedProviders: the default is empty.
+type EnrichmentConfig struct {
+	Gateway EnrichmentGateway `json:"gateway" yaml:"gateway"`
+	// AllowedProviders are the gateway provider ids that may receive redacted
+	// transcript text. Empty means no model call is made.
+	AllowedProviders []string `json:"allowed_providers" yaml:"allowed_providers"`
+	Provider         string   `json:"provider" yaml:"provider"`
+	Model            string   `json:"model" yaml:"model"`
+	PromptVersion    string   `json:"prompt_version" yaml:"prompt_version"`
+	// MaxCostUSD caps one run; MaxTotalCostUSD caps all runs together, from the
+	// spend ledger. Both are hard stops enforced by FE regardless of any
+	// gateway budget.
+	MaxCostUSD      float64 `json:"max_cost_usd" yaml:"max_cost_usd"`
+	MaxTotalCostUSD float64 `json:"max_total_cost_usd" yaml:"max_total_cost_usd"`
+	// ExcludeSessions (native session ids) and ExcludeCWDPrefixes (project
+	// paths) are the never-send switch: matching sessions are never given to a
+	// model.
+	ExcludeSessions    []string `json:"exclude_sessions" yaml:"exclude_sessions"`
+	ExcludeCWDPrefixes []string `json:"exclude_cwd_prefixes" yaml:"exclude_cwd_prefixes"`
+	MinIdleMinutes     int      `json:"min_idle_minutes" yaml:"min_idle_minutes"`
+	MaxOutputTokens  int      `json:"max_output_tokens" yaml:"max_output_tokens"`
+}
+
+// EnrichmentGateway locates the Tether AI gateway. Address is "unix:/path" or
+// an http://127.0.0.1:PORT loopback URL. The bearer token, if the daemon
+// enforces identity, is read from the environment variable named by TokenEnv,
+// never from this file.
+type EnrichmentGateway struct {
+	Address  string `json:"address" yaml:"address"`
+	TokenEnv string `json:"token_env" yaml:"token_env"`
 }
 
 type DatabaseConfig struct {

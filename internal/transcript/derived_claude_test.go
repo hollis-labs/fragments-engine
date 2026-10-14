@@ -333,3 +333,23 @@ func TestToolInputCapAndUnreadableLine(t *testing.T) {
 		t.Fatalf("input not capped to a fingerprint: %d bytes", len(input))
 	}
 }
+
+func TestSplitTurnsOnlyAtRealMarkers(t *testing.T) {
+	got := splitTurns("## user\n\nuse a ## assistant heading inline\nand a line\n\n## assistant\n\nok\n\nmore")
+	if len(got) != 2 || got[0].Role != "user" || !strings.Contains(got[0].Text, "## assistant heading inline") || got[1].Text != "ok\n\nmore" {
+		t.Fatalf("turns = %+v", got)
+	}
+}
+
+func TestTurnWithoutEventIDIsRefused(t *testing.T) {
+	st := openStore(t)
+	d := &domain.TranscriptDetail{Session: domain.TranscriptSession{Tool: "claude", NativeSessionID: "S", Kind: "main"},
+		Turns: []domain.TranscriptTurn{{EventUUID: "", Role: "user", Text: "x"}}}
+	_, err := st.Accept(context.Background(), reg, domain.PipelineFragment{Source: "claude", SourceID: "S", Detail: d})
+	if err == nil {
+		t.Fatal("an empty event id would collapse turns and must be refused")
+	}
+	if n := count(t, st, `SELECT COUNT(*) FROM tx_turns`); n != 0 {
+		t.Fatalf("rows survived the refused write: %d", n)
+	}
+}

@@ -143,8 +143,18 @@ CREATE TABLE IF NOT EXISTS transcripts (
  id TEXT PRIMARY KEY, content_digest TEXT NOT NULL, redaction_version INTEGER NOT NULL,
  material_json TEXT NOT NULL, title TEXT NOT NULL, content TEXT NOT NULL
 );
-CREATE VIRTUAL TABLE IF NOT EXISTS transcript_search USING fts5(id UNINDEXED, title, content);`+derivedSchema); err != nil {
+CREATE VIRTUAL TABLE IF NOT EXISTS transcript_search USING fts5(id UNINDEXED, title, content);`+derivedSchema+enrichmentSchema); err != nil {
 		return err
+	}
+	// v1 -> v2: the subagent purpose line. ADD COLUMN has no IF NOT EXISTS.
+	var hasDescription int
+	if err := conn.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info('tx_sessions') WHERE name = 'description_redacted'`).Scan(&hasDescription); err != nil {
+		return err
+	}
+	if hasDescription == 0 {
+		if _, err := conn.ExecContext(ctx, `ALTER TABLE tx_sessions ADD COLUMN description_redacted TEXT NOT NULL DEFAULT ''`); err != nil {
+			return err
+		}
 	}
 	if _, err := conn.ExecContext(ctx, `INSERT INTO tx_meta VALUES ('schema_version', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, fmt.Sprint(derivedSchemaVersion)); err != nil {
 		return err
