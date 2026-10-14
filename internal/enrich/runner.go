@@ -53,7 +53,7 @@ type Options struct {
 	AllowedProviders         []string
 	Concurrency              int
 	EstPricing               Pricing // optional: lets a dry run print a dollar upper bound
-	// Tool restricts a run to one tool ("claude" or "codex"). Order "newest"
+	// Tool restricts a run to one tool ("claude", "codex" or "antigravity"). Order "newest"
 	// takes the most recently active sessions first (default: stable hash order
 	// inside each stratum). Allocation, keyed "tool/bucket", selects that many
 	// pending sessions from each listed stratum and none from the others.
