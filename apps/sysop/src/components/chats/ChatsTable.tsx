@@ -1,3 +1,4 @@
+import { useEffect, useRef } from 'react'
 import { formatRelativeTime, formatShortDate } from '@hollis-labs/sysop-ui'
 import { formatTokens, highlightParts, matchFieldLabel, projectName, type ChatSession, type ChatSortKey } from '@/lib/chats'
 
@@ -26,6 +27,8 @@ interface ChatsTableProps {
   desc: boolean
   onSort: (key: ChatSortKey) => void
   onOpen: (id: string) => void
+  /** Row highlighted by keyboard navigation. */
+  selectedId?: string | null
 }
 
 /** Which field matched, a highlighted excerpt, and the score for semantic hits. */
@@ -65,7 +68,11 @@ function MatchLine({ item }: { item: ChatSession }) {
 }
 
 /** Server-sorted chat session table, styled like the inbox fragment table. */
-export default function ChatsTable({ items, sort, desc, onSort, onOpen }: ChatsTableProps) {
+export default function ChatsTable({ items, sort, desc, onSort, onOpen, selectedId }: ChatsTableProps) {
+  const selectedRef = useRef<HTMLTableRowElement | null>(null)
+  useEffect(() => {
+    selectedRef.current?.scrollIntoView?.({ block: 'nearest' })
+  }, [selectedId])
   return (
     <div className="w-full overflow-x-auto">
       <table className="w-full min-w-full">
@@ -99,6 +106,8 @@ export default function ChatsTable({ items, sort, desc, onSort, onOpen }: ChatsT
           {items.map((item) => (
             <tr
               key={item.id}
+              ref={item.id === selectedId ? selectedRef : undefined}
+              data-selected={item.id === selectedId ? 'true' : undefined}
               tabIndex={0}
               role="link"
               aria-label={`Open ${item.title || 'untitled chat'}`}
@@ -106,7 +115,7 @@ export default function ChatsTable({ items, sort, desc, onSort, onOpen }: ChatsT
               onKeyDown={(e) => {
                 if (e.key === 'Enter') onOpen(item.id)
               }}
-              className="cursor-pointer transition-colors hover:bg-panel-hover/50 focus:bg-panel-hover/50 focus:outline-none"
+              className={`cursor-pointer transition-colors hover:bg-panel-hover/50 focus:bg-panel-hover/50 focus:outline-none ${item.id === selectedId ? 'bg-panel-hover/60' : ''}`}
             >
               <td className="max-w-[28rem] px-2 py-2">
                 <div className="truncate text-text">{item.title || '(untitled chat)'}</div>

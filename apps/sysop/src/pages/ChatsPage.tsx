@@ -15,6 +15,8 @@ import { useApi } from '@/hooks/useApi'
 import { SUMMARY_ACCENTS } from '@/lib/constants'
 import {
   CHAT_SEARCH_MODES,
+  isTypingTarget,
+  moveSelection,
   EMPTY_CHAT_FILTERS,
   activeChatFilterCount,
   noticeText,
@@ -31,6 +33,8 @@ import {
   type ChatSortKey,
 } from '@/lib/chats'
 import { loadChatFilters, saveChatFilters } from '@/lib/chats-filters-storage'
+import { ChatPresets } from '@/components/chats/ChatPresets'
+import { loadPresets, removePreset, savePresets, upsertPreset, type ChatPreset } from '@/lib/chats-presets'
 
 const PAGE = 50
 const SELECT_CLASS =
@@ -61,13 +65,53 @@ export default function ChatsPage() {
   const [status, setStatus] = useState<ChatStatus | null>(null)
   const [statusLoaded, setStatusLoaded] = useState(false)
   const [projectOptions, setProjectOptions] = useState<ChatProjectCount[]>([])
+  const [presets, setPresets] = useState<ChatPreset[]>(loadPresets)
+  const [selectedId, setSelectedId] = useState<string | null>(null)
   const requestId = useRef(0)
+  const openIdRef = useRef<string | null>(null)
 
   const update = useCallback((patch: Partial<ChatFilters>) => {
     setFilters((current) => ({ ...current, ...patch }))
   }, [])
 
   useEffect(() => saveChatFilters(filters), [filters])
+  useEffect(() => savePresets(presets), [presets])
+  useEffect(() => {
+    openIdRef.current = openId
+  }, [openId])
+
+  // Applying a preset also restores its search text into the search box.
+  const applyFilters = useCallback((next: ChatFilters) => {
+    setQuery(next.search)
+    setFilters(next)
+  }, [])
+
+  // Keep the keyboard selection on a row that is still listed.
+  useEffect(() => {
+    setSelectedId((current) => (current && items.some((i) => i.id === current) ? current : null))
+  }, [items])
+
+  // Keyboard: j/k move, Enter opens, / focuses search, Esc leaves the search
+  // box or clears the selection. Nothing fires while typing or in the dialog.
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.metaKey || e.ctrlKey || e.altKey || openIdRef.current) return
+      if (isTypingTarget(e.target)) {
+        if (e.key === 'Escape' && e.target instanceof HTMLElement) e.target.blur()
+        return
+      }
+      const ids = items.map((i) => i.id)
+      if (e.key === 'j') setSelectedId((c) => moveSelection(ids, c, 1))
+      else if (e.key === 'k') setSelectedId((c) => moveSelection(ids, c, -1))
+      else if (e.key === 'Enter' && selectedId && e.target === document.body) setOpenId(selectedId)
+      else if (e.key === '/') {
+        e.preventDefault()
+        document.querySelector<HTMLInputElement>('input[aria-label="Search chats"]')?.focus()
+      } else if (e.key === 'Escape') setSelectedId(null)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [items, selectedId])
 
   // Debounce the search box so each keystroke is not a query.
   useEffect(() => {
@@ -205,9 +249,18 @@ export default function ChatsPage() {
           summary={filters.search ? `${items.length}${cursor ? '+' : ''} matches` : activeCount ? `${activeCount} filter${activeCount === 1 ? '' : 's'}` : ''}
           onClear={() => {
             setQuery('')
-            setFilters({ ...EMPTY_CHAT_FILTERS, sort: filters.sort, desc: filters.desc })
+            setFilters({ ...EMPTY_CHAT_FILTERS, mode: filters.mode, sort: filters.sort, desc: filters.desc })
           }}
         >
+          <Field label="Presets">
+            <ChatPresets
+              presets={presets}
+              selectClass={SELECT_CLASS}
+              onApply={applyFilters}
+              onSave={(name) => setPresets((current) => upsertPreset(current, name, { ...filters, search: query.trim() }))}
+              onDelete={(name) => setPresets((current) => removePreset(current, name))}
+            />
+          </Field>
           <Field label="Search">
             <select
               aria-label="Search mode"
@@ -287,6 +340,27 @@ export default function ChatsPage() {
       }
     >
       <>
+        <div className="flex flex-wrap items-center gap-1.5 border-b border-border-soft px-4 py-2 text-[11px]" aria-label="Quick filters">
+          <button
+            type="button"
+            aria-pressed={filters.enriched === 'yes'}
+            onClick={() => update({ enriched: filters.enriched === 'yes' ? 'all' : 'yes' })}
+            className={`rounded border px-2 py-0.5 transition-colors ${filters.enriched === 'yes' ? 'border-border-strong bg-panel-hover text-text' : 'border-border text-text-soft hover:border-border-strong'}`}
+          >
+            Enriched only{facets?.enriched !== undefined ? ` (${facets.enriched})` : ''}
+          </button>
+          {(facets?.tag_counts ?? []).slice(0, 12).map((t) => (
+            <button
+              key={t.tag}
+              type="button"
+              aria-pressed={filters.tag === t.tag}
+              onClick={() => update({ tag: filters.tag === t.tag ? '' : t.tag })}
+              className={`rounded border px-2 py-0.5 transition-colors ${filters.tag === t.tag ? 'border-border-strong bg-panel-hover text-text' : 'border-border bg-panel-2/50 text-text-soft hover:border-border-strong'}`}
+            >
+              {t.tag} <span className="tabular-nums text-text-subtle">{t.count}</span>
+            </button>
+          ))}
+        </div>
         {loading ? (
           <div className="flex flex-col gap-2 p-4">
             {Array.from({ length: 6 }).map((_, i) => <Skeleton key={i} className="h-12 w-full rounded-xl" />)}
@@ -313,7 +387,7 @@ export default function ChatsPage() {
             {filters.search && noticeText(notice) && (
               <p role="status" className="px-4 pt-3 text-xs text-text-subtle">{noticeText(notice)}</p>
             )}
-            <ChatsTable items={items} sort={filters.sort} desc={filters.desc} onSort={handleSort} onOpen={setOpenId} />
+            <ChatsTable items={items} sort={filters.sort} desc={filters.desc} onSort={handleSort} onOpen={setOpenId} selectedId={selectedId} />
             {cursor && (
               <div className="p-3 text-center">
                 <Button variant="outline" size="sm" onClick={() => void loadMore()} disabled={loadingMore}>

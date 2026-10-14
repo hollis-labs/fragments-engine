@@ -112,6 +112,10 @@ export interface ChatFacets {
   models: string[]
   project_count: number
   tags?: string[]
+  /** Enrichment topics with how many chats carry each, most used first. */
+  tag_counts?: { tag: string; count: number }[]
+  /** Chats that have a current enrichment. */
+  enriched?: number
   total: number
 }
 
@@ -280,4 +284,18 @@ export function flattenTree(
   depth = 0,
 ): { node: ChatTreeNode; depth: number }[] {
   return nodes.flatMap((node) => [{ node, depth }, ...flattenTree(node.children ?? [], depth + 1)])
+}
+
+/** Move the keyboard selection by delta rows, clamped; starts at the top/bottom. */
+export function moveSelection(ids: string[], current: string | null, delta: 1 | -1): string | null {
+  if (ids.length === 0) return null
+  const at = current ? ids.indexOf(current) : -1
+  if (at < 0) return delta === 1 ? ids[0] : ids[ids.length - 1]
+  return ids[Math.min(ids.length - 1, Math.max(0, at + delta))]
+}
+
+/** True when a key press is aimed at a text field, so shortcuts must not fire. */
+export function isTypingTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false
+  return target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)
 }

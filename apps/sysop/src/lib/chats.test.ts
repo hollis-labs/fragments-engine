@@ -6,6 +6,8 @@ import {
   formatBytes,
   formatTokens,
   highlightParts,
+  isTypingTarget,
+  moveSelection,
   noticeText,
   parseChatFilters,
   projectName,
@@ -68,5 +70,25 @@ describe('search modes', () => {
     expect(noticeText('model_mismatch')).toMatch(/different embedding model/)
     expect(noticeText('unknown_code')).toBeUndefined()
     expect(noticeText(undefined)).toBeUndefined()
+  })
+})
+
+describe('keyboard helpers', () => {
+  it('moves the selection within bounds', () => {
+    const ids = ['a', 'b', 'c']
+    expect(moveSelection(ids, null, 1)).toBe('a')
+    expect(moveSelection(ids, null, -1)).toBe('c')
+    expect(moveSelection(ids, 'a', 1)).toBe('b')
+    expect(moveSelection(ids, 'c', 1)).toBe('c')
+    expect(moveSelection(ids, 'a', -1)).toBe('a')
+    expect(moveSelection(ids, 'gone', 1)).toBe('a')
+    expect(moveSelection([], 'a', 1)).toBeNull()
+  })
+
+  it('recognises text fields', () => {
+    expect(isTypingTarget(document.createElement('input'))).toBe(true)
+    expect(isTypingTarget(document.createElement('select'))).toBe(true)
+    expect(isTypingTarget(document.createElement('div'))).toBe(false)
+    expect(isTypingTarget(null)).toBe(false)
   })
 })
