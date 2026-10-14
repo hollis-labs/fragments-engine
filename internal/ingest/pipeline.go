@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/hollis-labs/fragments-engine/internal/analyze"
@@ -154,8 +155,10 @@ func (p *Pipeline) RunOnce(ctx context.Context, ingestCfg config.IngestConfig) (
 		run.SkipReasons = reasons
 		for class, n := range reasons {
 			// trimmed_tail and incomplete_tail inputs were imported (up to the last
-			// complete record); the class only keeps them visible.
-			if class != "trimmed_tail" && class != "incomplete_tail" {
+			// complete record), unsupported_step_<type> counts steps inside a
+			// conversation that was imported, and batch_continues marks a large
+			// conversation read in bounded passes; those classes only keep them visible.
+			if class != "trimmed_tail" && class != "incomplete_tail" && !strings.HasPrefix(class, "unsupported_step_") && class != "batch_continues" {
 				run.Skipped += n
 			}
 			// Unchanged and empty inputs are the steady state, not news.

@@ -264,6 +264,10 @@ type CodexSessionRules struct {
 
 type AntigravityRules struct {
 	MaxFileSizeMB int `json:"max_file_size_mb" yaml:"max_file_size_mb"`
+	// ToolResultExcerptBytes keeps a redacted excerpt of each tool result, up to
+	// this many bytes (hard cap 2048). Zero, the default, keeps only the result's
+	// status and size.
+	ToolResultExcerptBytes int `json:"tool_result_excerpt_bytes" yaml:"tool_result_excerpt_bytes"`
 }
 
 type ChatGPTExportRules struct {
