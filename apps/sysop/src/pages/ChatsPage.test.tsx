@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import ChatsPage from './ChatsPage'
@@ -10,7 +10,10 @@ const row = (id: string, title: string): ChatSession => ({
   id, tool: 'claude', kind: 'main', title, turns: 1, tokens: 10, tool_calls: 0, errors: 0,
 })
 
-function setup(sessionsResult: unknown = { items: [row('a'.repeat(64), 'first synthetic')], next_cursor: 'c1' }) {
+function setup(
+  sessionsResult: unknown = { items: [row('a'.repeat(64), 'first synthetic')], next_cursor: 'c1' },
+  status: unknown = { enabled: true, available: true, semantic: false, auth: 'none' },
+) {
   const fetchTranscriptSessions = vi.fn().mockResolvedValue(sessionsResult)
   const fetchTranscriptProjects = vi.fn().mockResolvedValue([{ project: '/synthetic/deep/project-0699', sessions: 3 }])
   const client = {
@@ -18,6 +21,7 @@ function setup(sessionsResult: unknown = { items: [row('a'.repeat(64), 'first sy
     fetchTranscriptSessions,
     fetchTranscriptFacets: vi.fn().mockResolvedValue({ tools: ['claude', 'codex'], models: [], project_count: 835, total: 7 }),
     fetchTranscriptProjects,
+    fetchTranscriptStatus: vi.fn().mockResolvedValue(status),
   } as unknown as typeof apiClient
   render(
     <ApiProvider client={client}>
@@ -77,5 +81,40 @@ describe('ChatsPage', () => {
     await screen.findByText('first synthetic')
     fireEvent.change(screen.getByLabelText('Search chats'), { target: { value: 'zebra' } })
     await waitFor(() => expect(fetchSessions.mock.calls.at(-1)?.[0]).toMatchObject({ q: 'zebra' }))
+  })
+
+  it('defaults to hybrid when semantic search works, and to text when it does not', async () => {
+    const on = setup(undefined, { enabled: true, available: true, semantic: true, auth: 'none' })
+    await screen.findByText('first synthetic')
+    fireEvent.change(screen.getByLabelText('Search chats'), { target: { value: 'ferry' } })
+    await waitFor(() => expect(on.fetchTranscriptSessions.mock.calls.at(-1)?.[0]).toMatchObject({ q: 'ferry', mode: 'hybrid' }))
+    cleanup()
+    const off = setup()
+    await screen.findByText('first synthetic')
+    fireEvent.change(screen.getByLabelText('Search chats'), { target: { value: 'ferry' } })
+    await waitFor(() => expect(off.fetchTranscriptSessions.mock.calls.at(-1)?.[0]).toMatchObject({ q: 'ferry', mode: 'text' }))
+  })
+
+  it('sends the chosen mode, persists it, and sends no mode without a query', async () => {
+    const { fetchTranscriptSessions: fetchSessions } = setup()
+    await screen.findByText('first synthetic')
+    expect(fetchSessions.mock.calls[0][0].mode).toBeUndefined()
+    fireEvent.change(screen.getByLabelText('Search mode'), { target: { value: 'summary' } })
+    fireEvent.change(screen.getByLabelText('Search chats'), { target: { value: 'quartz' } })
+    await waitFor(() => expect(fetchSessions.mock.calls.at(-1)?.[0]).toMatchObject({ q: 'quartz', mode: 'summary' }))
+    expect(JSON.parse(localStorage.getItem('sysop:chats:filters:v1') ?? '{}')).toMatchObject({ mode: 'summary' })
+  })
+
+  it('shows which field matched with a highlighted excerpt, and explains a semantic fallback', async () => {
+    setup({
+      items: [{ ...row('b'.repeat(64), 'matched chat'), match: { field: 'decisions', excerpt: 'Adopt a bounded [worker] pool' } }],
+      notice: 'semantic_unavailable',
+      mode: 'hybrid',
+    })
+    await screen.findByText('matched chat')
+    fireEvent.change(screen.getByLabelText('Search chats'), { target: { value: 'worker' } })
+    await waitFor(() => expect(screen.getByText('decision')).toBeTruthy())
+    expect(screen.getByText('worker').tagName).toBe('MARK')
+    expect((await screen.findByRole('status')).textContent).toMatch(/embedding server/)
   })
 })

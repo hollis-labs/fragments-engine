@@ -15,6 +15,8 @@ import (
 type TranscriptBrowseService struct {
 	store *transcript.Store
 	audit func(route, id string, count int)
+	// embedder frames semantic queries; nil means semantic search is unavailable.
+	embedder QueryEmbedder
 }
 
 func NewTranscriptBrowseService(store *transcript.Store) *TranscriptBrowseService {

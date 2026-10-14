@@ -1,5 +1,5 @@
 import { formatRelativeTime, formatShortDate } from '@hollis-labs/sysop-ui'
-import { formatTokens, projectName, type ChatSession, type ChatSortKey } from '@/lib/chats'
+import { formatTokens, highlightParts, matchFieldLabel, projectName, type ChatSession, type ChatSortKey } from '@/lib/chats'
 
 interface Column {
   label: string
@@ -26,6 +26,42 @@ interface ChatsTableProps {
   desc: boolean
   onSort: (key: ChatSortKey) => void
   onOpen: (id: string) => void
+}
+
+/** Which field matched, a highlighted excerpt, and the score for semantic hits. */
+function MatchLine({ item }: { item: ChatSession }) {
+  const excerpt = item.match?.excerpt || item.snippet
+  if (!item.match && !excerpt) return null
+  return (
+    <div className="mt-0.5 flex items-center gap-1.5 text-[11px] text-text-subtle">
+      {item.match && (
+        <span
+          className="shrink-0 rounded border border-border bg-panel-2/50 px-1 text-[10px] uppercase tracking-wider text-text-soft"
+          title={item.match.sources?.length ? `Found by: ${item.match.sources.join(', ')}` : undefined}
+        >
+          {matchFieldLabel(item.match.field)}
+        </span>
+      )}
+      {item.score !== undefined && item.match?.field === 'semantic' && (
+        <span className="shrink-0 tabular-nums" title="Cosine similarity">
+          {item.score.toFixed(2)}
+        </span>
+      )}
+      {excerpt && (
+        <span className="truncate" data-testid="match-excerpt">
+          {highlightParts(excerpt).map((part, i) =>
+            part.hit ? (
+              <mark key={i} className="rounded-sm bg-status-inbox/20 px-0.5 text-text">
+                {part.text}
+              </mark>
+            ) : (
+              <span key={i}>{part.text}</span>
+            ),
+          )}
+        </span>
+      )}
+    </div>
+  )
 }
 
 /** Server-sorted chat session table, styled like the inbox fragment table. */
@@ -74,9 +110,7 @@ export default function ChatsTable({ items, sort, desc, onSort, onOpen }: ChatsT
             >
               <td className="max-w-[28rem] px-2 py-2">
                 <div className="truncate text-text">{item.title || '(untitled chat)'}</div>
-                {item.snippet && (
-                  <div className="mt-0.5 truncate text-[11px] text-text-subtle">{item.snippet}</div>
-                )}
+                <MatchLine item={item} />
               </td>
               <td className="whitespace-nowrap px-2 py-2 text-text-soft">
                 {item.tool}

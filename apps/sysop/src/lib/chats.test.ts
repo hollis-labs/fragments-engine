@@ -5,8 +5,11 @@ import {
   flattenTree,
   formatBytes,
   formatTokens,
+  highlightParts,
+  noticeText,
   parseChatFilters,
   projectName,
+  resolveSearchMode,
   type ChatTreeNode,
 } from './chats'
 
@@ -41,5 +44,29 @@ describe('chat formatting', () => {
       ({ id, children, tool: 'claude', kind: 'subagent', title: id, turns: 0, tokens: 0, tool_calls: 0, errors: 0 }) as ChatTreeNode
     const flat = flattenTree([n('a', [n('a1')]), n('b')])
     expect(flat.map((x) => [x.node.id, x.depth])).toEqual([['a', 0], ['a1', 1], ['b', 0]])
+  })
+})
+
+describe('search modes', () => {
+  it('picks hybrid for auto only when semantic search works', () => {
+    expect(resolveSearchMode('auto', true)).toBe('hybrid')
+    expect(resolveSearchMode('auto', false)).toBe('text')
+    expect(resolveSearchMode('semantic', false)).toBe('semantic')
+  })
+
+  it('reads the persisted mode defensively', () => {
+    expect(parseChatFilters({ mode: 'summary' }).mode).toBe('summary')
+    expect(parseChatFilters({ mode: 'bogus' }).mode).toBe('auto')
+    expect(activeChatFilterCount({ ...EMPTY_CHAT_FILTERS, mode: 'summary' })).toBe(0)
+  })
+
+  it('splits highlighted excerpts and explains notices', () => {
+    expect(highlightParts('a [b] c [d]')).toEqual([
+      { text: 'a ', hit: false }, { text: 'b', hit: true }, { text: ' c ', hit: false }, { text: 'd', hit: true },
+    ])
+    expect(highlightParts('no marks [open')).toEqual([{ text: 'no marks [open', hit: false }])
+    expect(noticeText('model_mismatch')).toMatch(/different embedding model/)
+    expect(noticeText('unknown_code')).toBeUndefined()
+    expect(noticeText(undefined)).toBeUndefined()
   })
 })

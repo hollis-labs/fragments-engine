@@ -108,6 +108,7 @@ func (s *Server) transcriptsGuard(next func(http.ResponseWriter, *http.Request, 
 			defer store.Close()
 		}
 		svc := service.NewTranscriptBrowseService(store)
+		svc.SetEmbedder(service.NewLocalQueryEmbedder(cfg.Transcripts.Enrichment.Embedding))
 		if r.URL.Path == transcriptsPrefix+"/status" {
 			next(w, r, svc)
 			return
@@ -120,13 +121,42 @@ func (s *Server) transcriptsGuard(next func(http.ResponseWriter, *http.Request, 
 	}
 }
 
-func (s *Server) handleTranscriptStatus(w http.ResponseWriter, _ *http.Request, svc *service.TranscriptBrowseService) {
-	writeJSON(w, http.StatusOK, map[string]any{
+// semanticProbeTTL is how long a reachability answer is reused.
+const semanticProbeTTL = 15 * time.Second
+
+// semanticNotice returns "" when semantic search is usable, else a notice code.
+// Stored-vector checks are cheap and always fresh; the embedding server is
+// probed at most once per semanticProbeTTL, with a fixed probe text.
+func (s *Server) semanticNotice(r *http.Request, svc *service.TranscriptBrowseService) string {
+	if !svc.Available() {
+		return transcript.NoticeSemanticUnavailable
+	}
+	if code := svc.SemanticReadiness(r.Context()); code != "" {
+		return code
+	}
+	s.semProbe.mu.Lock()
+	defer s.semProbe.mu.Unlock()
+	if !s.semProbe.at.IsZero() && time.Since(s.semProbe.at) < semanticProbeTTL {
+		return s.semProbe.notice
+	}
+	s.semProbe.notice = svc.ProbeEmbedder(r.Context())
+	s.semProbe.at = time.Now()
+	return s.semProbe.notice
+}
+
+func (s *Server) handleTranscriptStatus(w http.ResponseWriter, r *http.Request, svc *service.TranscriptBrowseService) {
+	notice := s.semanticNotice(r, svc)
+	out := map[string]any{
 		"enabled":   true,
 		"available": svc.Available(),
-		"semantic":  false,
+		"semantic":  notice == "",
 		"auth":      "none",
-	})
+		"modes":     []string{transcript.ModeText, transcript.ModeSummary, transcript.ModeSemantic, transcript.ModeHybrid},
+	}
+	if notice != "" {
+		out["semantic_notice"] = notice
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 func parseTime(v string) time.Time {
@@ -179,7 +209,11 @@ func (s *Server) handleTranscriptSessions(w http.ResponseWriter, r *http.Request
 	var page transcript.SessionPage
 	var err error
 	if text := strings.TrimSpace(r.URL.Query().Get("q")); text != "" {
-		page, err = svc.Search(r.Context(), text, f)
+		mode := r.URL.Query().Get("mode")
+		if !transcript.ValidMode(mode) {
+			mode = transcript.ModeText
+		}
+		page, err = svc.SearchMode(r.Context(), mode, text, f)
 	} else {
 		page, err = svc.List(r.Context(), f)
 	}

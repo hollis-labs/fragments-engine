@@ -1483,6 +1483,8 @@ export async function fetchTranscriptStatus(options?: ApiRequestOptions): Promis
 
 export interface FetchTranscriptSessionsParams {
   q?: string
+  /** text | summary | semantic | hybrid; applies only when q is set. */
+  mode?: string
   tool?: string
   model?: string
   project?: string

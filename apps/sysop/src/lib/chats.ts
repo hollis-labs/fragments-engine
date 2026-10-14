@@ -17,9 +17,22 @@ export interface ChatSession {
   tool_calls: number
   errors: number
   snippet?: string
+  /** Cosine similarity (semantic) or fused rank score (hybrid). */
+  score?: number
+  /** Why this chat matched a summary, semantic or hybrid search. */
+  match?: ChatMatch
   /** Enrichment fields appear once the enrichment pipeline has run. */
   enriched?: boolean
   tags?: string[]
+}
+
+export interface ChatMatch {
+  /** title, topics, entities, summary, decisions, follow_ups, transcript or semantic. */
+  field: string
+  /** Hybrid only: every list that contributed. */
+  sources?: string[]
+  /** Short excerpt; matched words are wrapped in [ ]. */
+  excerpt?: string
 }
 
 export interface ChatSessionPage {
@@ -29,6 +42,10 @@ export interface ChatSessionPage {
   hint?: string
   /** Results listed without a snippet (very large documents or time budget). */
   snippets_skipped?: number
+  /** The mode that produced the items; differs from the request when one was unavailable. */
+  mode?: string
+  /** Stable code explaining a fallback or an empty semantic result. */
+  notice?: string
 }
 
 export interface ChatToolCall {
@@ -106,8 +123,68 @@ export interface ChatProjectCount {
 export interface ChatStatus {
   enabled: boolean
   available: boolean
+  /** True only when the embedding server answers and vectors match its model. */
   semantic: boolean
+  semantic_notice?: string
   auth: string
+}
+
+export type ChatSearchMode = 'auto' | 'text' | 'summary' | 'semantic' | 'hybrid'
+export type ChatRequestMode = Exclude<ChatSearchMode, 'auto'>
+
+export const CHAT_SEARCH_MODES: { value: ChatSearchMode; label: string; hint: string }[] = [
+  { value: 'auto', label: 'Auto', hint: 'Hybrid when semantic search is available, otherwise transcript text' },
+  { value: 'text', label: 'Text', hint: 'Words in the chat transcripts' },
+  { value: 'summary', label: 'Summary', hint: 'Titles, summaries, decisions, follow-ups, topics and entities' },
+  { value: 'semantic', label: 'Semantic', hint: 'Meaning-based match on summaries' },
+  { value: 'hybrid', label: 'Hybrid', hint: 'Semantic, summary and transcript matches combined' },
+]
+
+/** The mode to request: Auto picks Hybrid only when semantic search works. */
+export function resolveSearchMode(mode: ChatSearchMode, semanticAvailable: boolean): ChatRequestMode {
+  return mode === 'auto' ? (semanticAvailable ? 'hybrid' : 'text') : mode
+}
+
+const NOTICE_TEXT: Record<string, string> = {
+  semantic_unavailable: 'Semantic search is unavailable: the local embedding server is not reachable or not configured.',
+  no_vectors: 'Semantic search is unavailable: no summaries have been embedded yet.',
+  model_mismatch: 'Semantic search is unavailable: the stored vectors were made with a different embedding model.',
+  dim_mismatch: 'Semantic search is unavailable: the embedding server returns a different vector size than the stored vectors.',
+  transcript_too_broad: 'Transcript text was too broad to include; showing the other matches.',
+}
+
+/** Owner-facing text for a page notice code, or undefined for none/unknown. */
+export function noticeText(code?: string): string | undefined {
+  return code ? NOTICE_TEXT[code] : undefined
+}
+
+const FIELD_LABELS: Record<string, string> = {
+  follow_ups: 'follow-up',
+  decisions: 'decision',
+  topics: 'topic',
+  entities: 'entity',
+}
+
+export function matchFieldLabel(field: string): string {
+  return FIELD_LABELS[field] ?? field
+}
+
+/** Split text marked with [ ] into plain and highlighted runs. */
+export function highlightParts(text: string): { text: string; hit: boolean }[] {
+  const parts: { text: string; hit: boolean }[] = []
+  let rest = text
+  while (rest) {
+    const open = rest.indexOf('[')
+    const close = open >= 0 ? rest.indexOf(']', open + 1) : -1
+    if (open < 0 || close < 0) {
+      parts.push({ text: rest, hit: false })
+      break
+    }
+    if (open > 0) parts.push({ text: rest.slice(0, open), hit: false })
+    parts.push({ text: rest.slice(open + 1, close), hit: true })
+    rest = rest.slice(close + 1)
+  }
+  return parts
 }
 
 export type ChatSortKey = 'started' | 'turns' | 'tokens' | 'tool_calls' | 'errors'
@@ -117,6 +194,8 @@ export type ChatEnrichedFilter = 'all' | 'yes' | 'no'
 
 export interface ChatFilters {
   search: string
+  /** How the search box is interpreted; not counted as a narrowing filter. */
+  mode: ChatSearchMode
   tool: string
   model: string
   project: string
@@ -132,6 +211,7 @@ export interface ChatFilters {
 
 export const EMPTY_CHAT_FILTERS: ChatFilters = {
   search: '',
+  mode: 'auto',
   tool: '',
   model: '',
   project: '',
@@ -145,6 +225,7 @@ export const EMPTY_CHAT_FILTERS: ChatFilters = {
   desc: true,
 }
 
+const SEARCH_MODES: readonly ChatSearchMode[] = ['auto', 'text', 'summary', 'semantic', 'hybrid']
 const SORT_KEYS: readonly ChatSortKey[] = ['started', 'turns', 'tokens', 'tool_calls', 'errors']
 
 export function parseChatFilters(raw: unknown): ChatFilters {
@@ -153,6 +234,7 @@ export function parseChatFilters(raw: unknown): ChatFilters {
   const str = (v: unknown) => (typeof v === 'string' ? v : '')
   return {
     search: str(r.search),
+    mode: SEARCH_MODES.includes(r.mode as ChatSearchMode) ? (r.mode as ChatSearchMode) : 'auto',
     tool: str(r.tool),
     model: str(r.model),
     project: str(r.project),

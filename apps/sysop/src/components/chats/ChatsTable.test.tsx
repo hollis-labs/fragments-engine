@@ -42,7 +42,8 @@ describe('ChatsTable', () => {
     expect(screen.getByText('1.5k')).toBeTruthy()
     expect(screen.getByText('alpha')).toBeTruthy()
     expect(screen.getByText('sub')).toBeTruthy()
-    expect(screen.getByText('matched [zebra] here')).toBeTruthy()
+    expect(screen.getByTestId('match-excerpt').textContent).toBe('matched zebra here')
+    expect(screen.getByText('zebra').tagName).toBe('MARK')
     expect(screen.getByText('2').className).toContain('danger')
   })
 
