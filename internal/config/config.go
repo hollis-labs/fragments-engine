@@ -14,6 +14,7 @@ import (
 
 type Config struct {
 	Transcripts TranscriptConfig  `json:"transcripts" yaml:"transcripts"`
+	UI          UIConfig          `json:"ui" yaml:"ui"`
 	Database    DatabaseConfig    `json:"database" yaml:"database"`
 	Recall      RecallConfig      `json:"recall" yaml:"recall"`
 	Analysis    AnalysisConfig    `json:"analysis" yaml:"analysis"`
@@ -105,6 +106,18 @@ type EnrichmentEmbedding struct {
 type EnrichmentGateway struct {
 	Address  string `json:"address" yaml:"address"`
 	TokenEnv string `json:"token_env" yaml:"token_env"`
+}
+
+// UIConfig gates owner-only browser surfaces. Every flag is off by default.
+type UIConfig struct {
+	Transcripts UITranscriptsConfig `json:"transcripts" yaml:"transcripts"`
+}
+
+// UITranscriptsConfig enables the read-only routes that browse the private
+// transcript store. Enabled routes refuse to serve unless the API listener is
+// loopback. There is deliberately no credential yet.
+type UITranscriptsConfig struct {
+	Enabled bool `json:"enabled" yaml:"enabled"`
 }
 
 type DatabaseConfig struct {

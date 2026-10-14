@@ -47,6 +47,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/reader/items/{fragmentId}/commands", localhostOnly(s.handleReaderCommand))
 	mux.HandleFunc("GET /v1/media/variants/{variantId}/content", localhostOnly(s.handleReaderMediaContent))
 	mux.Handle(sysopBasePath+"/", newSysopSPAHandler())
+	s.registerTranscriptRoutes(mux)
 	mux.HandleFunc("/v1/ingests", s.handleListIngests)
 	mux.HandleFunc("/v1/ingests/get", s.handleGetIngest)
 	mux.HandleFunc("/v1/ingests/run", s.handleRunIngests)
@@ -294,6 +295,9 @@ type fragmentMaterializeFFSRequest struct {
 }
 
 func (s *Server) ListenAndServe(addr string) error {
+	if err := checkTranscriptListen(s.cfgPath, addr); err != nil {
+		return err
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go app.RunQueueDrainer(ctx, s.cfgPath)
