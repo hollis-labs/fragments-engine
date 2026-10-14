@@ -728,3 +728,55 @@ func bucketCounts(items []SampleItem) map[string]int {
 	}
 	return m
 }
+
+func TestRunStopsOnConsecutiveFailuresAndFailureRate(t *testing.T) {
+	st := openStore(t)
+	for i := 0; i < 8; i++ {
+		addSession(t, st, fmt.Sprintf("S%d", i), old, fmt.Sprintf("q%d", i), "a")
+	}
+	bad := &fakeGW{reply: func(int, Request) (Response, error) { return Response{Text: "nope", InputTokens: 1}, nil }}
+	o := opts()
+	o.StopAfterFailures = 3
+	s, err := (&Runner{Store: st, GW: bad, Opts: o}).Run(context.Background())
+	if err != nil || s.StoppedBy != "consecutive_failures" || s.Attempted != 3 || s.Failed != 3 {
+		t.Fatalf("consecutive: %+v %v", s, err)
+	}
+	// A failure rate above the limit (after the minimum number of attempts) stops too.
+	st2 := openStore(t)
+	for i := 0; i < 10; i++ {
+		addSession(t, st2, fmt.Sprintf("S%d", i), old, fmt.Sprintf("q%d", i), "a")
+	}
+	// Sessions q1, q3, q5, ... always return garbage, even after the retry.
+	flaky := &fakeGW{reply: func(i int, r Request) (Response, error) {
+		for _, odd := range []string{"q1", "q3", "q5", "q7", "q9"} {
+			if strings.Contains(r.User, "[0] user: "+odd+"\n") {
+				return Response{Text: "nope", InputTokens: 1}, nil
+			}
+		}
+		return Response{Text: goodJSON, InputTokens: 1, OutputTokens: 1}, nil
+	}}
+	o = opts()
+	o.MaxFailureRate, o.MinAttemptsForRate = 0.2, 5
+	s, _ = (&Runner{Store: st2, GW: flaky, Opts: o}).Run(context.Background())
+	if s.StoppedBy != "failure_rate" || s.Attempted >= 10 {
+		t.Fatalf("rate: %+v", s)
+	}
+}
+
+func TestRunMeasuresGroundingLatencyAndPerSessionCost(t *testing.T) {
+	st := openStore(t)
+	addSession(t, st, "S1", old, "synthetic-proj work", "reply")
+	addSession(t, st, "S2", old, "other", "reply")
+	gw := &fakeGW{}
+	s, err := (&Runner{Store: st, GW: gw, Opts: opts()}).Run(context.Background())
+	if err != nil || s.OK != 2 || s.FirstTryValid != 2 || len(s.LatenciesMS) != 2 || len(s.SessionCosts) != 2 {
+		t.Fatalf("%+v %v", s, err)
+	}
+	// goodJSON cites turns 0, 1 and 99 on one decision and 1 on a follow-up: 4 cites, 1 ungrounded.
+	if s.Cites != 8 || s.UngroundedCites != 2 || s.EntitiesChecked != 4 {
+		t.Fatalf("grounding counters %+v", s)
+	}
+	if MedianInt([]int{5, 1, 9}) != 5 || MedianInt(nil) != 0 || MedianFloat([]float64{0.3, 0.1}) != 0.1 {
+		t.Fatal("median helpers")
+	}
+}

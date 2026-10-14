@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -41,6 +42,12 @@ type Options struct {
 	AllowedProviders   []string
 	Concurrency        int
 	EstPricing         Pricing // optional: lets a dry run print a dollar upper bound
+	// StopAfterFailures halts a run after this many consecutive failed sessions;
+	// MaxFailureRate halts it when failures exceed this share of at least
+	// MinAttemptsForRate attempts. Zero disables each.
+	StopAfterFailures  int
+	MaxFailureRate     float64
+	MinAttemptsForRate int
 	RunID              string
 	SingleCallTokens   int
 	ChunkTokens        int
@@ -107,6 +114,13 @@ type Summary struct {
 	Errors                         map[string]int
 	StoppedBy                      string
 	FactsSaved                     int
+	// Measurements for a run report. All are counts, durations and costs.
+	FirstTryValid                       int
+	LatenciesMS                         []int
+	SessionCosts                        []float64
+	Cites, UngroundedCites              int
+	EntitiesChecked, UngroundedEntities int
+	Truncated                           int
 }
 
 type Runner struct {
@@ -248,6 +262,7 @@ func (r *Runner) execute(ctx context.Context, o Options, pending []work, sum Sum
 	var wg sync.WaitGroup
 	sem := make(chan struct{}, o.Concurrency)
 	var fatal error
+	consecutive := 0
 	stop := func(reason string) {
 		if sum.StoppedBy == "" {
 			sum.StoppedBy = reason
@@ -284,6 +299,8 @@ func (r *Runner) execute(ctx context.Context, o Options, pending []work, sum Sum
 			sum.TokensIn += res.tokensIn
 			sum.TokensOut += res.tokensOut
 			sum.CostUSD += res.cost
+			sum.LatenciesMS = append(sum.LatenciesMS, res.latenciesMS...)
+			sum.SessionCosts = append(sum.SessionCosts, res.cost)
 			switch {
 			case res.fatal != nil:
 				fatal = res.fatal
@@ -291,8 +308,25 @@ func (r *Runner) execute(ctx context.Context, o Options, pending []work, sum Sum
 			case res.class != "":
 				sum.Failed++
 				sum.Errors[res.class]++
+				consecutive++
+				if o.StopAfterFailures > 0 && consecutive >= o.StopAfterFailures {
+					stop("consecutive_failures")
+				}
+				if o.MaxFailureRate > 0 && sum.Attempted >= o.MinAttemptsForRate && float64(sum.Failed)/float64(sum.Attempted) > o.MaxFailureRate {
+					stop("failure_rate")
+				}
 			default:
 				sum.OK++
+				consecutive = 0
+				if res.retries == 0 {
+					sum.FirstTryValid++
+				}
+				q := res.quality
+				sum.Cites += q.Cites
+				sum.UngroundedCites += q.UngroundedCites
+				sum.EntitiesChecked += q.EntitiesChecked
+				sum.UngroundedEntities += q.UngroundedEntities
+				sum.Truncated += q.Truncated
 			}
 		}(w)
 	}
@@ -309,6 +343,8 @@ type outcome struct {
 	retries, tokensIn, tokensOut int
 	calls                        int
 	cost                         float64
+	quality                      Quality
+	latenciesMS                  []int
 }
 
 // ask makes one logical model call: up to two attempts (the second names the
@@ -318,6 +354,7 @@ func (r *Runner) ask(ctx context.Context, o Options, w work, prefix, tag, system
 	var lastClass string
 	for attempt := 0; attempt < 2; attempt++ {
 		reqID := fmt.Sprintf("%s/%s/%d", prefix, tag, attempt)
+		began := time.Now()
 		resp, err := r.callWithBackoff(ctx, o, Request{
 			Provider: o.Provider, Model: o.Model, System: system, User: user, MaxOutputTokens: o.MaxOutputTokens,
 			CallerID: CallerID, RequestID: reqID, SessionID: "fe-enrich/" + shortPK(w.in.Ref.SessionPK),
@@ -334,6 +371,7 @@ func (r *Runner) ask(ctx context.Context, o Options, w work, prefix, tag, system
 			return "gateway_" + class, nil
 		}
 		acct.calls++
+		acct.latenciesMS = append(acct.latenciesMS, int(time.Since(began).Milliseconds()))
 		acct.tokensIn += resp.InputTokens
 		acct.tokensOut += resp.OutputTokens
 		acct.cost += resp.CostUSD
@@ -410,6 +448,7 @@ func (r *Runner) enrichOne(ctx context.Context, o Options, w work) outcome {
 		}
 	}
 	q.Retries = out.retries
+	out.quality = q
 	raw, _ := json.Marshal(res)
 	qraw, _ := json.Marshal(q)
 	rec := transcript.EnrichmentRecord{SessionPK: w.in.Ref.SessionPK, Tier: 1, PromptVersion: o.PromptVersion, Model: o.Model,
@@ -517,4 +556,24 @@ func (r *Runner) sessions(ctx context.Context, o Options) ([]transcript.SessionR
 		}
 	}
 	return out, nil
+}
+
+// MedianInt returns the lower median of xs (0 when empty).
+func MedianInt(xs []int) int {
+	if len(xs) == 0 {
+		return 0
+	}
+	c := append([]int(nil), xs...)
+	sort.Ints(c)
+	return c[(len(c)-1)/2]
+}
+
+// MedianFloat returns the lower median of xs (0 when empty).
+func MedianFloat(xs []float64) float64 {
+	if len(xs) == 0 {
+		return 0
+	}
+	c := append([]float64(nil), xs...)
+	sort.Float64s(c)
+	return c[(len(c)-1)/2]
 }

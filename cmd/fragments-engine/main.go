@@ -1874,6 +1874,7 @@ func runTranscript(args []string) error {
 	force := fs.Bool("force", false, "enrich: redo sessions that already have a result")
 	maxCost := fs.Float64("max-cost-usd", 0, "enrich: per-run cost cap in USD (default from config)")
 	concurrency := fs.Int("concurrency", 1, "enrich: parallel calls")
+	stopAfter := fs.Int("stop-after-failures", 3, "enrich: halt after this many consecutive failed sessions (0 disables)")
 	sessions := fs.String("sessions", "", "enrich: comma-separated native session ids to restrict the run to")
 	sample := fs.Bool("sample", false, "enrich: restrict the run to the reproducible verification sample (prints ids by bucket)")
 	query := fs.String("query", "", "search: text to find in enriched summaries")
@@ -1898,7 +1899,7 @@ func runTranscript(args []string) error {
 	switch args[0] {
 	case "enrich":
 		return runTranscriptEnrich(cfg, store, enrichFlags{dryRun: *dryRun, limit: *limit, session: *session, model: *model, provider: *provider,
-			force: *force, maxCost: *maxCost, concurrency: *concurrency, sessions: *sessions, sample: *sample})
+			force: *force, maxCost: *maxCost, concurrency: *concurrency, sessions: *sessions, sample: *sample, stopAfter: *stopAfter})
 	case "embed":
 		return runTranscriptEmbed(cfg, store, *embedModel, *limit)
 	case "search":
@@ -1951,6 +1952,7 @@ type enrichFlags struct {
 	concurrency     int
 	sessions        string
 	sample          bool
+	stopAfter       int
 }
 
 // runTranscriptEnrich plans or runs transcript enrichment. A dry run needs no
@@ -1988,6 +1990,7 @@ func runTranscriptEnrich(cfg config.Config, store *transcript.Store, f enrichFla
 		PromptVersion: ec.PromptVersion, MaxCostUSD: maxRun, TotalCapUSD: total, MaxOutputTokens: ec.MaxOutputTokens,
 		MinIdle: time.Duration(idle) * time.Minute, AllowedProviders: ec.AllowedProviders, Concurrency: f.concurrency,
 		ExcludeSessions: ec.ExcludeSessions, ExcludeCWDPrefixes: ec.ExcludeCWDPrefixes,
+		StopAfterFailures: f.stopAfter, MaxFailureRate: 0.2, MinAttemptsForRate: 5,
 	}
 	if f.sessions != "" {
 		for _, id := range strings.Split(f.sessions, ",") {
@@ -2044,6 +2047,40 @@ func runTranscriptEnrich(cfg config.Config, store *transcript.Store, f enrichFla
 			s.Attempted, s.OK, s.Failed, s.Retries, s.TokensIn, s.TokensOut, s.CostUSD, s.FactsSaved, s.StoppedBy)
 		for class, n := range s.Errors {
 			fmt.Printf("error_class=%s count=%d\n", class, n)
+		}
+		if s.Attempted > 0 {
+			fmt.Printf("json_valid_first_try=%d/%d json_valid_after_retry=%d/%d\n", s.FirstTryValid, s.Attempted, s.OK, s.Attempted)
+			if s.Cites > 0 {
+				fmt.Printf("citations=%d grounded=%d (%.1f%%)\n", s.Cites, s.Cites-s.UngroundedCites, 100*float64(s.Cites-s.UngroundedCites)/float64(s.Cites))
+			}
+			if s.EntitiesChecked > 0 {
+				fmt.Printf("project_repo_entities=%d grounded_in_source=%d (%.1f%%) truncated_fields=%d\n", s.EntitiesChecked, s.EntitiesChecked-s.UngroundedEntities,
+					100*float64(s.EntitiesChecked-s.UngroundedEntities)/float64(s.EntitiesChecked), s.Truncated)
+			}
+			if len(s.SessionCosts) > 0 {
+				mn, mx := s.SessionCosts[0], s.SessionCosts[0]
+				for _, c := range s.SessionCosts {
+					if c < mn {
+						mn = c
+					}
+					if c > mx {
+						mx = c
+					}
+				}
+				fmt.Printf("session_cost_usd min=%.5f median=%.5f max=%.5f\n", mn, enrich.MedianFloat(s.SessionCosts), mx)
+			}
+			if len(s.LatenciesMS) > 0 {
+				mn, mx := s.LatenciesMS[0], s.LatenciesMS[0]
+				for _, l := range s.LatenciesMS {
+					if l < mn {
+						mn = l
+					}
+					if l > mx {
+						mx = l
+					}
+				}
+				fmt.Printf("call_latency_ms min=%d median=%d max=%d calls=%d\n", mn, enrich.MedianInt(s.LatenciesMS), mx, len(s.LatenciesMS))
+			}
 		}
 	}
 	return err
