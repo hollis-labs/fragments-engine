@@ -72,6 +72,12 @@ func (Source) Collect(ctx context.Context, cfg config.IngestConfig) ([]domain.Pi
 				return nil, errors.New("invalid Antigravity input locator")
 			}
 			relPath = filepath.ToSlash(relPath)
+			if section == "brain" && !rules.IncludeLogChunks && isLogChunk(relPath) {
+				// Pure duplicates of the parent transcript logs; counted so the
+				// exclusion is visible. Already-stored records are not touched.
+				domain.NoteSkip(ctx, "log_chunks_excluded", relPath)
+				continue
+			}
 			if before.Size() > maxBytes {
 				domain.NoteSkip(ctx, "size_limit", relPath)
 				continue
@@ -226,4 +232,10 @@ func snapshotReady(path string) error {
 		}
 	}
 	return nil
+}
+
+// isLogChunk reports brain/<conversation>/.system_generated/logs/chunks/**.
+func isLogChunk(rel string) bool {
+	parts := strings.Split(rel, "/")
+	return len(parts) >= 6 && parts[0] == "brain" && parts[2] == ".system_generated" && parts[3] == "logs" && parts[4] == "chunks"
 }

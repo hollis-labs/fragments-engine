@@ -272,6 +272,11 @@ type AntigravityRules struct {
 	// this many bytes (hard cap 2048). Zero, the default, keeps only the result's
 	// status and size.
 	ToolResultExcerptBytes int `json:"tool_result_excerpt_bytes" yaml:"tool_result_excerpt_bytes"`
+	// IncludeLogChunks re-enables brain/<id>/.system_generated/logs/chunks/**.
+	// Those files are byte-for-byte pieces of logs/transcript.jsonl and
+	// logs/transcript_full.jsonl, which are imported whole, so by default they are
+	// skipped (and counted as log_chunks_excluded).
+	IncludeLogChunks bool `json:"include_log_chunks" yaml:"include_log_chunks"`
 }
 
 type ChatGPTExportRules struct {

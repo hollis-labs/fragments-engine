@@ -347,6 +347,13 @@ through the same redaction, and none of it is a copy of the source.
   producer syncs its final state. A conversation is read in passes of at most 20,000
   steps or 64 MiB of step text (`batch_continues`) and continues on the next fire.
 - `pending_wal`, `trimmed_tail` and `not_utf8` behave as described above.
+- **Log chunks:** `brain/<id>/.system_generated/logs/chunks/**` are byte-for-byte
+  pieces of `logs/transcript.jsonl` and `logs/transcript_full.jsonl` (verified on
+  the synced archive: every chunk is an exact substring of its parent and the
+  chunks of each directory concatenate to the parent), which are imported whole.
+  They are skipped by default and counted as `log_chunks_excluded`; set
+  `rules.include_log_chunks: true` to import them again. Records already stored
+  for chunk files are not deleted or changed.
 
 Brain `.txt`, `.md`, `.log`, `.json` and `.jsonl` files are imported as UTF-8 text
 artifacts with separate physical-file segment identities, including compact/full
