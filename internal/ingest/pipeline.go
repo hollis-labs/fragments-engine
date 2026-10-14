@@ -153,7 +153,10 @@ func (p *Pipeline) RunOnce(ctx context.Context, ingestCfg config.IngestConfig) (
 	if reasons := skips.ByClass(); len(reasons) > 0 && private {
 		run.SkipReasons = reasons
 		for class, n := range reasons {
-			run.Skipped += n
+			// trimmed_tail inputs were imported; the class only keeps them visible.
+			if class != "trimmed_tail" {
+				run.Skipped += n
+			}
 			// Unchanged and empty inputs are the steady state, not news.
 			if class != "unchanged" && class != "empty" {
 				log.Printf("ingest %s: skipped %d input(s) class=%s", ingestCfg.Name, n, class)

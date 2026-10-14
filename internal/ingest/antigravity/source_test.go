@@ -187,8 +187,10 @@ func TestBrainBoundsSymlinksAndPartialTransfers(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(brainRoot, "invalid.txt"), []byte{0xff}, 0600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := (Source{}).Collect(context.Background(), cfg); err == nil {
-		t.Fatal("binary text was accepted")
+	skips := &domain.SkipCollector{}
+	got, err = (Source{}).Collect(domain.WithSkipCollector(context.Background(), skips), cfg)
+	if err != nil || len(got) != 1 || skips.ByClass()["not_utf8"] != 1 {
+		t.Fatalf("invalid text must be a counted skip, not an abort: %d %v %v", len(got), err, skips.ByClass())
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -269,5 +271,73 @@ func TestPendingWALSkipsOnlyThatDatabase(t *testing.T) {
 	}
 	if skips.ByClass()["pending_wal"] != 1 || len(skips.Skips) != 1 || skips.Skips[0].PathHash != domain.HashPath("conversations/synthetic.db") {
 		t.Fatalf("skip accounting: %+v", skips.Skips)
+	}
+}
+
+func TestBrainEncodingTrimAndSkip(t *testing.T) {
+	root := t.TempDir()
+	brainRoot := filepath.Join(root, "brain")
+	if err := os.MkdirAll(brainRoot, 0700); err != nil {
+		t.Fatal(err)
+	}
+	// A 100 KiB-style chunk cut in the middle of a 3-byte rune at its very end.
+	chunk := append([]byte(strings.Repeat("a", 1000)), []byte("\u20ac")[:2]...)
+	files := map[string][]byte{
+		"clean.jsonl":    []byte("synthetic clean text"),
+		"cut-tail.jsonl": chunk,
+		"mid-bad.jsonl":  append([]byte("synthetic "), append([]byte{0xff}, []byte(" tail text")...)...),
+		"head-cut.jsonl": append([]byte{0x82, 0xac}, []byte(" starts mid-rune")...),
+	}
+	for name, body := range files {
+		if err := os.WriteFile(filepath.Join(brainRoot, name), body, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	skips := &domain.SkipCollector{}
+	got, err := (Source{}).Collect(domain.WithSkipCollector(context.Background(), skips), config.IngestConfig{Source: config.IngestSource{Root: root}})
+	if err != nil {
+		t.Fatalf("run aborted: %v", err)
+	}
+	byKey := map[string]string{}
+	for _, f := range got {
+		byKey[f.SourceIdentity.SegmentKey] = f.Content
+	}
+	if len(got) != 2 {
+		t.Fatalf("expected clean and trimmed artifacts imported, got %d: %v", len(got), byKey)
+	}
+	if byKey["brain/clean.jsonl"] != "synthetic clean text" {
+		t.Fatalf("clean file changed: %q", byKey["brain/clean.jsonl"])
+	}
+	if c := byKey["brain/cut-tail.jsonl"]; c != strings.Repeat("a", 1000) {
+		t.Fatalf("partial trailing rune not trimmed cleanly: %d bytes", len(c))
+	}
+	by := skips.ByClass()
+	if by["trimmed_tail"] != 1 || by["not_utf8"] != 2 || len(skips.Skips) != 3 {
+		t.Fatalf("skip accounting: %v", by)
+	}
+	for _, s := range skips.Skips {
+		if s.PathHash == "" {
+			t.Fatal("skip without a path hash")
+		}
+	}
+}
+
+func TestTrimPartialRune(t *testing.T) {
+	euro := []byte("\u20ac")
+	for n := 1; n <= 2; n++ {
+		if head, ok := trimPartialRune(append([]byte("ab"), euro[:n]...)); !ok || string(head) != "ab" {
+			t.Fatalf("cut %d: %q %v", n, head, ok)
+		}
+	}
+	for name, raw := range map[string][]byte{
+		"complete rune":       append([]byte("ab"), euro...),
+		"invalid byte":        []byte("ab\xff"),
+		"defect before cut":   append([]byte("a\xffb"), euro[:2]...),
+		"continuation at end": []byte("ab\x82"),
+		"empty":               nil,
+	} {
+		if _, ok := trimPartialRune(raw); ok {
+			t.Fatalf("%s must not be trimmed", name)
+		}
 	}
 }

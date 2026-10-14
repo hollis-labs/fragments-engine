@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/hollis-labs/fragments-engine/internal/config"
 	"github.com/hollis-labs/fragments-engine/internal/domain"
@@ -71,11 +72,20 @@ func (Source) Collect(ctx context.Context, cfg config.IngestConfig) ([]domain.Pi
 				domain.NoteSkip(ctx, "size_limit", relPath)
 				continue
 			}
-			var content string
+			var (
+				content string
+				trimmed bool
+			)
 			if section == "conversations" {
 				content, err = conversation(ctx, path, maxBytes)
 			} else {
-				content, err = brain(ctx, path, maxBytes)
+				content, trimmed, err = brain(ctx, path, maxBytes)
+			}
+			if errors.Is(err, errBrainEncoding) {
+				// One undecodable artifact must not abort the run. It is counted
+				// per file and picked up again only if its bytes change.
+				domain.NoteSkip(ctx, "not_utf8", relPath)
+				continue
 			}
 			if errors.Is(err, ErrSnapshotRequired) {
 				// Fail closed for this database only. It is retried on the next
@@ -92,6 +102,10 @@ func (Source) Collect(ctx context.Context, cfg config.IngestConfig) ([]domain.Pi
 			}
 			if strings.TrimSpace(content) == "" {
 				continue
+			}
+			if trimmed {
+				// Imported, not skipped: counted so truncated artifacts stay visible.
+				domain.NoteSkip(ctx, "trimmed_tail", relPath)
 			}
 			rel := relPath
 			id := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
@@ -137,25 +151,54 @@ func sourceFiles(ctx context.Context, root string, databases bool) ([]string, er
 	return paths, err
 }
 
-func brain(ctx context.Context, path string, maxBytes int64) (string, error) {
+var errBrainEncoding = errors.New("Antigravity brain artifact is not supported UTF-8 text")
+
+// brain reads one brain artifact. An artifact whose only defect is an
+// incomplete UTF-8 sequence at its very end (a size-capped chunk cut mid-rune)
+// is decoded after dropping that partial rune and reported as trimmed; any other
+// invalid text returns errBrainEncoding.
+func brain(ctx context.Context, path string, maxBytes int64) (string, bool, error) {
 	f, err := os.Open(path)
 	if err != nil {
-		return "", errors.New("cannot open Antigravity brain artifact")
+		return "", false, errors.New("cannot open Antigravity brain artifact")
 	}
 	defer f.Close()
 	raw, err := io.ReadAll(io.LimitReader(f, maxBytes+1))
 	if err != nil || int64(len(raw)) > maxBytes {
-		return "", errors.New("cannot read Antigravity brain artifact within size limit")
+		return "", false, errors.New("cannot read Antigravity brain artifact within size limit")
 	}
 	if err := ctx.Err(); err != nil {
-		return "", err
+		return "", false, err
+	}
+	trimmed := false
+	if !utf8.Valid(raw) {
+		head, ok := trimPartialRune(raw)
+		if !ok {
+			return "", false, errBrainEncoding
+		}
+		raw, trimmed = head, true
 	}
 	if !validText(raw) {
-		return "", errors.New("Antigravity brain artifact is not supported UTF-8 text")
+		return "", false, errBrainEncoding
 	}
 	// Structured logs are kept as separate text artifacts, not projected into
 	// conversation turns. No binary attachments are materialized.
-	return string(raw), nil
+	return string(raw), trimmed, nil
+}
+
+// trimPartialRune drops an incomplete UTF-8 sequence (1-3 bytes) from the end of
+// raw. It reports false unless that is the only defect.
+func trimPartialRune(raw []byte) ([]byte, bool) {
+	for n := 1; n <= utf8.UTFMax-1 && n <= len(raw); n++ {
+		tail := raw[len(raw)-n:]
+		if utf8.RuneStart(tail[0]) && tail[0] >= utf8.RuneSelf && !utf8.FullRune(tail) {
+			if head := raw[:len(raw)-n]; utf8.Valid(head) {
+				return head, true
+			}
+			return nil, false
+		}
+	}
+	return nil, false
 }
 
 func snapshotReady(path string) error {
