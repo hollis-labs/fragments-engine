@@ -158,6 +158,13 @@ func TestEnrichmentIsOptionalAndJoinsWhenPresent(t *testing.T) {
 	if len(f.Tags) != 2 || f.Tags[0] != "alpha" {
 		t.Fatalf("facet tags: %v", f.Tags)
 	}
+	// An enrichment whose session is not in tx_sessions is never listed, so it
+	// must not be counted either (chip counts must equal the filtered list).
+	if _, err := st.db.Exec(`INSERT INTO tx_enrichment (session_pk, tier, prompt_version, model, content_digest, status, result_json, created_at)
+ VALUES ('orphan', 1, 'p', 'm', 'd', 'ok', '{"title":"x","topics":["alpha","ghost"]}', '2026-10-13T00:00:00Z')`); err != nil {
+		t.Fatal(err)
+	}
+	f, _ = st.SessionFacets(ctx)
 	if len(f.TagCounts) != 2 || f.TagCounts[0] != (TagCount{"alpha", 1}) || f.Enriched != 1 {
 		t.Fatalf("tag counts / enriched: %+v %d", f.TagCounts, f.Enriched)
 	}
