@@ -2,10 +2,12 @@ package chatgpt
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io/fs"
-	"net/url"
+	"log"
 	"os"
 	"path/filepath"
 	"sort"
@@ -46,7 +48,10 @@ func (Source) Collect(ctx context.Context, cfg config.IngestConfig) ([]domain.Pi
 		maxSizeBytes = int64(rules.MaxFileSizeMB) * 1024 * 1024
 	}
 
-	var out []domain.PipelineFragment
+	var (
+		out   []domain.PipelineFragment
+		stats collectStats
+	)
 	for _, exportDir := range exportDirs {
 		select {
 		case <-ctx.Done():
@@ -55,10 +60,6 @@ func (Source) Collect(ctx context.Context, cfg config.IngestConfig) ([]domain.Pi
 		}
 
 		parseDir := exportDir
-		fileIndex, err := buildAttachmentIndex(exportDir)
-		if err != nil {
-			return nil, fmt.Errorf("build attachment index %s: %w", exportDir, err)
-		}
 		userMeta := readUserMeta(parseDir)
 		paths, err := conversationFiles(parseDir)
 		if err != nil {
@@ -69,7 +70,7 @@ func (Source) Collect(ctx context.Context, cfg config.IngestConfig) ([]domain.Pi
 			if err != nil || info.Size() > maxSizeBytes {
 				continue
 			}
-			fragments, err := parseConversationFile(path, parseDir, userMeta, fileIndex)
+			fragments, err := parseConversationFile(path, parseDir, userMeta, &stats)
 			if err != nil {
 				return nil, fmt.Errorf("parse chatgpt export file %s: %w", path, err)
 			}
@@ -77,6 +78,8 @@ func (Source) Collect(ctx context.Context, cfg config.IngestConfig) ([]domain.Pi
 		}
 	}
 
+	log.Printf("chatgpt export %q: fragments=%d conversations_seen=%d attachments_not_carried=%d url_refs_not_carried=%d non_text_parts_skipped=%d",
+		cfg.Name, len(out), stats.conversations, stats.attachments, stats.urlRefsSkipped, stats.nonTextSkipped)
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].CreatedAt.Equal(out[j].CreatedAt) {
 			return out[i].SourceID < out[j].SourceID
@@ -188,7 +191,7 @@ func readUserMeta(root string) exportUserMeta {
 	return meta
 }
 
-func parseConversationFile(path, exportDir string, userMeta exportUserMeta, fileIndex map[string]string) ([]domain.PipelineFragment, error) {
+func parseConversationFile(path, exportDir string, userMeta exportUserMeta, stats *collectStats) ([]domain.PipelineFragment, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("read export file: %w", err)
@@ -199,7 +202,7 @@ func parseConversationFile(path, exportDir string, userMeta exportUserMeta, file
 	}
 	out := make([]domain.PipelineFragment, 0, len(conversations))
 	for _, conv := range conversations {
-		fragment, ok := buildConversationFragment(conv, path, exportDir, userMeta, fileIndex)
+		fragment, ok := buildConversationFragment(conv, path, exportDir, userMeta, stats)
 		if ok {
 			out = append(out, fragment)
 		}
@@ -207,7 +210,7 @@ func parseConversationFile(path, exportDir string, userMeta exportUserMeta, file
 	return out, nil
 }
 
-func buildConversationFragment(conv exportConversation, sourceFile, exportDir string, userMeta exportUserMeta, fileIndex map[string]string) (domain.PipelineFragment, bool) {
+func buildConversationFragment(conv exportConversation, sourceFile, exportDir string, userMeta exportUserMeta, stats *collectStats) (domain.PipelineFragment, bool) {
 	if strings.TrimSpace(conv.ID) == "" {
 		return domain.PipelineFragment{}, false
 	}
@@ -217,7 +220,8 @@ func buildConversationFragment(conv exportConversation, sourceFile, exportDir st
 	}
 	var (
 		blocks       []string
-		attachments  []domain.PipelineAttachment
+		attachRefs   []any
+		urlRefs      int
 		nonTextParts int
 	)
 	createdAt := timeFromUnixFloat(conv.CreateTime)
@@ -232,7 +236,9 @@ func buildConversationFragment(conv exportConversation, sourceFile, exportDir st
 			continue
 		}
 		blocks = append(blocks, "## "+role+"\n\n"+text)
-		attachments = append(attachments, extractMessageAttachments(msg, fileIndex)...)
+		refs, urls := summarizeAttachments(msg)
+		attachRefs = append(attachRefs, refs...)
+		urlRefs += urls
 		msgTime := timeFromUnixFloat(msg.CreateTime)
 		if createdAt.IsZero() || (!msgTime.IsZero() && msgTime.Before(createdAt)) {
 			createdAt = msgTime
@@ -257,6 +263,21 @@ func buildConversationFragment(conv exportConversation, sourceFile, exportDir st
 	if nonTextParts > 0 {
 		meta["non_text_parts_skipped"] = nonTextParts
 	}
+	// Attachments are never emitted: the transcript store fails closed on them.
+	// Only counts and minimal references (no paths, no bytes) are recorded.
+	if len(attachRefs) > 0 {
+		meta["attachment_count"] = len(attachRefs)
+		meta["attachment_refs"] = attachRefs
+	}
+	if urlRefs > 0 {
+		meta["url_refs_skipped"] = urlRefs
+	}
+	if stats != nil {
+		stats.conversations++
+		stats.attachments += len(attachRefs)
+		stats.urlRefsSkipped += urlRefs
+		stats.nonTextSkipped += nonTextParts
+	}
 	if userMeta.ID != "" {
 		meta["user_id"] = userMeta.ID
 	}
@@ -276,7 +297,6 @@ func buildConversationFragment(conv exportConversation, sourceFile, exportDir st
 		CreatedAt:     createdAt.UTC(),
 		Metadata:      meta,
 		CanonicalPath: canonicalPath,
-		Attachments:   dedupeAttachments(attachments),
 	}, true
 }
 
@@ -360,24 +380,20 @@ func timeFromUnixFloat(v float64) time.Time {
 	return time.Unix(seconds, nanos).UTC()
 }
 
-func buildAttachmentIndex(root string) (map[string]string, error) {
-	index := map[string]string{}
-	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() {
-			return err
-		}
-		base := strings.ToLower(filepath.Base(path))
-		index[base] = path
-		if idx := strings.LastIndex(base, "-"); idx >= 0 && idx+1 < len(base) {
-			index[base[idx+1:]] = path
-		}
-		return nil
-	})
-	return index, err
+// collectStats totals what the private-transcript path deliberately does not
+// carry, so a run can report counts without any content.
+type collectStats struct {
+	conversations  int
+	attachments    int
+	urlRefsSkipped int
+	nonTextSkipped int
 }
 
-func extractMessageAttachments(msg exportMessage, fileIndex map[string]string) []domain.PipelineAttachment {
-	var out []domain.PipelineAttachment
+// summarizeAttachments reduces a message's attachment metadata to counts and
+// minimal references (kind, mime, size, a hash of the file name). It never opens
+// or stats a file, and URL references are counted only.
+func summarizeAttachments(msg exportMessage) ([]any, int) {
+	var refs []any
 	if raw, ok := msg.Metadata["attachments"].([]any); ok {
 		for _, item := range raw {
 			m, ok := item.(map[string]any)
@@ -385,38 +401,32 @@ func extractMessageAttachments(msg exportMessage, fileIndex map[string]string) [
 				continue
 			}
 			name := firstString(m, "name", "filename", "title")
-			sourcePath := resolveAttachmentPath(name, fileIndex)
-			out = append(out, domain.PipelineAttachment{
-				Kind:         inferAttachmentKind(name, firstString(m, "mimeType", "mime_type"), ""),
-				Role:         "attachment",
-				Name:         name,
-				MIMEType:     firstString(m, "mimeType", "mime_type"),
-				SourcePath:   sourcePath,
-				SizeBytes:    fileSize(sourcePath),
-				Metadata:     m,
-				Source:       "chatgpt_export",
-				SourceItemID: firstString(m, "id"),
+			mime := firstString(m, "mimeType", "mime_type")
+			sum := sha256.Sum256([]byte(strings.ToLower(strings.TrimSpace(name))))
+			refs = append(refs, map[string]any{
+				"kind":        inferAttachmentKind(name, mime, ""),
+				"mime":        mime,
+				"size_bytes":  firstNumber(m, "size", "size_bytes", "file_size"),
+				"name_sha256": hex.EncodeToString(sum[:]),
 			})
 		}
 	}
-	out = append(out, extractMessageURLs(msg.Metadata, msg.ID)...)
-	return out
+	return refs, countMessageURLs(msg.Metadata)
 }
 
-func extractMessageURLs(meta map[string]any, msgID string) []domain.PipelineAttachment {
-	var out []domain.PipelineAttachment
+func countMessageURLs(meta map[string]any) int {
 	seen := map[string]struct{}{}
 	var walk func(any)
 	walk = func(v any) {
 		switch typed := v.(type) {
 		case map[string]any:
-			if rawURL, ok := typed["url"].(string); ok {
-				addURLAttachment(rawURL, msgID, seen, &out)
+			if rawURL, ok := typed["url"].(string); ok && strings.TrimSpace(rawURL) != "" {
+				seen[strings.TrimSpace(rawURL)] = struct{}{}
 			}
 			if rawURLs, ok := typed["safe_urls"].([]any); ok {
 				for _, item := range rawURLs {
-					if s, ok := item.(string); ok {
-						addURLAttachment(s, msgID, seen, &out)
+					if s, ok := item.(string); ok && strings.TrimSpace(s) != "" {
+						seen[strings.TrimSpace(s)] = struct{}{}
 					}
 				}
 			}
@@ -430,61 +440,16 @@ func extractMessageURLs(meta map[string]any, msgID string) []domain.PipelineAtta
 		}
 	}
 	walk(meta)
-	return out
+	return len(seen)
 }
 
-func addURLAttachment(rawURL, msgID string, seen map[string]struct{}, out *[]domain.PipelineAttachment) {
-	rawURL = strings.TrimSpace(rawURL)
-	if rawURL == "" {
-		return
+func firstNumber(m map[string]any, keys ...string) int64 {
+	for _, key := range keys {
+		if n, ok := m[key].(float64); ok && n >= 0 {
+			return int64(n)
+		}
 	}
-	if _, err := url.ParseRequestURI(rawURL); err != nil {
-		return
-	}
-	if _, ok := seen[rawURL]; ok {
-		return
-	}
-	seen[rawURL] = struct{}{}
-	*out = append(*out, domain.PipelineAttachment{
-		Kind:         inferAttachmentKind("", "", rawURL),
-		Role:         "reference",
-		Name:         attachmentNameFromURL(rawURL),
-		ExternalURL:  rawURL,
-		Metadata:     map[string]any{"url": rawURL},
-		Source:       "chatgpt_export",
-		SourceItemID: msgID,
-	})
-}
-
-func attachmentNameFromURL(rawURL string) string {
-	u, err := url.Parse(rawURL)
-	if err != nil {
-		return rawURL
-	}
-	base := filepath.Base(u.Path)
-	if base == "." || base == "/" || base == "" {
-		return rawURL
-	}
-	return base
-}
-
-func resolveAttachmentPath(name string, fileIndex map[string]string) string {
-	name = strings.ToLower(strings.TrimSpace(name))
-	if name == "" {
-		return ""
-	}
-	return fileIndex[name]
-}
-
-func fileSize(path string) int64 {
-	if strings.TrimSpace(path) == "" {
-		return 0
-	}
-	info, err := os.Stat(path)
-	if err != nil {
-		return 0
-	}
-	return info.Size()
+	return 0
 }
 
 func inferAttachmentKind(name, mimeType, rawURL string) string {
@@ -537,25 +502,4 @@ func firstString(m map[string]any, keys ...string) string {
 		}
 	}
 	return ""
-}
-
-func dedupeAttachments(in []domain.PipelineAttachment) []domain.PipelineAttachment {
-	out := make([]domain.PipelineAttachment, 0, len(in))
-	seen := map[string]struct{}{}
-	for _, item := range in {
-		key := strings.Join([]string{
-			item.Kind,
-			item.Role,
-			item.Name,
-			item.SourcePath,
-			item.ExternalURL,
-			item.SourceItemID,
-		}, "\n")
-		if _, ok := seen[key]; ok {
-			continue
-		}
-		seen[key] = struct{}{}
-		out = append(out, item)
-	}
-	return out
 }
