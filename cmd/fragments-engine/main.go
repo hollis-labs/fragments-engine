@@ -1874,6 +1874,9 @@ func runTranscript(args []string) error {
 	force := fs.Bool("force", false, "enrich: redo sessions that already have a result")
 	maxCost := fs.Float64("max-cost-usd", 0, "enrich: per-run cost cap in USD (default from config)")
 	concurrency := fs.Int("concurrency", 1, "enrich: parallel calls")
+	tool := fs.String("tool", "", "enrich: restrict to one tool (claude or codex)")
+	order := fs.String("order", "", "enrich: newest = most recently active first (default: reproducible hash order)")
+	stage := fs.String("stage", "", "enrich: a named allocation from transcripts.enrichment.stages")
 	stopAfter := fs.Int("stop-after-failures", 3, "enrich: halt after this many consecutive failed sessions (0 disables)")
 	sessions := fs.String("sessions", "", "enrich: comma-separated native session ids to restrict the run to")
 	sample := fs.Bool("sample", false, "enrich: restrict the run to the reproducible verification sample (prints ids by bucket)")
@@ -1899,7 +1902,7 @@ func runTranscript(args []string) error {
 	switch args[0] {
 	case "enrich":
 		return runTranscriptEnrich(cfg, store, enrichFlags{dryRun: *dryRun, limit: *limit, session: *session, model: *model, provider: *provider,
-			force: *force, maxCost: *maxCost, concurrency: *concurrency, sessions: *sessions, sample: *sample, stopAfter: *stopAfter})
+			force: *force, maxCost: *maxCost, concurrency: *concurrency, sessions: *sessions, sample: *sample, stopAfter: *stopAfter, tool: *tool, order: *order, stage: *stage})
 	case "show":
 		return runTranscriptShow(store, *session)
 	case "embed":
@@ -1955,6 +1958,8 @@ type enrichFlags struct {
 	sessions        string
 	sample          bool
 	stopAfter       int
+	tool, order     string
+	stage           string
 }
 
 // runTranscriptEnrich plans or runs transcript enrichment. A dry run needs no
@@ -1993,6 +1998,28 @@ func runTranscriptEnrich(cfg config.Config, store *transcript.Store, f enrichFla
 		MinIdle: time.Duration(idle) * time.Minute, AllowedProviders: ec.AllowedProviders, Concurrency: f.concurrency,
 		ExcludeSessions: ec.ExcludeSessions, ExcludeCWDPrefixes: ec.ExcludeCWDPrefixes,
 		StopAfterFailures: f.stopAfter, MaxFailureRate: 0.2, MinAttemptsForRate: 5,
+	}
+	if f.stage != "" {
+		st, ok := ec.Stages[f.stage]
+		if !ok {
+			return fmt.Errorf("unknown stage %q: define it under transcripts.enrichment.stages", f.stage)
+		}
+		opts.Tool, opts.Order, opts.Allocation = st.Tool, st.Order, st.Allocation
+	}
+	if f.tool != "" {
+		opts.Tool = f.tool
+	}
+	if f.order != "" {
+		opts.Order = f.order
+	}
+	if opts.Tool != "" && opts.Tool != "claude" && opts.Tool != "codex" {
+		return fmt.Errorf("--tool must be claude or codex")
+	}
+	if opts.Order != "" && opts.Order != "newest" {
+		return fmt.Errorf("--order must be newest (or empty)")
+	}
+	if err := enrich.ValidateAllocation(opts.Allocation); err != nil {
+		return err
 	}
 	if f.sessions != "" {
 		for _, id := range strings.Split(f.sessions, ",") {
@@ -2042,7 +2069,10 @@ func runTranscriptEnrich(cfg config.Config, store *transcript.Store, f enrichFla
 	fmt.Printf("sessions=%d already_done=%d excluded=%d map_reduce=%d pending=%d calls=%d est_input_tokens=%d (chars/4 estimate) max_output_tokens=%d trimmed_turns=%d\n",
 		s.Sessions, s.AlreadyDone, s.Excluded, s.MapReduce, s.Pending, s.Calls, s.EstInputTokens, s.MaxOutputToks, s.TrimmedTurns)
 	if s.EstMaxCostUSD > 0 {
-		fmt.Printf("est_max_cost_usd=%.4f (upper bound from the configured prices: estimated input + full output cap per call)\n", s.EstMaxCostUSD)
+		fmt.Printf("est_expected_cost_usd=%.4f est_max_cost_usd=%.4f (expected from measured ratios; upper bound = estimated input x1.7 + full output cap per call)\n", s.EstExpectedCostUSD, s.EstMaxCostUSD)
+	}
+	for _, x := range s.Strata {
+		fmt.Printf("stratum %s available=%d selected=%d\n", x.Key, x.Available, x.Selected)
 	}
 	if !f.dryRun {
 		fmt.Printf("attempted=%d ok=%d failed=%d retries=%d tokens_in=%d tokens_out=%d gateway_cost_usd=%.4f facts_saved=%d stopped_by=%s\n",
@@ -2051,6 +2081,26 @@ func runTranscriptEnrich(cfg config.Config, store *transcript.Store, f enrichFla
 			fmt.Printf("error_class=%s count=%d\n", class, n)
 		}
 		if s.Attempted > 0 {
+			gates := enrich.EvaluateGates(s)
+			for _, g := range gates {
+				cmp := ">="
+				if g.AtMost {
+					cmp = "<="
+				}
+				switch {
+				case g.NA:
+					fmt.Printf("gate %s: n/a\n", g.Name)
+				case g.Pass:
+					fmt.Printf("gate %s: PASS %.3f %s %.2f\n", g.Name, g.Value, cmp, g.Threshold)
+				default:
+					fmt.Printf("gate %s: FAIL %.3f must be %s %.2f\n", g.Name, g.Value, cmp, g.Threshold)
+				}
+			}
+			verdict := "FAIL"
+			if enrich.AllGatesPass(s, gates) {
+				verdict = "PASS"
+			}
+			fmt.Printf("stage_gates=%s (stopped_by=%q)\n", verdict, s.StoppedBy)
 			fmt.Printf("json_valid_first_try=%d/%d json_valid_after_retry=%d/%d\n", s.FirstTryValid, s.Attempted, s.OK, s.Attempted)
 			if s.Cites > 0 {
 				fmt.Printf("citations=%d grounded=%d (%.1f%%)\n", s.Cites, s.Cites-s.UngroundedCites, 100*float64(s.Cites-s.UngroundedCites)/float64(s.Cites))

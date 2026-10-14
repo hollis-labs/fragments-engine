@@ -35,9 +35,10 @@ type TranscriptConfig struct {
 // EnrichmentConfig drives transcript enrichment. Nothing leaves the machine
 // unless a provider is listed in AllowedProviders: the default is empty.
 type EnrichmentConfig struct {
-	Gateway   EnrichmentGateway   `json:"gateway" yaml:"gateway"`
-	Anthropic EnrichmentAnthropic `json:"anthropic" yaml:"anthropic"`
-	Embedding EnrichmentEmbedding `json:"embedding" yaml:"embedding"`
+	Gateway   EnrichmentGateway          `json:"gateway" yaml:"gateway"`
+	Anthropic EnrichmentAnthropic        `json:"anthropic" yaml:"anthropic"`
+	Stages    map[string]EnrichmentStage `json:"stages" yaml:"stages"`
+	Embedding EnrichmentEmbedding        `json:"embedding" yaml:"embedding"`
 	// AllowedProviders are the gateway provider ids that may receive redacted
 	// transcript text. Empty means no model call is made.
 	AllowedProviders []string `json:"allowed_providers" yaml:"allowed_providers"`
@@ -56,6 +57,18 @@ type EnrichmentConfig struct {
 	ExcludeCWDPrefixes []string `json:"exclude_cwd_prefixes" yaml:"exclude_cwd_prefixes"`
 	MinIdleMinutes     int      `json:"min_idle_minutes" yaml:"min_idle_minutes"`
 	MaxOutputTokens    int      `json:"max_output_tokens" yaml:"max_output_tokens"`
+}
+
+// EnrichmentStage is a named, reusable selection for a staged run. Allocation
+// maps "tool/bucket" (for example "claude/8-30k"; buckets are <1k, 1-8k, 8-30k,
+// 30-60k, >60k of estimated prompt tokens) to how many pending sessions to take
+// from that stratum; strata not listed are not selected. Sessions are taken in
+// a reproducible hash order, or newest first when Order is "newest". Sessions
+// already enriched are excluded before selection.
+type EnrichmentStage struct {
+	Tool       string         `json:"tool" yaml:"tool"`
+	Order      string         `json:"order" yaml:"order"`
+	Allocation map[string]int `json:"allocation" yaml:"allocation"`
 }
 
 // EnrichmentAnthropic configures the direct Anthropic provider (allow-list id
