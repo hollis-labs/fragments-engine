@@ -170,7 +170,7 @@ func TestDryRunMakesNoCallsAndPlansCounts(t *testing.T) {
 		t.Fatalf("plan %+v", sum.Plan)
 	}
 	// Two single calls, plus the long session's chunks and its reduce call.
-	if sum.Calls < 2+2+1 || sum.MaxOutputToks != sum.Calls*1500 {
+	if sum.Calls < 2+2+1 || sum.MaxOutputToks != 2*1500+(sum.Calls-2)*4096 {
 		t.Fatalf("call arithmetic %+v", sum.Plan)
 	}
 	// And it persisted nothing.
@@ -812,5 +812,64 @@ func TestRetryClassesAreRecorded(t *testing.T) {
 	rec, _, _ := st.LatestEnrichment(context.Background(), sessionPK(t, st, "S1"), 1)
 	if !strings.Contains(rec.QualityJSON, `"retry_classes":["parse_not_json"]`) {
 		t.Fatalf("quality %s", rec.QualityJSON)
+	}
+}
+
+// Part and combine calls get the map/reduce cap; single-call sessions keep the
+// standard one.
+func TestMapReduceCallsUseTheirOwnOutputCap(t *testing.T) {
+	st := openStore(t)
+	addSession(t, st, "S1", old, "synthetic question", "synthetic answer")
+	longSession(t, st, "LONG", 12)
+	gw := &fakeGW{reply: func(n int, r Request) (Response, error) {
+		if r.System == MapSystemPrompt {
+			return Response{Text: partialJSON, InputTokens: 300, OutputTokens: 40, CostUSD: 0.002}, nil
+		}
+		return Response{Text: goodJSON, InputTokens: 100, OutputTokens: 60, CostUSD: 0.003}, nil
+	}}
+	o := opts()
+	o.SingleCallTokens, o.ChunkTokens, o.ChunkOverlapTurns = 1500, 2500, 2
+	o.MaxOutputTokens, o.MapReduceMaxOutputTokens = 1500, 3000
+	if _, err := (&Runner{Store: st, GW: gw, Opts: o}).Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	single, long := 0, 0
+	for _, c := range gw.calls {
+		switch c.MaxOutputTokens {
+		case 1500:
+			single++
+		case 3000:
+			long++
+		default:
+			t.Fatalf("unexpected cap %d", c.MaxOutputTokens)
+		}
+	}
+	if single != 1 || long < 3 {
+		t.Fatalf("single-cap calls=%d map/reduce-cap calls=%d", single, long)
+	}
+}
+
+// A reply the provider cut off at the cap is its own failure class, for a part
+// call and for a single call alike.
+func TestMaxTokensStopIsClassedOutputTruncated(t *testing.T) {
+	for _, long := range []bool{true, false} {
+		st := openStore(t)
+		if long {
+			longSession(t, st, "LONG", 12)
+		} else {
+			addSession(t, st, "S1", old, "synthetic question", "synthetic answer")
+		}
+		gw := &fakeGW{reply: func(n int, r Request) (Response, error) {
+			return Response{Text: `{"schema_version":1,"title":"cut o`, StopReason: "max_tokens", InputTokens: 300, OutputTokens: r.MaxOutputTokens, CostUSD: 0.002}, nil
+		}}
+		o := opts()
+		o.SingleCallTokens, o.ChunkTokens, o.ChunkOverlapTurns = 1500, 2500, 2
+		s, err := (&Runner{Store: st, GW: gw, Opts: o}).Run(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if s.Failed != 1 || s.Errors[ClassOutputTruncated] != 1 || len(s.Errors) != 1 {
+			t.Fatalf("long=%v errors %+v", long, s.Errors)
+		}
 	}
 }

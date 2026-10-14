@@ -22,7 +22,10 @@ type Request struct {
 
 // Response is the model's text plus what the gateway reports about the call.
 type Response struct {
-	Text                      string
+	Text string
+	// StopReason is the provider's stop reason (for example "max_tokens"); empty
+	// when the provider does not report one.
+	StopReason                string
 	Provider, Model           string
 	InputTokens, OutputTokens int
 	// CacheReadTokens and CacheWriteTokens are reported separately by providers

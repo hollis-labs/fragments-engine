@@ -433,3 +433,14 @@ func TestDryRunBoundPricesEachCallOnItsOwnTier(t *testing.T) {
 		t.Fatalf("bound %v want about %v (each call is under the threshold)", s.EstMaxCostUSD, want)
 	}
 }
+
+func TestAnthropicReportsStopReason(t *testing.T) {
+	stub := &anthropicStub{reply: func(int) (int, string) {
+		return 200, `{"model":"claude-haiku-5-5","stop_reason":"max_tokens","content":[{"type":"text","text":"{\"a\":"}],"usage":{"input_tokens":10,"output_tokens":321}}`
+	}}
+	g, _ := newAnthropic(t, stub, syntheticKey)
+	resp, err := g.Chat(context.Background(), Request{Model: "claude-haiku-5-5", System: "s", User: "u", MaxOutputTokens: 321})
+	if err != nil || resp.StopReason != "max_tokens" {
+		t.Fatalf("stop reason %q err %v", resp.StopReason, err)
+	}
+}

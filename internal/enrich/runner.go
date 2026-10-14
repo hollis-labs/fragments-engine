@@ -47,9 +47,12 @@ type Options struct {
 	ExcludeCWDPrefixes []string
 	MinIdle            time.Duration
 	MaxOutputTokens    int
-	AllowedProviders   []string
-	Concurrency        int
-	EstPricing         Pricing // optional: lets a dry run print a dollar upper bound
+	// MapReduceMaxOutputTokens is the output cap for the part (map) and combine
+	// (reduce) calls of a long session; single-call sessions use MaxOutputTokens.
+	MapReduceMaxOutputTokens int
+	AllowedProviders         []string
+	Concurrency              int
+	EstPricing               Pricing // optional: lets a dry run print a dollar upper bound
 	// Tool restricts a run to one tool ("claude" or "codex"). Order "newest"
 	// takes the most recently active sessions first (default: stable hash order
 	// inside each stratum). Allocation, keyed "tool/bucket", selects that many
@@ -77,6 +80,9 @@ func (o *Options) normalize() {
 	}
 	if o.MaxOutputTokens <= 0 {
 		o.MaxOutputTokens = 1500
+	}
+	if o.MapReduceMaxOutputTokens <= 0 {
+		o.MapReduceMaxOutputTokens = 4096
 	}
 	if o.Concurrency <= 0 {
 		o.Concurrency = 1
@@ -253,32 +259,32 @@ func (r *Runner) Run(ctx context.Context) (Summary, error) {
 		}
 	}
 	// Calls and token estimates follow what will actually be sent.
-	sum.Calls, sum.EstInputTokens, sum.MapReduce = 0, 0, 0
+	sum.Calls, sum.EstInputTokens, sum.MapReduce, sum.MaxOutputToks = 0, 0, 0, 0
 	// Each request is priced on its own (prompt-length tiers), so the dollar
 	// bound is summed per call. chars/4 undercounts on newer tokenizers
 	// (Anthropic documents about 30% more tokens), so each prompt gets a 1.7x
 	// allowance (measured on the first live sample: 1.4x to 1.6x per call), and
 	// every call is assumed to use its full output cap.
-	call := func(promptTokens int) {
+	call := func(promptTokens, maxOut int) {
 		sum.Calls++
+		sum.MaxOutputToks += maxOut
 		sum.EstInputTokens += promptTokens
 		if o.EstPricing.Configured() {
-			sum.EstMaxCostUSD += o.EstPricing.Cost(promptTokens*tokenizerAllowanceNum/tokenizerAllowanceDen, o.MaxOutputTokens, 0, 0)
+			sum.EstMaxCostUSD += o.EstPricing.Cost(promptTokens*tokenizerAllowanceNum/tokenizerAllowanceDen, maxOut, 0, 0)
 			sum.EstExpectedCostUSD += o.EstPricing.Cost(promptTokens*expectedRatioNum/expectedRatioDen, expectedOutputPerCall, 0, 0)
 		}
 	}
 	for _, w := range pending {
 		if len(w.chunks) == 0 {
-			call(w.prompt.EstTokens)
+			call(w.prompt.EstTokens, o.MaxOutputTokens)
 			continue
 		}
 		sum.MapReduce++
 		for _, c := range w.chunks {
-			call(c.EstTokens)
+			call(c.EstTokens, o.MapReduceMaxOutputTokens)
 		}
-		call(len(w.chunks) * (o.MaxOutputTokens / 2)) // the reduce call reads the partials
+		call(len(w.chunks)*(o.MaxOutputTokens/2), o.MapReduceMaxOutputTokens) // the reduce call reads the partials
 	}
-	sum.MaxOutputToks = sum.Calls * o.MaxOutputTokens
 	if o.DryRun {
 		return sum, nil
 	}
@@ -412,11 +418,16 @@ type outcome struct {
 // every reply received, whether or not it validates. It returns "" on success.
 func (r *Runner) ask(ctx context.Context, o Options, w work, prefix, tag, system, user string, validate func(text string) error, acct *outcome) (string, error) {
 	var lastClass string
+	// Part and combine calls (every tag but the single-call "1") get the higher cap.
+	maxOut := o.MaxOutputTokens
+	if tag != "1" {
+		maxOut = o.MapReduceMaxOutputTokens
+	}
 	for attempt := 0; attempt < 2; attempt++ {
 		reqID := fmt.Sprintf("%s/%s/%d", prefix, tag, attempt)
 		began := time.Now()
 		resp, err := r.callWithBackoff(ctx, o, Request{
-			Provider: o.Provider, Model: o.Model, System: system, User: user, MaxOutputTokens: o.MaxOutputTokens,
+			Provider: o.Provider, Model: o.Model, System: system, User: user, MaxOutputTokens: maxOut,
 			CallerID: CallerID, RequestID: reqID, SessionID: "fe-enrich/" + shortPK(w.in.Ref.SessionPK),
 		})
 		if err != nil {
@@ -458,12 +469,21 @@ func (r *Runner) ask(ctx context.Context, o Options, w work, prefix, tag, system
 		if errors.As(verr, &pe) {
 			lastClass = "parse_" + pe.Class
 		}
+		if resp.StopReason == "max_tokens" {
+			// The reply was cut off at the output cap: its own class, so the gates
+			// summary tells a too-small cap from a model that cannot follow the contract.
+			lastClass = ClassOutputTruncated
+		}
 		acct.retries++
 		acct.retryClasses = append(acct.retryClasses, lastClass)
 		user = user + "\n\nYour previous reply was rejected (" + lastClass + "). Reply with only the JSON object described in the instructions."
 	}
 	return lastClass, nil
 }
+
+// ClassOutputTruncated is the failure class of a reply the provider stopped at
+// the output cap (stop_reason max_tokens) that then did not validate.
+const ClassOutputTruncated = "output_truncated"
 
 // testHookAfterLedger lets a test act between a paid call's ledger write and
 // the validation and save of its result. Always nil outside tests.
@@ -506,7 +526,7 @@ func (r *Runner) enrichOne(ctx context.Context, o Options, w work) outcome {
 				return err
 			}, &out)
 			if fatal != nil || class != "" {
-				if class != "" && fatal == nil {
+				if class != "" && fatal == nil && class != ClassOutputTruncated {
 					class = "map_" + class
 				}
 				return r.finish(ctx, o, w, prefix, out, q, chunks, class, fatal)
