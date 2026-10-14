@@ -157,6 +157,23 @@ transcripts:
           output_per_mtok: 2.50
           cache_read_per_mtok: 0.05
           cache_write_per_mtok: 0.625
+    stages:                             # named, reusable selections for staged runs
+      s1:                               # `transcript enrich --stage s1`
+        allocation:                     # "tool/bucket": how many PENDING sessions to take
+          "claude/<1k": 20              # buckets are estimated prompt tokens:
+          "claude/1-8k": 45             # <1k, 1-8k, 8-30k, 30-60k, >60k (map-reduce)
+          "claude/8-30k": 45
+          "claude/30-60k": 22
+          "claude/>60k": 8
+          "codex/<1k": 8
+          "codex/1-8k": 72
+          "codex/8-30k": 45
+          "codex/30-60k": 25
+          "codex/>60k": 10
+      claude-rest:                      # everything left of one tool, newest first
+        tool: claude
+        order: newest
+        allocation: {"claude/<1k": 1000, "claude/1-8k": 1000, "claude/8-30k": 1000, "claude/30-60k": 1000, "claude/>60k": 1000}
     embedding:
       provider: openai_compat_local     # or ollama; both refuse any host that is not on this machine
       base_url: http://127.0.0.1:8183
@@ -164,6 +181,18 @@ transcripts:
       dim: 1024
       query_instruction: "Given a search query about a past coding conversation, retrieve the conversation summaries that answer it"
 ```
+
+Staged runs: `--stage NAME` (a named allocation above), `--tool claude|codex`,
+`--order newest` and `--limit N` select what to enrich. Sessions already
+enriched are excluded before selection, so each stage takes the next unprocessed
+sessions; within a stratum the order is a reproducible hash (or newest first).
+`--dry-run` prints, per stratum, how many sessions are pending and how many the
+stage selects, the expected cost (from the measured ratios: real input about 1.6x
+the estimate, about 850 output tokens per call) and an upper bound. After a real
+run it prints the gates for the stage: first-try JSON-valid rate (>= 90%),
+failure rate (<= 5%), citation grounding (>= 95%), project/repo entity grounding
+(>= 90%) and spend against the expected cost (<= 1.2x), as `stage_gates=PASS|FAIL`.
+A run halted by a stop rule never passes.
 
 The Anthropic key is read from the named environment variable at startup, like
 other service keys (FE never loads a `.env` file); it is not logged, stored or

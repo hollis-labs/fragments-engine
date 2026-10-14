@@ -17,6 +17,10 @@ const (
 	// tokenizerAllowance is the factor applied to the chars/4 estimate when
 	// bounding dollars: the first live sample measured 1.4x to 1.6x per call.
 	tokenizerAllowanceNum, tokenizerAllowanceDen = 17, 10
+	// What the live sample measured: real input tokens about 1.6x the estimate
+	// and about 850 output tokens per call (map-reduce parts included).
+	expectedRatioNum, expectedRatioDen = 16, 10
+	expectedOutputPerCall              = 850
 	// CallerID labels every gateway call so Tether can attribute usage.
 	CallerID = "fragments-engine/transcript-enrichment"
 	// defaultSingleCallTokens is the largest session sent in one call; bigger
@@ -45,6 +49,13 @@ type Options struct {
 	AllowedProviders   []string
 	Concurrency        int
 	EstPricing         Pricing // optional: lets a dry run print a dollar upper bound
+	// Tool restricts a run to one tool ("claude" or "codex"). Order "newest"
+	// takes the most recently active sessions first (default: stable hash order
+	// inside each stratum). Allocation, keyed "tool/bucket", selects that many
+	// pending sessions from each listed stratum and none from the others.
+	Tool       string
+	Order      string
+	Allocation map[string]int
 	// StopAfterFailures halts a run after this many consecutive failed sessions;
 	// MaxFailureRate halts it when failures exceed this share of at least
 	// MinAttemptsForRate attempts. Zero disables each.
@@ -103,7 +114,16 @@ type Plan struct {
 	// call: estimated input (with a tokenizer allowance) plus the full output
 	// cap. Zero without prices.
 	EstMaxCostUSD float64
-	TrimmedTurns  int
+	// EstExpectedCostUSD is the cost the measured ratios predict (real input
+	// about 1.6x the estimate, about 850 output tokens per call). The spend gate
+	// compares the run against it; zero without prices.
+	EstExpectedCostUSD float64
+	// Strata reports, per tool/bucket, how many sessions were pending and how
+	// many the stage selected.
+	Strata []Stratum
+	// SelectedIDs are the native ids the stage chose, in run order (ids only).
+	SelectedIDs  []string
+	TrimmedTurns int
 }
 
 // Summary is a run's outcome. Cost is what the gateway reported, summed; FE
@@ -133,9 +153,12 @@ type Runner struct {
 }
 
 type work struct {
-	in     transcript.EnrichmentInput
-	prompt Prompt
-	chunks []Prompt // map prompts when the session is too large for one call
+	in      transcript.EnrichmentInput
+	prompt  Prompt
+	chunks  []Prompt // map prompts when the session is too large for one call
+	stratum string   // "tool/bucket"
+	nid     string   // native session id, the stable sort key
+	when    time.Time
 }
 
 // Run plans, and unless DryRun, executes Tier 0 refresh and Tier 1 calls.
@@ -173,6 +196,9 @@ func (r *Runner) Run(ctx context.Context) (Summary, error) {
 		if err != nil {
 			return sum, err
 		}
+		if o.Tool != "" && in.Facts.Tool != o.Tool {
+			continue
+		}
 		if excluded(o, in) {
 			sum.Excluded++
 			continue
@@ -197,18 +223,18 @@ func (r *Runner) Run(ctx context.Context) (Summary, error) {
 			}
 		}
 		p := Build(in)
-		wk := work{in: in, prompt: p}
-		sum.Pending++
-		sum.TrimmedTurns += p.TrimmedTurns
+		wk := work{in: in, prompt: p, stratum: StratumKey(in.Facts.Tool, p.EstTokens), nid: in.Facts.NativeSessionID,
+			when: sessionTime(in.Facts.EndedAt, in.Facts.StartedAt)}
 		if p.EstTokens > o.SingleCallTokens {
 			wk.chunks = BuildChunks(in, o.ChunkTokens, o.ChunkOverlapTurns)
-			sum.MapReduce++
 		}
 		pending = append(pending, wk)
 	}
-	if o.Limit > 0 && len(pending) > o.Limit {
-		pending = pending[:o.Limit]
-		sum.Pending = o.Limit
+	pending, sum.Strata = selectWork(o, pending)
+	sum.Pending = len(pending)
+	for _, w := range pending {
+		sum.TrimmedTurns += w.prompt.TrimmedTurns
+		sum.SelectedIDs = append(sum.SelectedIDs, w.nid)
 	}
 	// Calls and token estimates follow what will actually be sent.
 	sum.Calls, sum.EstInputTokens, sum.MapReduce = 0, 0, 0
@@ -222,6 +248,7 @@ func (r *Runner) Run(ctx context.Context) (Summary, error) {
 		sum.EstInputTokens += promptTokens
 		if o.EstPricing.Configured() {
 			sum.EstMaxCostUSD += o.EstPricing.Cost(promptTokens*tokenizerAllowanceNum/tokenizerAllowanceDen, o.MaxOutputTokens, 0, 0)
+			sum.EstExpectedCostUSD += o.EstPricing.Cost(promptTokens*expectedRatioNum/expectedRatioDen, expectedOutputPerCall, 0, 0)
 		}
 	}
 	for _, w := range pending {
