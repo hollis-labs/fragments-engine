@@ -144,8 +144,12 @@ func TestDryRunMakesNoCallsAndPlansCounts(t *testing.T) {
 	if gw.count() != 0 {
 		t.Fatal("dry run called the model")
 	}
-	if sum.Sessions != 3 || sum.Pending != 2 || sum.NeedsMapReduce != 1 || sum.Calls != 2 || sum.EstInputTokens <= 0 || sum.MaxOutputToks != 2*1500 {
+	if sum.Sessions != 3 || sum.Pending != 3 || sum.MapReduce != 1 || sum.EstInputTokens <= 0 {
 		t.Fatalf("plan %+v", sum.Plan)
+	}
+	// Two single calls, plus the long session's chunks and its reduce call.
+	if sum.Calls < 2+2+1 || sum.MaxOutputToks != sum.Calls*1500 {
+		t.Fatalf("call arithmetic %+v", sum.Plan)
 	}
 	// And it persisted nothing.
 	if _, ok, _ := st.LatestEnrichment(context.Background(), sessionPK(t, st, "S1"), 0); ok {
@@ -469,5 +473,85 @@ func TestCodexTextRecordsAreEnrichedFromStoredText(t *testing.T) {
 		if !strings.Contains(u, want) {
 			t.Fatalf("prompt missing %q:\n%s", want, u)
 		}
+	}
+}
+
+const partialJSON = `{"summary":"Part of the synthetic session covered planning and a first decision.","topics":["Planning"],"decisions":[{"text":"Pick the synthetic plan","turns":[1,9999]}],"follow_ups":[],"entities":{"projects":["synthetic-proj"],"repos":[],"tools":[],"technologies":[]}}`
+
+func longSession(t *testing.T, st *transcript.Store, id string, turns int) {
+	t.Helper()
+	texts := make([]string, turns)
+	for i := range texts {
+		texts[i] = fmt.Sprintf("turn %d about synthetic-proj: ", i) + strings.Repeat("filler ", 200)
+	}
+	addSession(t, st, id, old, texts...)
+}
+
+func TestMapReduceChunksReducesAndAccountsEveryCall(t *testing.T) {
+	st := openStore(t)
+	longSession(t, st, "LONG", 12)
+	gw := &fakeGW{reply: func(n int, r Request) (Response, error) {
+		if r.System == MapSystemPrompt {
+			return Response{Text: partialJSON, InputTokens: 300, OutputTokens: 40, CostUSD: 0.002}, nil
+		}
+		return Response{Text: goodJSON, InputTokens: 100, OutputTokens: 60, CostUSD: 0.003}, nil
+	}}
+	o := opts()
+	o.SingleCallTokens, o.ChunkTokens, o.ChunkOverlapTurns = 1500, 2500, 2
+	plan := o
+	plan.DryRun = true
+	pl, _ := (&Runner{Store: st, Opts: plan}).Run(context.Background())
+	s, err := (&Runner{Store: st, GW: gw, Opts: o}).Run(context.Background())
+	if err != nil || s.OK != 1 || s.MapReduce != 1 {
+		t.Fatalf("run %+v %v", s, err)
+	}
+	if gw.count() != pl.Calls || gw.count() < 4 {
+		t.Fatalf("dry-run predicted %d calls, run made %d", pl.Calls, gw.count())
+	}
+	chunks := gw.count() - 1
+	last := gw.calls[gw.count()-1]
+	if last.System != SystemPrompt || strings.Contains(last.User, "<transcript>") || !strings.Contains(last.User, `<part n="1">`) || !strings.Contains(last.User, fmt.Sprintf(`<part n="%d">`, chunks)) {
+		t.Fatalf("reduce must read partials, not the transcript:\n%.300s", last.User)
+	}
+	if strings.Contains(last.User, "9999") {
+		t.Fatal("an invented citation survived into the reduce input")
+	}
+	// Chunks are consecutive and overlap by two turns, with absolute numbers.
+	first, second := gw.calls[0].User, gw.calls[1].User
+	// The overlap is capped at a quarter of the chunk, so here one turn repeats.
+	if !strings.Contains(first, "PART 1 OF") || !strings.Contains(second, "PART 2 OF") || !strings.Contains(first, "[0] user:") || strings.Contains(second, "[0] user:") || !strings.Contains(second, "[5] ") || !strings.Contains(first, "[5] ") {
+		t.Fatalf("chunking/numbering wrong: p1=%v p2=%v zero1=%v zero2=%v\n%.200s\n---\n%.300s", strings.Contains(first, "PART 1 OF"), strings.Contains(second, "PART 2 OF"), strings.Contains(first, "[0] user:"), strings.Contains(second, "[0] user:"), first, second)
+	}
+	rec, ok, _ := st.LatestEnrichment(context.Background(), sessionPK(t, st, "LONG"), 1)
+	if !ok || rec.Chunks != chunks || rec.Calls != chunks+1 || rec.TokensIn != chunks*300+100 || rec.TokensOut != chunks*40+60 {
+		t.Fatalf("stored row %+v", rec)
+	}
+	tot, _ := st.Spend(context.Background(), "")
+	if tot.Calls != chunks+1 || tot.TokensIn != int64(chunks*300+100) {
+		t.Fatalf("ledger %+v", tot)
+	}
+}
+
+func TestMapChunkFailureStopsBeforeReduceAndRetriesLater(t *testing.T) {
+	st := openStore(t)
+	longSession(t, st, "LONG", 12)
+	var reduced bool
+	gw := &fakeGW{reply: func(n int, r Request) (Response, error) {
+		if r.System == SystemPrompt {
+			reduced = true
+		}
+		if n <= 2 { // chunk 1 fails twice (first try and its retry)
+			return Response{Text: "nope", InputTokens: 5}, nil
+		}
+		return Response{Text: partialJSON, InputTokens: 5}, nil
+	}}
+	o := opts()
+	o.SingleCallTokens, o.ChunkTokens = 1500, 1000
+	s, err := (&Runner{Store: st, GW: gw, Opts: o}).Run(context.Background())
+	if err != nil || s.Failed != 1 || s.Errors["map_parse_not_json"] != 1 || reduced || gw.count() != 2 {
+		t.Fatalf("%+v %v reduced=%v calls=%d", s, err, reduced, gw.count())
+	}
+	if _, ok, _ := st.LatestEnrichment(context.Background(), sessionPK(t, st, "LONG"), 1); ok {
+		t.Fatal("a failed session must not look done")
 	}
 }

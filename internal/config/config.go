@@ -52,7 +52,7 @@ type EnrichmentConfig struct {
 	ExcludeSessions    []string `json:"exclude_sessions" yaml:"exclude_sessions"`
 	ExcludeCWDPrefixes []string `json:"exclude_cwd_prefixes" yaml:"exclude_cwd_prefixes"`
 	MinIdleMinutes     int      `json:"min_idle_minutes" yaml:"min_idle_minutes"`
-	MaxOutputTokens  int      `json:"max_output_tokens" yaml:"max_output_tokens"`
+	MaxOutputTokens    int      `json:"max_output_tokens" yaml:"max_output_tokens"`
 }
 
 // EnrichmentGateway locates the Tether AI gateway. Address is "unix:/path" or

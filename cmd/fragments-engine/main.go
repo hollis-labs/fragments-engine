@@ -2000,8 +2000,8 @@ func runTranscriptEnrich(cfg config.Config, store *transcript.Store, f enrichFla
 	}
 	fmt.Printf("enrich %s: provider=%s model=%s prompt=%s per_run_cap_usd=%.2f total_cap_usd=%.2f prior_spend_usd=%.4f\n",
 		mode, opts.Provider, opts.Model, enrich.PromptVersion, maxRun, total, s.PriorCostUSD)
-	fmt.Printf("sessions=%d already_done=%d excluded=%d needs_map_reduce=%d pending=%d calls=%d est_input_tokens=%d (chars/4 estimate) max_output_tokens=%d trimmed_turns=%d\n",
-		s.Sessions, s.AlreadyDone, s.Excluded, s.NeedsMapReduce, s.Pending, s.Calls, s.EstInputTokens, s.MaxOutputToks, s.TrimmedTurns)
+	fmt.Printf("sessions=%d already_done=%d excluded=%d map_reduce=%d pending=%d calls=%d est_input_tokens=%d (chars/4 estimate) max_output_tokens=%d trimmed_turns=%d\n",
+		s.Sessions, s.AlreadyDone, s.Excluded, s.MapReduce, s.Pending, s.Calls, s.EstInputTokens, s.MaxOutputToks, s.TrimmedTurns)
 	if !f.dryRun {
 		fmt.Printf("attempted=%d ok=%d failed=%d retries=%d tokens_in=%d tokens_out=%d gateway_cost_usd=%.4f facts_saved=%d stopped_by=%s\n",
 			s.Attempted, s.OK, s.Failed, s.Retries, s.TokensIn, s.TokensOut, s.CostUSD, s.FactsSaved, s.StoppedBy)

@@ -41,6 +41,8 @@ type Options struct {
 	Concurrency        int
 	RunID              string
 	SingleCallTokens   int
+	ChunkTokens        int
+	ChunkOverlapTurns  int
 	Now                func() time.Time
 	Backoff            func(attempt int) time.Duration
 }
@@ -58,6 +60,12 @@ func (o *Options) normalize() {
 	if o.SingleCallTokens <= 0 {
 		o.SingleCallTokens = defaultSingleCallTokens
 	}
+	if o.ChunkTokens <= 0 {
+		o.ChunkTokens = 40000
+	}
+	if o.ChunkOverlapTurns <= 0 {
+		o.ChunkOverlapTurns = 2
+	}
 	if o.Now == nil {
 		o.Now = time.Now
 	}
@@ -74,7 +82,7 @@ type Plan struct {
 	Sessions       int // eligible main sessions
 	AlreadyDone    int
 	Pending        int // sessions that would be sent
-	NeedsMapReduce int // too large for one call; not sent in this phase
+	MapReduce      int // sessions too large for one call; sent as chunks plus a reduce
 	Excluded       int // never-send switch
 	Calls          int
 	EstInputTokens int // characters/4: an estimate, not a tokenizer count
@@ -104,6 +112,7 @@ type Runner struct {
 type work struct {
 	in     transcript.EnrichmentInput
 	prompt Prompt
+	chunks []Prompt // map prompts when the session is too large for one call
 }
 
 // Run plans, and unless DryRun, executes Tier 0 refresh and Tier 1 calls.
@@ -170,23 +179,33 @@ func (r *Runner) Run(ctx context.Context) (Summary, error) {
 			}
 		}
 		p := Build(in)
-		if p.EstTokens > o.SingleCallTokens {
-			sum.NeedsMapReduce++
-			continue
-		}
+		wk := work{in: in, prompt: p}
 		sum.Pending++
-		sum.Calls++
-		sum.EstInputTokens += p.EstTokens
 		sum.TrimmedTurns += p.TrimmedTurns
-		pending = append(pending, work{in, p})
+		if p.EstTokens > o.SingleCallTokens {
+			wk.chunks = BuildChunks(in, o.ChunkTokens, o.ChunkOverlapTurns)
+			sum.MapReduce++
+		}
+		pending = append(pending, wk)
 	}
 	if o.Limit > 0 && len(pending) > o.Limit {
 		pending = pending[:o.Limit]
-		sum.Pending, sum.Calls = o.Limit, o.Limit
-		sum.EstInputTokens = 0
-		for _, w := range pending {
+		sum.Pending = o.Limit
+	}
+	// Calls and token estimates follow what will actually be sent.
+	sum.Calls, sum.EstInputTokens, sum.MapReduce = 0, 0, 0
+	for _, w := range pending {
+		if len(w.chunks) == 0 {
+			sum.Calls++
 			sum.EstInputTokens += w.prompt.EstTokens
+			continue
 		}
+		sum.MapReduce++
+		sum.Calls += len(w.chunks) + 1
+		for _, c := range w.chunks {
+			sum.EstInputTokens += c.EstTokens
+		}
+		sum.EstInputTokens += len(w.chunks) * (o.MaxOutputTokens / 2) // reduce reads the partials
 	}
 	sum.MaxOutputToks = sum.Calls * o.MaxOutputTokens
 	if o.DryRun {
@@ -278,23 +297,20 @@ type outcome struct {
 	class                        string
 	fatal                        error
 	retries, tokensIn, tokensOut int
+	calls                        int
 	cost                         float64
 }
 
-func (r *Runner) enrichOne(ctx context.Context, o Options, w work) outcome {
-	var out outcome
-	pk12 := w.in.Ref.SessionPK
-	if len(pk12) > 12 {
-		pk12 = pk12[:12]
-	}
-	prefix := o.RunID + "/" + pk12
-	user := w.prompt.User
-	var q Quality
+// ask makes one logical model call: up to two attempts (the second names the
+// rejection class), gateway retries with backoff, and a spend-ledger row for
+// every reply received, whether or not it validates. It returns "" on success.
+func (r *Runner) ask(ctx context.Context, o Options, w work, prefix, tag, system, user string, validate func(text string) error, acct *outcome) (string, error) {
 	var lastClass string
 	for attempt := 0; attempt < 2; attempt++ {
+		reqID := fmt.Sprintf("%s/%s/%d", prefix, tag, attempt)
 		resp, err := r.callWithBackoff(ctx, o, Request{
-			Provider: o.Provider, Model: o.Model, System: w.prompt.System, User: user, MaxOutputTokens: o.MaxOutputTokens,
-			CallerID: CallerID, RequestID: fmt.Sprintf("%s/1/%d", prefix, attempt), SessionID: "fe-enrich/" + pk12,
+			Provider: o.Provider, Model: o.Model, System: system, User: user, MaxOutputTokens: o.MaxOutputTokens,
+			CallerID: CallerID, RequestID: reqID, SessionID: "fe-enrich/" + shortPK(w.in.Ref.SessionPK),
 		})
 		if err != nil {
 			var ge *GatewayError
@@ -302,58 +318,112 @@ func (r *Runner) enrichOne(ctx context.Context, o Options, w work) outcome {
 			if errors.As(err, &ge) {
 				class = ge.Class
 			}
-			if errors.As(err, &ge) && (ge.Class == "unauthorized" || ge.Class == "unreachable") || ctx.Err() != nil {
-				out.fatal, out.class = err, class
-				return out
+			if ctx.Err() != nil || (errors.As(err, &ge) && (ge.Class == "unauthorized" || ge.Class == "unreachable")) {
+				return class, err
 			}
-			out.class = "gateway_" + class
-			r.record(ctx, o, w, prefix, "failed", out.class, "", q, out)
-			return out
+			return "gateway_" + class, nil
 		}
-		out.tokensIn += resp.InputTokens
-		out.tokensOut += resp.OutputTokens
-		out.cost += resp.CostUSD
-		// The ledger is written before the output is judged: a rejected reply
-		// still cost tokens.
-		_ = r.Store.AppendSpend(ctx, transcript.SpendRecord{RunID: o.RunID, SessionPK: w.in.Ref.SessionPK,
-			RequestID: fmt.Sprintf("%s/1/%d", prefix, attempt), Provider: o.Provider, Model: o.Model,
-			TokensIn: resp.InputTokens, TokensOut: resp.OutputTokens, CostUSD: resp.CostUSD})
-		res, quality, perr := Parse(resp.Text, w.prompt.ValidSeqs, w.prompt.SourceLowered)
-		quality.Retries = attempt
-		quality.ResponseModel = resp.Model
-		if perr == nil {
-			out.retries = attempt
-			raw, _ := json.Marshal(res)
-			qraw, _ := json.Marshal(quality)
-			rec := transcript.EnrichmentRecord{SessionPK: w.in.Ref.SessionPK, Tier: 1, PromptVersion: o.PromptVersion, Model: o.Model,
-				Provider: o.Provider, ContentDigest: w.in.ContentDigest, Status: "ok", ResultJSON: string(raw), QualityJSON: string(qraw),
-				TokensIn: out.tokensIn, TokensOut: out.tokensOut, Calls: attempt + 1, Chunks: 1, RunID: o.RunID, RequestPrefix: prefix}
-			if err := r.Store.SaveEnrichment(ctx, rec); err != nil {
-				out.class = "store"
-			}
-			return out
+		acct.calls++
+		acct.tokensIn += resp.InputTokens
+		acct.tokensOut += resp.OutputTokens
+		acct.cost += resp.CostUSD
+		// Written before the reply is judged: a rejected reply still cost tokens.
+		_ = r.Store.AppendSpend(ctx, transcript.SpendRecord{RunID: o.RunID, SessionPK: w.in.Ref.SessionPK, RequestID: reqID,
+			Provider: o.Provider, Model: o.Model, TokensIn: resp.InputTokens, TokensOut: resp.OutputTokens, CostUSD: resp.CostUSD})
+		verr := validate(resp.Text)
+		if verr == nil {
+			return "", nil
 		}
-		var pe *ParseError
 		lastClass = "parse"
-		if errors.As(perr, &pe) {
+		var pe *ParseError
+		if errors.As(verr, &pe) {
 			lastClass = "parse_" + pe.Class
 		}
-		q = quality
-		user = w.prompt.User + "\n\nYour previous reply was rejected (" + lastClass + "). Reply with only the JSON object described in the instructions."
-		out.retries = attempt + 1
+		acct.retries++
+		user = user + "\n\nYour previous reply was rejected (" + lastClass + "). Reply with only the JSON object described in the instructions."
 	}
-	out.class = lastClass
-	r.record(ctx, o, w, prefix, "failed", lastClass, "", q, out)
+	return lastClass, nil
+}
+
+func shortPK(pk string) string {
+	if len(pk) > 12 {
+		return pk[:12]
+	}
+	return pk
+}
+
+func (r *Runner) enrichOne(ctx context.Context, o Options, w work) outcome {
+	var out outcome
+	prefix := o.RunID + "/" + shortPK(w.in.Ref.SessionPK)
+	var res Result
+	var q Quality
+	chunks := 1
+	if len(w.chunks) == 0 {
+		class, fatal := r.ask(ctx, o, w, prefix, "1", w.prompt.System, w.prompt.User, func(text string) error {
+			var err error
+			res, q, err = Parse(text, w.prompt.ValidSeqs, w.prompt.SourceLowered)
+			return err
+		}, &out)
+		if fatal != nil || class != "" {
+			return r.finish(ctx, o, w, prefix, out, q, 1, class, fatal)
+		}
+	} else {
+		chunks = len(w.chunks)
+		var partials []Partial
+		for i, c := range w.chunks {
+			var part Partial
+			class, fatal := r.ask(ctx, o, w, prefix, fmt.Sprintf("m%d", i), c.System, c.User, func(text string) error {
+				var err error
+				part, err = ParsePartial(text, w.prompt.ValidSeqs)
+				return err
+			}, &out)
+			if fatal != nil || class != "" {
+				if class != "" && fatal == nil {
+					class = "map_" + class
+				}
+				return r.finish(ctx, o, w, prefix, out, q, chunks, class, fatal)
+			}
+			partials = append(partials, part)
+		}
+		red := BuildReduce(w.in, partials)
+		class, fatal := r.ask(ctx, o, w, prefix, "r", red.System, red.User, func(text string) error {
+			var err error
+			res, q, err = Parse(text, w.prompt.ValidSeqs, w.prompt.SourceLowered)
+			return err
+		}, &out)
+		if fatal != nil || class != "" {
+			if class != "" && fatal == nil {
+				class = "reduce_" + class
+			}
+			return r.finish(ctx, o, w, prefix, out, q, chunks, class, fatal)
+		}
+	}
+	q.Retries = out.retries
+	raw, _ := json.Marshal(res)
+	qraw, _ := json.Marshal(q)
+	rec := transcript.EnrichmentRecord{SessionPK: w.in.Ref.SessionPK, Tier: 1, PromptVersion: o.PromptVersion, Model: o.Model,
+		Provider: o.Provider, ContentDigest: w.in.ContentDigest, Status: "ok", ResultJSON: string(raw), QualityJSON: string(qraw),
+		TokensIn: out.tokensIn, TokensOut: out.tokensOut, Calls: out.calls, Chunks: chunks, RunID: o.RunID, RequestPrefix: prefix}
+	if err := r.Store.SaveEnrichment(ctx, rec); err != nil {
+		out.class = "store"
+	}
 	return out
 }
 
-// record stores a failure so the harness can report it; it is retried on the
-// next run because only ok rows count as done.
-func (r *Runner) record(ctx context.Context, o Options, w work, prefix, status, class, result string, q Quality, out outcome) {
+// finish closes a session that did not produce a result. Auth and reachability
+// failures are fatal for the whole run and write nothing; anything else is
+// recorded as a failed row (retried next run, since only ok rows count as done).
+func (r *Runner) finish(ctx context.Context, o Options, w work, prefix string, out outcome, q Quality, chunks int, class string, fatal error) outcome {
+	out.class = class
+	if fatal != nil {
+		out.fatal = fatal
+		return out
+	}
 	qraw, _ := json.Marshal(q)
 	_ = r.Store.SaveEnrichment(ctx, transcript.EnrichmentRecord{SessionPK: w.in.Ref.SessionPK, Tier: 1, PromptVersion: o.PromptVersion,
-		Model: o.Model, Provider: o.Provider, ContentDigest: w.in.ContentDigest, Status: status, ErrorClass: class, ResultJSON: result,
-		QualityJSON: string(qraw), TokensIn: out.tokensIn, TokensOut: out.tokensOut, Calls: out.retries + 1, Chunks: 1, RunID: o.RunID, RequestPrefix: prefix})
+		Model: o.Model, Provider: o.Provider, ContentDigest: w.in.ContentDigest, Status: "failed", ErrorClass: class,
+		QualityJSON: string(qraw), TokensIn: out.tokensIn, TokensOut: out.tokensOut, Calls: out.calls, Chunks: chunks, RunID: o.RunID, RequestPrefix: prefix})
+	return out
 }
 
 func (r *Runner) callWithBackoff(ctx context.Context, o Options, req Request) (Response, error) {
