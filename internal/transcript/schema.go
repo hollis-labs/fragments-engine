@@ -14,7 +14,9 @@ import (
 // schema first and writes only when the schema is genuinely behind, and it
 // waits for locks instead of failing on them.
 
-const busyTimeoutMS = 5000
+// busyTimeoutMS is how long one statement waits for a lock. A var so tests can
+// shorten it.
+var busyTimeoutMS = 5000
 
 // isBusy reports whether err is SQLite's lock contention, which is transient.
 func isBusy(err error) bool {
@@ -164,4 +166,68 @@ CREATE VIRTUAL TABLE IF NOT EXISTS transcript_search USING fts5(id UNINDEXED, ti
 	}
 	committed = true
 	return nil
+}
+
+// writeDeadline bounds how long a write after a paid call keeps retrying on
+// lock contention. A var so tests can shorten it.
+var writeDeadline = 60 * time.Second
+
+// retryBusyFor retries fn while it reports lock contention, with backoff from
+// 25 ms up to 1 s, until the deadline. busy_timeout still waits inside each
+// attempt; the deadline bounds the whole retry loop.
+func retryBusyFor(deadline time.Duration, fn func() error) error {
+	end := time.Now().Add(deadline)
+	delay := 25 * time.Millisecond
+	for {
+		err := fn()
+		if !isBusy(err) {
+			return err
+		}
+		remaining := time.Until(end)
+		if remaining <= 0 {
+			return err
+		}
+		// Sleep the backoff, or whatever is left, then try once more: the last
+		// attempt happens at the deadline, never before it.
+		wait := delay
+		if wait > remaining {
+			wait = remaining
+		}
+		time.Sleep(wait)
+		if delay < time.Second {
+			delay *= 2
+			if delay > time.Second {
+				delay = time.Second
+			}
+		}
+	}
+}
+
+// WriteError is a store write that failed after its retries. The text is fixed
+// and content-free, but names whether the cause was lock contention (Busy), the
+// one failure an operator can act on. Callers that have already paid for a
+// result must treat it as a hard stop, never as a provider failure.
+type WriteError struct {
+	What string // for example "save enrichment"
+	Busy bool
+}
+
+func (e *WriteError) Error() string {
+	class := "error"
+	if e.Busy {
+		class = "busy"
+	}
+	return fmt.Sprintf("transcript: cannot %s (%s)", e.What, class)
+}
+
+func writeFail(what string, err error) error { return &WriteError{What: what, Busy: isBusy(err)} }
+
+// SetLockWaits tunes how long the private store waits for a lock (per statement)
+// and how long a write keeps retrying on contention. It affects stores opened
+// afterwards and returns a function that restores the previous values. Meant for
+// tests that must simulate a persistent lock without waiting a minute.
+func SetLockWaits(busy, deadline time.Duration) (restore func()) {
+	prevBusy, prevDeadline := busyTimeoutMS, writeDeadline
+	busyTimeoutMS, writeDeadline = int(busy/time.Millisecond), deadline
+	return func() { busyTimeoutMS, writeDeadline = prevBusy, prevDeadline }
 }

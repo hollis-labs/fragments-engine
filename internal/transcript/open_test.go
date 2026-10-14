@@ -3,6 +3,7 @@ package transcript
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -281,5 +282,94 @@ func TestOpenUpgradesVersionOneInPlace(t *testing.T) {
 	var v string
 	if err := st.db.QueryRow(`SELECT value FROM tx_meta WHERE key = 'schema_version'`).Scan(&v); err != nil || v != fmt.Sprint(derivedSchemaVersion) {
 		t.Fatalf("version %q %v", v, err)
+	}
+}
+
+// Writes after a paid call must wait out a lock that SQLite's own short wait
+// gives up on. The per-statement wait is shortened so the retry loop, not the
+// pragma, is what carries the write through.
+func TestEnrichmentWritesRetryThroughAShortLock(t *testing.T) {
+	restore := SetLockWaits(20*time.Millisecond, 10*time.Second)
+	defer restore()
+	root := freshRoot(t)
+	st, err := Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	conn := other(t, root)
+	ctx := context.Background()
+	if _, err := conn.ExecContext(ctx, `BEGIN EXCLUSIVE`); err != nil {
+		t.Fatal(err)
+	}
+	go func() {
+		time.Sleep(300 * time.Millisecond)
+		_, _ = conn.ExecContext(ctx, `COMMIT`)
+	}()
+	start := time.Now()
+	if err := st.AppendSpend(ctx, SpendRecord{RunID: "r", SessionPK: "s", RequestID: "q", Provider: "p", Model: "m", TokensIn: 1, TokensOut: 1, CostUSD: 0.01}); err != nil {
+		t.Fatalf("AppendSpend should have waited out the lock: %v", err)
+	}
+	if time.Since(start) < 250*time.Millisecond {
+		t.Fatal("the write did not wait for the lock; the test is not exercising it")
+	}
+	// The other write paths use the same retry.
+	if _, err := conn.ExecContext(ctx, `BEGIN EXCLUSIVE`); err != nil {
+		t.Fatal(err)
+	}
+	go func() {
+		time.Sleep(200 * time.Millisecond)
+		_, _ = conn.ExecContext(ctx, `COMMIT`)
+	}()
+	if err := st.SaveEnrichment(ctx, EnrichmentRecord{SessionPK: "s", Tier: 0, PromptVersion: "facts-v1", Status: "ok", ResultJSON: `{"a":1}`}); err != nil {
+		t.Fatalf("SaveEnrichment: %v", err)
+	}
+	if tot, err := st.Spend(ctx, ""); err != nil || tot.Calls != 1 {
+		t.Fatalf("spend %+v %v", tot, err)
+	}
+}
+
+// A lock that outlasts the deadline fails with a typed error that names
+// contention, so a caller can tell it from any other failure.
+func TestWriteFailsWithTheBusyClassAfterTheDeadline(t *testing.T) {
+	restore := SetLockWaits(20*time.Millisecond, 400*time.Millisecond)
+	defer restore()
+	root := freshRoot(t)
+	st, err := Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	conn := other(t, root)
+	ctx := context.Background()
+	if _, err := conn.ExecContext(ctx, `BEGIN EXCLUSIVE`); err != nil {
+		t.Fatal(err)
+	}
+	defer conn.ExecContext(ctx, `ROLLBACK`)
+	start := time.Now()
+	err = st.AppendSpend(ctx, SpendRecord{RunID: "r", SessionPK: "s", RequestID: "q", Provider: "p", Model: "m"})
+	var we *WriteError
+	if !errors.As(err, &we) || !we.Busy || we.What != "record spend" || err.Error() != "transcript: cannot record spend (busy)" {
+		t.Fatalf("want a busy WriteError, got %v", err)
+	}
+	if d := time.Since(start); d < 350*time.Millisecond || d > 5*time.Second {
+		t.Fatalf("deadline not honoured: %v", d)
+	}
+	if err := st.SaveEnrichmentWithin(ctx, EnrichmentRecord{SessionPK: "s", Tier: 1, PromptVersion: "v", Model: "m", Status: "failed"}, 100*time.Millisecond); !errors.As(err, &we) || !we.Busy {
+		t.Fatalf("a short explicit deadline must also end in a busy WriteError: %v", err)
+	}
+}
+
+func TestOtherWriteFailuresAreNotCalledBusy(t *testing.T) {
+	root := freshRoot(t)
+	st, err := Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = st.Close()
+	err = st.AppendSpend(context.Background(), SpendRecord{RunID: "r", SessionPK: "s", RequestID: "q", Provider: "p", Model: "m"})
+	var we *WriteError
+	if !errors.As(err, &we) || we.Busy || err.Error() != "transcript: cannot record spend (error)" {
+		t.Fatalf("want a non-busy WriteError, got %v", err)
 	}
 }

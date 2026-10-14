@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"sort"
 	"strings"
 	"sync"
@@ -137,6 +138,14 @@ type Summary struct {
 	Errors                         map[string]int
 	StoppedBy                      string
 	FactsSaved                     int
+	// StoreWriteFailures counts halts caused by a persistent store write failure.
+	// They are never provider failures and are not in Failed or Errors.
+	StoreWriteFailures int
+	// StoreFailedIDs are native ids of sessions whose paid result could not be
+	// saved (ids only). LedgerGapUSD is spend incurred but NOT recorded in the
+	// ledger because its write failed; it is included in CostUSD.
+	StoreFailedIDs []string
+	LedgerGapUSD   float64
 	// Measurements for a run report. All are counts, durations and costs.
 	FirstTryValid                       int
 	LatenciesMS                         []int
@@ -203,15 +212,6 @@ func (r *Runner) Run(ctx context.Context) (Summary, error) {
 			sum.Excluded++
 			continue
 		}
-		if !o.DryRun {
-			saved, err := r.saveFacts(ctx, in)
-			if err != nil {
-				return sum, err
-			}
-			if saved {
-				sum.FactsSaved++
-			}
-		}
 		if !o.Force && o.Model != "" {
 			done, err := r.Store.EnrichmentDone(ctx, ref.SessionPK, 1, o.PromptVersion, o.Model, in.ContentDigest)
 			if err != nil {
@@ -235,6 +235,22 @@ func (r *Runner) Run(ctx context.Context) (Summary, error) {
 	for _, w := range pending {
 		sum.TrimmedTurns += w.prompt.TrimmedTurns
 		sum.SelectedIDs = append(sum.SelectedIDs, w.nid)
+	}
+	// Tier-0 facts are refreshed only for the sessions this run will enrich, not
+	// for every eligible session: that was thousands of needless writes per run.
+	// A persistent write failure here stops the run before any paid call.
+	if !o.DryRun {
+		for _, w := range pending {
+			saved, err := r.saveFacts(ctx, w.in)
+			if err != nil {
+				sum.StoppedBy = "store_write"
+				log.Printf("enrichment: halting before any call, tier-0 write failed (session=%s)", w.nid)
+				return sum, err
+			}
+			if saved {
+				sum.FactsSaved++
+			}
+		}
 	}
 	// Calls and token estimates follow what will actually be sent.
 	sum.Calls, sum.EstInputTokens, sum.MapReduce = 0, 0, 0
@@ -335,7 +351,17 @@ func (r *Runner) execute(ctx context.Context, o Options, pending []work, sum Sum
 			switch {
 			case res.fatal != nil:
 				fatal = res.fatal
-				stop("gateway_" + res.class)
+				var we *transcript.WriteError
+				if errors.As(res.fatal, &we) {
+					// A persistent store write failure is its own hard stop; it is
+					// not a provider failure and is kept out of Failed and Errors.
+					stop("store_write")
+					sum.StoreWriteFailures++
+					sum.StoreFailedIDs = append(sum.StoreFailedIDs, w.nid)
+					sum.LedgerGapUSD += res.ledgerGap
+				} else {
+					stop("gateway_" + res.class)
+				}
 			case res.class != "":
 				sum.Failed++
 				sum.Errors[res.class]++
@@ -377,6 +403,8 @@ type outcome struct {
 	quality                      Quality
 	latenciesMS                  []int
 	retryClasses                 []string
+	ledgerGap                    float64 // cost of a paid call whose ledger write failed
+	storeFailed                  bool    // a persistent store write failure stopped this session
 }
 
 // ask makes one logical model call: up to two attempts (the second names the
@@ -408,9 +436,19 @@ func (r *Runner) ask(ctx context.Context, o Options, w work, prefix, tag, system
 		acct.tokensOut += resp.OutputTokens
 		acct.cost += resp.CostUSD
 		// Written before the reply is judged: a rejected reply still cost tokens.
-		_ = r.Store.AppendSpend(ctx, transcript.SpendRecord{RunID: o.RunID, SessionPK: w.in.Ref.SessionPK, RequestID: reqID,
+		if lerr := r.Store.AppendSpend(ctx, transcript.SpendRecord{RunID: o.RunID, SessionPK: w.in.Ref.SessionPK, RequestID: reqID,
 			Provider: o.Provider, Model: o.Model, TokensIn: resp.InputTokens, TokensOut: resp.OutputTokens,
-			CacheRead: resp.CacheReadTokens, CacheWrite: resp.CacheWriteTokens, CostUSD: resp.CostUSD})
+			CacheRead: resp.CacheReadTokens, CacheWrite: resp.CacheWriteTokens, CostUSD: resp.CostUSD}); lerr != nil {
+			// The ledger is what the spend caps rely on: stop paying. The result
+			// is kept only in memory (and dropped); only the session id is logged.
+			acct.ledgerGap += resp.CostUSD
+			acct.storeFailed = true
+			log.Printf("enrichment: halting, spend ledger write failed (session=%s)", w.nid)
+			return "store_write", lerr
+		}
+		if testHookAfterLedger != nil {
+			testHookAfterLedger()
+		}
 		verr := validate(resp.Text)
 		if verr == nil {
 			return "", nil
@@ -426,6 +464,14 @@ func (r *Runner) ask(ctx context.Context, o Options, w work, prefix, tag, system
 	}
 	return lastClass, nil
 }
+
+// testHookAfterLedger lets a test act between a paid call's ledger write and
+// the validation and save of its result. Always nil outside tests.
+var testHookAfterLedger func()
+
+// failedRowDeadline bounds the best-effort "failed with cost" row written while
+// halting on a store failure, so the halt itself is not delayed for a minute.
+var failedRowDeadline = 5 * time.Second
 
 func shortPK(pk string) string {
 	if len(pk) > 12 {
@@ -489,7 +535,15 @@ func (r *Runner) enrichOne(ctx context.Context, o Options, w work) outcome {
 		Provider: o.Provider, ContentDigest: w.in.ContentDigest, Status: "ok", ResultJSON: string(raw), QualityJSON: string(qraw),
 		TokensIn: out.tokensIn, TokensOut: out.tokensOut, Calls: out.calls, Chunks: chunks, RunID: o.RunID, RequestPrefix: prefix}
 	if err := r.Store.SaveEnrichment(ctx, rec); err != nil {
-		out.class = "store"
+		// The call is paid and in the ledger, but its result cannot be stored.
+		// Mark the session failed-with-cost (best effort, short deadline) and halt.
+		log.Printf("enrichment: halting, result save failed after a paid call (session=%s)", w.nid)
+		qraw2, _ := json.Marshal(q)
+		_ = r.Store.SaveEnrichmentWithin(ctx, transcript.EnrichmentRecord{SessionPK: w.in.Ref.SessionPK, Tier: 1, PromptVersion: o.PromptVersion,
+			Model: o.Model, Provider: o.Provider, ContentDigest: w.in.ContentDigest, Status: "failed", ErrorClass: "store_write",
+			QualityJSON: string(qraw2), TokensIn: out.tokensIn, TokensOut: out.tokensOut, Calls: out.calls, Chunks: chunks, RunID: o.RunID, RequestPrefix: prefix},
+			failedRowDeadline)
+		out.class, out.fatal, out.storeFailed = "store_write", err, true
 	}
 	return out
 }
