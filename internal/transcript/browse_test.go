@@ -84,6 +84,36 @@ func TestSearchSessionsIsSafeAndSnippets(t *testing.T) {
 	}
 }
 
+func TestDetailListsToolRowsWithNoTurnAsUnattached(t *testing.T) {
+	st := openStore(t)
+	seedBrowse(t, st)
+	ctx := context.Background()
+	d, _ := st.SessionDetail(ctx, "main1", 0, 0)
+	if len(d.UnattachedCalls) != 0 {
+		t.Fatalf("attached call listed as unattached: %+v", d.UnattachedCalls)
+	}
+	if _, err := st.db.Exec(`INSERT INTO tx_tool_calls (tool_use_id, session_pk, turn_uuid, name, result_status, result_bytes, input_redacted) VALUES ('t9','main1','no-such-turn','Grep','ok',7,'SHOULD-NOT-LEAK')`); err != nil {
+		t.Fatal(err)
+	}
+	d, _ = st.SessionDetail(ctx, "main1", 0, 0)
+	if len(d.UnattachedCalls) != 1 || d.UnattachedCalls[0].Name != "Grep" || d.UnattachedCalls[0].ResultBytes != 7 {
+		t.Fatalf("unattached: %+v", d.UnattachedCalls)
+	}
+	attached := 0
+	for _, turn := range d.Turns {
+		attached += len(turn.ToolCalls)
+	}
+	page, _ := st.ListSessions(ctx, SessionFilter{})
+	for _, it := range page.Items {
+		if it.ID == "main1" && it.ToolCalls != attached+len(d.UnattachedCalls) {
+			t.Fatalf("list %d != detail %d + %d", it.ToolCalls, attached, len(d.UnattachedCalls))
+		}
+	}
+	if b, _ := json.Marshal(d); strings.Contains(string(b), "SHOULD-NOT-LEAK") {
+		t.Fatal("tool input leaked")
+	}
+}
+
 func TestSessionDetailShape(t *testing.T) {
 	st := openStore(t)
 	seedBrowse(t, st)

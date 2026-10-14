@@ -104,6 +104,8 @@ export interface ChatDetail {
   turn_total: number
   next_turn?: number
   subagents: ChatTreeNode[]
+  /** Tool rows with no turn in the capture (e.g. a result whose call was not seen). */
+  unattached_calls?: ChatToolCall[]
   enrichment?: ChatEnrichment
 }
 

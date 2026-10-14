@@ -15,7 +15,7 @@ import {
 
 const TURN_PAGE = 200
 
-function ToolCalls({ calls }: { calls: ChatToolCall[] }) {
+function ToolCalls({ calls, noun = 'tool call' }: { calls: ChatToolCall[]; noun?: string }) {
   const [open, setOpen] = useState(false)
   const errors = calls.filter((c) => c.status === 'error').length
   return (
@@ -27,7 +27,7 @@ function ToolCalls({ calls }: { calls: ChatToolCall[] }) {
         className="inline-flex items-center gap-1 text-text-subtle hover:text-text-soft"
       >
         {open ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
-        {calls.length} tool call{calls.length === 1 ? '' : 's'}
+        {calls.length} {noun}{calls.length === 1 ? '' : 's'}
         {errors > 0 && <span className="text-danger-soft">· {errors} failed</span>}
       </button>
       {open && (
@@ -263,6 +263,11 @@ export function ChatDetailDialog({ sessionId, onClose, onOpenSession }: ChatDeta
                 {detail.turns.map((turn) => (
                   <TurnView key={turn.event_id} turn={turn} />
                 ))}
+                {detail.next_turn === undefined && detail.unattached_calls && detail.unattached_calls.length > 0 && (
+                  <div className="border-t border-border-soft px-3 py-2">
+                    <ToolCalls calls={detail.unattached_calls} noun="unattached tool result" />
+                  </div>
+                )}
                 {detail.next_turn !== undefined && (
                   <div className="p-3 text-center">
                     <Button variant="outline" size="sm" onClick={() => void loadMore()} disabled={loadingMore}>
