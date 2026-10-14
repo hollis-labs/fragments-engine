@@ -3,8 +3,10 @@ package transcript
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
+	"time"
 )
 
 // seedBrowse inserts three synthetic sessions: a main Claude session with one
@@ -155,5 +157,111 @@ func TestEnrichmentIsOptionalAndJoinsWhenPresent(t *testing.T) {
 	f, _ := st.SessionFacets(ctx)
 	if len(f.Tags) != 2 || f.Tags[0] != "alpha" {
 		t.Fatalf("facet tags: %v", f.Tags)
+	}
+}
+
+func TestSearchRanksFirstThenFillsSnippetsInRankOrder(t *testing.T) {
+	st := openStore(t)
+	seedBrowse(t, st)
+	page, err := st.SearchSessions(context.Background(), "synthetic", SessionFilter{})
+	if err != nil || len(page.Items) != 3 || page.Hint != "" || page.SnippetsSkipped != 0 {
+		t.Fatalf("search: %+v %v", page, err)
+	}
+	for _, it := range page.Items {
+		if it.Snippet == "" {
+			t.Fatalf("missing snippet on %s", it.ID)
+		}
+	}
+	// A page boundary still carries a cursor and the right snippets.
+	p1, _ := st.SearchSessions(context.Background(), "synthetic", SessionFilter{Limit: 2})
+	p2, _ := st.SearchSessions(context.Background(), "synthetic", SessionFilter{Limit: 2, Cursor: p1.NextCursor})
+	if len(p1.Items) != 2 || p1.NextCursor == "" || len(p2.Items) != 1 || p2.Items[0].Snippet == "" {
+		t.Fatalf("paging: %+v / %+v", p1, p2)
+	}
+}
+
+func TestSearchPastItsDeadlineReturnsAHintNotAnError(t *testing.T) {
+	st := openStore(t)
+	seedBrowse(t, st)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	page, err := st.SearchSessions(ctx, "synthetic", SessionFilter{})
+	if err == nil {
+		t.Fatalf("a cancelled caller is an error, got %+v", page)
+	}
+	// An expired deadline (not a cancellation) is the too-broad hint.
+	dctx, dcancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer dcancel()
+	page, err = searchFailure(dctx)
+	if err != nil || page.Hint != HintTooBroad || len(page.Items) != 0 {
+		t.Fatalf("deadline: %+v %v", page, err)
+	}
+}
+
+func TestSuggestProjectsFindsEveryDirectoryBySubstring(t *testing.T) {
+	st := openStore(t)
+	seedBrowse(t, st)
+	for i := 0; i < 700; i++ {
+		if _, err := st.db.Exec(`INSERT INTO tx_sessions (session_pk, tool, native_session_id, segment_key, kind, cwd) VALUES (?, 'claude', ?, '', 'main', ?)`,
+			fmt.Sprintf("bulk%d", i), fmt.Sprintf("n%d", i), fmt.Sprintf("/synthetic/bulk/project-%04d", i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ctx := context.Background()
+	got, err := st.SuggestProjects(ctx, "PROJECT-0699", 20)
+	if err != nil || len(got) != 1 || got[0].Project != "/synthetic/bulk/project-0699" {
+		t.Fatalf("deep project unreachable: %+v %v", got, err)
+	}
+	if got, _ = st.SuggestProjects(ctx, "bulk", 20); len(got) != 20 {
+		t.Fatalf("limit not applied: %d", len(got))
+	}
+	if got, _ = st.SuggestProjects(ctx, "alpha", 20); len(got) != 1 || got[0].Sessions != 2 {
+		t.Fatalf("alpha: %+v", got)
+	}
+	if got, _ = st.SuggestProjects(ctx, "", 500); len(got) != maxSuggestLimit {
+		t.Fatalf("hard cap: %d", len(got))
+	}
+	f, _ := st.SessionFacets(ctx)
+	if f.ProjectCount != 702 {
+		t.Fatalf("project count = %d", f.ProjectCount)
+	}
+}
+
+func TestUntitledSessionsGetAReadableFallback(t *testing.T) {
+	st := openStore(t)
+	seedBrowse(t, st)
+	page, _ := st.ListSessions(context.Background(), SessionFilter{Kind: "subagent"})
+	if len(page.Items) != 1 || page.Items[0].Title != "Untitled session · claude · 2026-10-10" {
+		t.Fatalf("fallback title: %+v", page.Items)
+	}
+	if _, err := st.db.Exec(`INSERT INTO tx_turns (session_pk, seq, event_uuid, role, text_redacted) VALUES ('sub1', 1, 'e9', 'user', '
+
+   first real line   
+second')`); err != nil {
+		t.Fatal(err)
+	}
+	if page, _ = st.ListSessions(context.Background(), SessionFilter{Kind: "subagent"}); page.Items[0].Title != "first real line" {
+		t.Fatalf("user line preferred: %q", page.Items[0].Title)
+	}
+}
+
+func TestSearchSkipsSnippetsForOversizedDocuments(t *testing.T) {
+	st := openStore(t)
+	seedBrowse(t, st)
+	big := strings.Repeat("filler words here ", maxSnippetDocBytes/8) + " zebra"
+	if _, err := st.db.Exec(`UPDATE transcripts SET content = ? WHERE id = 'cdx1'`, big); err != nil {
+		t.Fatal(err)
+	}
+	page, err := st.SearchSessions(context.Background(), "zebra", SessionFilter{})
+	if err != nil || len(page.Items) != 3 {
+		t.Fatalf("search: %+v %v", page, err)
+	}
+	if page.SnippetsSkipped != 1 {
+		t.Fatalf("skipped = %d", page.SnippetsSkipped)
+	}
+	for _, it := range page.Items {
+		if (it.ID == "cdx1") != (it.Snippet == "") {
+			t.Fatalf("%s snippet=%q", it.ID, it.Snippet)
+		}
 	}
 }

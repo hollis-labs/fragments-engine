@@ -24,6 +24,15 @@ const (
 	maxTurnTextRead = 20 << 10
 	maxTurnPage     = 500
 	maxTreeNodes    = 500
+
+	// Reads share the database file with the ingest writers, and in DELETE
+	// journal mode a reader blocks their commits, so every read is short.
+	searchDeadline = 4 * time.Second
+	snippetBudget  = 700 * time.Millisecond
+	// snippet() reads the whole document and cannot be interrupted partway, so
+	// documents past this size are listed without a snippet.
+	maxSnippetDocBytes = 256 << 10
+	maxSuggestLimit    = 50
 )
 
 var ErrSessionNotFound = errors.New("transcript: session not found")
@@ -72,7 +81,15 @@ type SessionSummary struct {
 type SessionPage struct {
 	Items      []SessionSummary `json:"items"`
 	NextCursor string           `json:"next_cursor,omitempty"`
+	// Hint is set when a search was too broad to answer within its time limit.
+	Hint string `json:"hint,omitempty"`
+	// SnippetsSkipped counts results returned without a snippet because the
+	// snippet time budget ran out.
+	SnippetsSkipped int `json:"snippets_skipped,omitempty"`
 }
+
+// HintTooBroad asks the owner to narrow a search that could not finish in time.
+const HintTooBroad = "too_broad"
 
 const summaryCols = `s.session_pk, s.tool, s.kind, s.parent_session_pk, s.agent_type, s.model, s.cwd, s.git_branch,
  COALESCE(t.title, ''), s.started_at, s.ended_at, s.turn_count,
@@ -175,14 +192,12 @@ func (f SessionFilter) where() (string, []any) {
 	return " WHERE " + strings.Join(conds, " AND "), args
 }
 
-func scanSummary(rows *sql.Rows, withSnippet bool) (SessionSummary, error) {
+func scanSummary(rows *sql.Rows, extra ...any) (SessionSummary, error) {
 	var s SessionSummary
 	var title, result string
 	dest := []any{&s.ID, &s.Tool, &s.Kind, &s.ParentID, &s.AgentType, &s.Model, &s.Project, &s.GitBranch,
 		&title, &s.StartedAt, &s.EndedAt, &s.Turns, &s.Tokens, &s.ToolCalls, &s.Errors, &result}
-	if withSnippet {
-		dest = append(dest, &s.Snippet)
-	}
+	dest = append(dest, extra...)
 	if err := rows.Scan(dest...); err != nil {
 		return s, err
 	}
@@ -243,7 +258,23 @@ func (s *Store) fillTitles(ctx context.Context, items []SessionSummary) {
 		var text string
 		_ = s.db.QueryRowContext(ctx, `SELECT text_redacted FROM tx_turns WHERE session_pk = ? AND role = 'user' AND text_redacted <> '' ORDER BY seq LIMIT 1`, items[i].ID).Scan(&text)
 		items[i].Title = firstLine(text, 140)
+		if items[i].Title == "" {
+			items[i].Title = untitled(items[i])
+		}
 	}
+}
+
+// untitled names a session with no title and no user text by what is known
+// about it: its tool and start date.
+func untitled(item SessionSummary) string {
+	parts := []string{"Untitled session"}
+	if item.Tool != "" {
+		parts = append(parts, item.Tool)
+	}
+	if len(item.StartedAt) >= 10 {
+		parts = append(parts, item.StartedAt[:10])
+	}
+	return strings.Join(parts, " · ")
 }
 
 func firstLine(text string, max int) string {
@@ -251,7 +282,7 @@ func firstLine(text string, max int) string {
 	if i := strings.IndexAny(text, "\r\n"); i >= 0 {
 		text = text[:i]
 	}
-	return clip(text, max)
+	return strings.TrimSpace(clip(text, max))
 }
 
 // ListSessions returns a filtered, sorted page of sessions.
@@ -279,7 +310,7 @@ func (s *Store) ListSessions(ctx context.Context, f SessionFilter) (SessionPage,
 	defer rows.Close()
 	var page SessionPage
 	for rows.Next() {
-		item, err := scanSummary(rows, false)
+		item, err := scanSummary(rows)
 		if err != nil {
 			return SessionPage{}, errors.New("transcript: cannot read sessions")
 		}
@@ -314,6 +345,12 @@ func ftsQuery(text string) string {
 
 // SearchSessions runs full-text search over the redacted session text. The
 // filter narrows the matches; Sort is ignored in favour of relevance.
+//
+// Ranking is cheap, but snippet() re-reads each matched document and a few
+// documents are megabytes, so results are ranked first and snippets are filled
+// in rank order inside a time budget; the rest come back without one. The whole
+// search is bounded so a too-broad query returns a hint instead of holding the
+// database's read lock.
 func (s *Store) SearchSessions(ctx context.Context, text string, f SessionFilter) (SessionPage, error) {
 	if s == nil {
 		return SessionPage{}, ErrPrivateStoreRequired
@@ -322,11 +359,12 @@ func (s *Store) SearchSessions(ctx context.Context, text string, f SessionFilter
 	if match == "" {
 		return SessionPage{Items: []SessionSummary{}}, nil
 	}
+	ctx, cancel := context.WithTimeout(ctx, searchDeadline)
+	defer cancel()
 	limit := clampLimit(f.Limit)
 	offset := decodeCursor(f.Cursor)
 	where, args := f.where()
-	query := `SELECT ` + summaryCols + `,
- snippet(transcript_search, 2, '[', ']', '…', 24)
+	query := `SELECT ` + summaryCols + `, transcript_search.rowid, COALESCE(octet_length(t.content), 0)
  FROM transcript_search` + fmt.Sprintf(summaryJoins, "transcript_search.id") + `
  WHERE transcript_search MATCH ?`
 	margs := []any{match}
@@ -338,24 +376,50 @@ func (s *Store) SearchSessions(ctx context.Context, text string, f SessionFilter
 	margs = append(margs, limit+1, offset)
 	rows, err := s.db.QueryContext(ctx, query, margs...)
 	if err != nil {
-		return SessionPage{}, errors.New("transcript: cannot search sessions")
+		return searchFailure(ctx)
 	}
 	defer rows.Close()
 	var page SessionPage
+	var rowids, sizes []int64
 	for rows.Next() {
-		item, err := scanSummary(rows, true)
+		var rowid, size int64
+		item, err := scanSummary(rows, &rowid, &size)
 		if err != nil {
-			return SessionPage{}, errors.New("transcript: cannot read search results")
+			return searchFailure(ctx)
 		}
-		item.Snippet = clip(item.Snippet, maxSnippetBytes)
 		page.Items = append(page.Items, item)
+		rowids = append(rowids, rowid)
+		sizes = append(sizes, size)
 	}
 	if err := rows.Err(); err != nil {
-		return SessionPage{}, errors.New("transcript: cannot read search results")
+		return searchFailure(ctx)
 	}
+	rows.Close()
 	if len(page.Items) > limit {
 		page.Items = page.Items[:limit]
+		rowids = rowids[:limit]
+		sizes = sizes[:limit]
 		page.NextCursor = encodeCursor(offset + limit)
+	}
+	budget, stop := context.WithTimeout(ctx, snippetBudget)
+	defer stop()
+	for i, rowid := range rowids {
+		if sizes[i] > maxSnippetDocBytes {
+			page.SnippetsSkipped++
+			continue
+		}
+		if budget.Err() != nil {
+			page.SnippetsSkipped++
+			continue
+		}
+		var snip string
+		err := s.db.QueryRowContext(budget, `SELECT snippet(transcript_search, 2, '[', ']', '…', 24) FROM transcript_search
+ WHERE rowid = ? AND transcript_search MATCH ?`, rowid, match).Scan(&snip)
+		if err != nil {
+			page.SnippetsSkipped++
+			continue
+		}
+		page.Items[i].Snippet = clip(snip, maxSnippetBytes)
 	}
 	s.fillTitles(ctx, page.Items)
 	if page.Items == nil {
@@ -364,13 +428,62 @@ func (s *Store) SearchSessions(ctx context.Context, text string, f SessionFilter
 	return page, nil
 }
 
+// searchFailure turns a deadline into the too-broad hint and anything else into
+// a generic error.
+func searchFailure(ctx context.Context) (SessionPage, error) {
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		return SessionPage{Items: []SessionSummary{}, Hint: HintTooBroad}, nil
+	}
+	return SessionPage{}, errors.New("transcript: cannot search sessions")
+}
+
+// ProjectCount is a working directory and how many sessions ran in it.
+type ProjectCount struct {
+	Project  string `json:"project"`
+	Sessions int    `json:"sessions"`
+}
+
+// SuggestProjects returns working directories containing q (case-insensitive),
+// most used first. It backs search-as-you-type, so every project is reachable
+// without sending the whole list.
+func (s *Store) SuggestProjects(ctx context.Context, q string, limit int) ([]ProjectCount, error) {
+	if s == nil {
+		return nil, ErrPrivateStoreRequired
+	}
+	if limit <= 0 {
+		limit = 20
+	}
+	if limit > maxSuggestLimit {
+		limit = maxSuggestLimit
+	}
+	ctx, cancel := context.WithTimeout(ctx, searchDeadline)
+	defer cancel()
+	rows, err := s.db.QueryContext(ctx, `SELECT cwd, COUNT(*) FROM tx_sessions WHERE cwd <> '' AND instr(lower(cwd), lower(?)) > 0
+ GROUP BY cwd ORDER BY COUNT(*) DESC, cwd LIMIT ?`, q, limit)
+	if err != nil {
+		return nil, errors.New("transcript: cannot suggest projects")
+	}
+	defer rows.Close()
+	out := []ProjectCount{}
+	for rows.Next() {
+		var p ProjectCount
+		if err := rows.Scan(&p.Project, &p.Sessions); err != nil {
+			return nil, errors.New("transcript: cannot suggest projects")
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
 // Facets lists the distinct values the filter bar offers.
 type Facets struct {
-	Tools    []string `json:"tools"`
-	Models   []string `json:"models"`
-	Projects []string `json:"projects"`
-	Tags     []string `json:"tags"`
-	Total    int      `json:"total"`
+	Tools  []string `json:"tools"`
+	Models []string `json:"models"`
+	// ProjectCount is how many distinct working directories exist; use the
+	// project suggestions route to find them.
+	ProjectCount int      `json:"project_count"`
+	Tags         []string `json:"tags"`
+	Total        int      `json:"total"`
 }
 
 func (s *Store) distinct(ctx context.Context, column string) []string {
@@ -412,7 +525,8 @@ func (s *Store) SessionFacets(ctx context.Context) (Facets, error) {
 	if s == nil {
 		return Facets{}, ErrPrivateStoreRequired
 	}
-	f := Facets{Tools: s.distinct(ctx, "tool"), Models: s.distinct(ctx, "model"), Projects: s.distinct(ctx, "cwd")}
+	f := Facets{Tools: s.distinct(ctx, "tool"), Models: s.distinct(ctx, "model")}
+	_ = s.db.QueryRowContext(ctx, `SELECT COUNT(DISTINCT cwd) FROM tx_sessions WHERE cwd <> ''`).Scan(&f.ProjectCount)
 	f.Tags = s.enrichmentTags(ctx)
 	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM tx_sessions`).Scan(&f.Total); err != nil {
 		return Facets{}, errors.New("transcript: cannot count sessions")
@@ -488,7 +602,7 @@ func (s *Store) SessionDetail(ctx context.Context, id string, turnOffset, turnLi
 	var d SessionDetail
 	found := false
 	if rows.Next() {
-		d.Session, err = scanSummary(rows, false)
+		d.Session, err = scanSummary(rows)
 		found = err == nil
 	}
 	rows.Close()
@@ -581,7 +695,7 @@ func (s *Store) subagentTree(ctx context.Context, id string) []*TreeNode {
 		}
 		var kids []SessionSummary
 		for rows.Next() {
-			if item, err := scanSummary(rows, false); err == nil {
+			if item, err := scanSummary(rows); err == nil {
 				kids = append(kids, item)
 			}
 		}

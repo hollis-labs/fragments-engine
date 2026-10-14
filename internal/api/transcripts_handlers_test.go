@@ -41,7 +41,7 @@ func transcriptGet(handler http.Handler, path, remote, host string) *httptest.Re
 }
 
 var transcriptPaths = []string{
-	"/v1/transcripts/status", "/v1/transcripts/sessions", "/v1/transcripts/facets",
+	"/v1/transcripts/status", "/v1/transcripts/sessions", "/v1/transcripts/facets", "/v1/transcripts/projects?q=a",
 	"/v1/transcripts/sessions/" + strings.Repeat("a", 64),
 }
 
@@ -61,7 +61,7 @@ func TestTranscriptRoutes404WhenDisabled(t *testing.T) {
 
 func TestTranscriptRoutesEnabledServeLoopbackOnly(t *testing.T) {
 	handler := NewServer(writeTranscriptAPIConfig(t, true)).Handler()
-	for _, p := range transcriptPaths[:3] {
+	for _, p := range transcriptPaths[:4] {
 		r := transcriptGet(handler, p, "127.0.0.1:1234", "127.0.0.1:8091")
 		if r.Code != http.StatusOK {
 			t.Fatalf("%s enabled status=%d body=%s", p, r.Code, r.Body.String())
@@ -70,7 +70,7 @@ func TestTranscriptRoutesEnabledServeLoopbackOnly(t *testing.T) {
 			t.Fatalf("%s missing no-store", p)
 		}
 	}
-	if r := transcriptGet(handler, transcriptPaths[3], "127.0.0.1:1234", "localhost:8091"); r.Code != http.StatusNotFound {
+	if r := transcriptGet(handler, transcriptPaths[4], "127.0.0.1:1234", "localhost:8091"); r.Code != http.StatusNotFound {
 		t.Fatalf("unknown session status=%d", r.Code)
 	}
 	if r := transcriptGet(handler, "/v1/transcripts/sessions/not-a-hash", "127.0.0.1:1234", "127.0.0.1:8091"); r.Code != http.StatusNotFound {

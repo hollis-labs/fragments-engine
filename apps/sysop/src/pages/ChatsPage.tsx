@@ -21,6 +21,7 @@ import {
   type ChatFacets,
   type ChatFilters,
   type ChatKindFilter,
+  type ChatProjectCount,
   type ChatSession,
   type ChatSortKey,
 } from '@/lib/chats'
@@ -50,6 +51,8 @@ export default function ChatsPage() {
   const [loadingMore, setLoadingMore] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [openId, setOpenId] = useState<string | null>(null)
+  const [hint, setHint] = useState<string | undefined>()
+  const [projectOptions, setProjectOptions] = useState<ChatProjectCount[]>([])
   const requestId = useRef(0)
 
   const update = useCallback((patch: Partial<ChatFilters>) => {
@@ -67,6 +70,22 @@ export default function ChatsPage() {
   useEffect(() => {
     api.fetchTranscriptFacets().then(setFacets).catch(() => setFacets(null))
   }, [api])
+
+  // Project suggestions are fetched as the owner types, so every project is
+  // reachable without sending the whole list.
+  useEffect(() => {
+    const controller = new AbortController()
+    const timer = setTimeout(() => {
+      api
+        .fetchTranscriptProjects(filters.project, { signal: controller.signal })
+        .then(setProjectOptions)
+        .catch(() => {})
+    }, 200)
+    return () => {
+      clearTimeout(timer)
+      controller.abort()
+    }
+  }, [api, filters.project])
 
   const params = useMemo(
     () => ({
@@ -96,6 +115,7 @@ export default function ChatsPage() {
       if (id !== requestId.current) return
       setItems(page.items)
       setCursor(page.next_cursor)
+      setHint(page.hint)
     } catch (err) {
       if (id === requestId.current) setError(err instanceof Error ? err.message : 'Failed to load chats')
     } finally {
@@ -187,7 +207,9 @@ export default function ChatsPage() {
               onChange={(e) => update({ project: e.target.value })}
             />
             <datalist id="chat-projects">
-              {(facets?.projects ?? []).map((p) => <option key={p} value={p} />)}
+              {projectOptions.map((p) => (
+                <option key={p.project} value={p.project}>{p.sessions} chats</option>
+              ))}
             </datalist>
           </Field>
           <Field label="Kind">
@@ -235,6 +257,14 @@ export default function ChatsPage() {
           </div>
         ) : error ? (
           <p className="p-4 text-sm text-danger-soft">{error}</p>
+        ) : hint === 'too_broad' ? (
+          <div className="p-4">
+            <EmptyState
+              variant="no-results"
+              title="That search is too broad"
+              description="It matches too much to answer quickly. Add another word, or narrow by tool, project or date."
+            />
+          </div>
         ) : items.length === 0 ? (
           <div className="p-4">
             <EmptyState variant="no-results" title="No chats in view" description="Adjust filters, or import agent sessions." />

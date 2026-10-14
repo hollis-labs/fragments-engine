@@ -62,3 +62,13 @@ func (s *TranscriptBrowseService) Facets(ctx context.Context) (transcript.Facets
 	}
 	return f, err
 }
+
+// Projects suggests working directories containing q. The audit line records
+// only the count, never the typed text.
+func (s *TranscriptBrowseService) Projects(ctx context.Context, q string, limit int) ([]transcript.ProjectCount, error) {
+	out, err := s.store.SuggestProjects(ctx, q, limit)
+	if err == nil {
+		s.audit("projects", "", len(out))
+	}
+	return out, err
+}
