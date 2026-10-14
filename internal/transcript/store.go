@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -82,8 +83,15 @@ func Open(root string) (*Store, error) {
 		_ = db.Close()
 		return nil, err
 	}
-	rows, err := db.Query(`SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'`)
-	if err != nil {
+	// The busy timeout comes first: the very first statement (the schema
+	// inspection) must wait for a writer's lock rather than fail on it.
+	if _, err := db.Exec(fmt.Sprintf(`PRAGMA busy_timeout=%d`, busyTimeoutMS)); err != nil {
+		_ = db.Close()
+		return nil, errors.New("transcript: cannot configure database")
+	}
+	var names map[string]bool
+	var version string
+	if err := retryBusy(func() (e error) { names, version, e = inspectSchema(db); return }); err != nil {
 		_ = db.Close()
 		return nil, errors.New("transcript: cannot inspect private schema")
 	}
@@ -91,39 +99,19 @@ func Open(root string) (*Store, error) {
 	for _, name := range derivedTables {
 		allowed[name] = true
 	}
-	for rows.Next() {
-		var name string
-		if err := rows.Scan(&name); err != nil {
-			rows.Close()
-			db.Close()
-			return nil, errors.New("transcript: invalid private schema")
-		}
+	for name := range names {
 		if !allowed[name] {
-			rows.Close()
 			db.Close()
 			return nil, errors.New("transcript: destination is not a dedicated transcript database")
 		}
 	}
-	err = rows.Err()
-	rows.Close()
-	if err != nil {
-		db.Close()
-		return nil, errors.New("transcript: cannot inspect private schema")
-	}
-
-	_, err = db.Exec(`PRAGMA journal_mode=DELETE; PRAGMA busy_timeout=5000;
-CREATE TABLE IF NOT EXISTS transcripts (
- id TEXT PRIMARY KEY, content_digest TEXT NOT NULL, redaction_version INTEGER NOT NULL,
- material_json TEXT NOT NULL, title TEXT NOT NULL, content TEXT NOT NULL
-);
-CREATE VIRTUAL TABLE IF NOT EXISTS transcript_search USING fts5(id UNINDEXED, title, content);`)
-	if err != nil {
-		_ = db.Close()
-		return nil, errors.New("transcript: cannot initialize private database")
-	}
-	if err := initDerived(db); err != nil {
-		_ = db.Close()
-		return nil, errors.New("transcript: cannot initialize derived tables")
+	// A current schema needs no write at all, so a concurrent writer is never
+	// disturbed by an open. Only a real upgrade takes the write lock.
+	if !schemaCurrent(names, version) {
+		if err := retryBusy(func() error { return upgradeSchema(db) }); err != nil {
+			_ = db.Close()
+			return nil, errors.New("transcript: cannot initialize private database")
+		}
 	}
 	return st, nil
 }

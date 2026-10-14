@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"sort"
 	"strings"
 	"time"
@@ -71,14 +70,6 @@ CREATE TABLE IF NOT EXISTS tx_cursors (
 );`
 
 var derivedTables = []string{"tx_meta", "tx_sessions", "tx_turns", "tx_tool_calls", "tx_usage", "tx_cursors"}
-
-func initDerived(db *sql.DB) error {
-	if _, err := db.Exec(derivedSchema); err != nil {
-		return err
-	}
-	_, err := db.Exec(`INSERT INTO tx_meta VALUES ('schema_version', ?) ON CONFLICT(key) DO NOTHING`, fmt.Sprint(derivedSchemaVersion))
-	return err
-}
 
 func stamp(t time.Time) string {
 	if t.IsZero() {
