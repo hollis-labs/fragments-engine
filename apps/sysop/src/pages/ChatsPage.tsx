@@ -14,8 +14,13 @@ import { ChatDetailDialog } from '@/components/chats/ChatDetailDialog'
 import { useApi } from '@/hooks/useApi'
 import { SUMMARY_ACCENTS } from '@/lib/constants'
 import {
+  CHAT_SEARCH_MODES,
   EMPTY_CHAT_FILTERS,
   activeChatFilterCount,
+  noticeText,
+  resolveSearchMode,
+  type ChatSearchMode,
+  type ChatStatus,
   type ChatEnrichedFilter,
   type ChatErrorFilter,
   type ChatFacets,
@@ -52,6 +57,9 @@ export default function ChatsPage() {
   const [error, setError] = useState<string | null>(null)
   const [openId, setOpenId] = useState<string | null>(null)
   const [hint, setHint] = useState<string | undefined>()
+  const [notice, setNotice] = useState<string | undefined>()
+  const [status, setStatus] = useState<ChatStatus | null>(null)
+  const [statusLoaded, setStatusLoaded] = useState(false)
   const [projectOptions, setProjectOptions] = useState<ChatProjectCount[]>([])
   const requestId = useRef(0)
 
@@ -70,6 +78,18 @@ export default function ChatsPage() {
   useEffect(() => {
     api.fetchTranscriptFacets().then(setFacets).catch(() => setFacets(null))
   }, [api])
+
+  // Auto mode depends on whether semantic search works, so the first query
+  // waits for the status answer (a failed status just means "not semantic").
+  useEffect(() => {
+    api
+      .fetchTranscriptStatus()
+      .then(setStatus)
+      .catch(() => setStatus(null))
+      .finally(() => setStatusLoaded(true))
+  }, [api])
+
+  const requestMode = resolveSearchMode(filters.mode, status?.semantic === true)
 
   // Project suggestions are fetched as the owner types, so every project is
   // reachable without sending the whole list.
@@ -90,6 +110,7 @@ export default function ChatsPage() {
   const params = useMemo(
     () => ({
       q: filters.search || undefined,
+      mode: filters.search ? requestMode : undefined,
       tool: filters.tool,
       model: filters.model,
       project: filters.project,
@@ -103,10 +124,11 @@ export default function ChatsPage() {
       order: filters.desc ? ('desc' as const) : ('asc' as const),
       limit: PAGE,
     }),
-    [filters],
+    [filters, requestMode],
   )
 
   const load = useCallback(async () => {
+    if (!statusLoaded) return
     const id = ++requestId.current
     setLoading(true)
     setError(null)
@@ -116,12 +138,13 @@ export default function ChatsPage() {
       setItems(page.items)
       setCursor(page.next_cursor)
       setHint(page.hint)
+      setNotice(page.notice)
     } catch (err) {
       if (id === requestId.current) setError(err instanceof Error ? err.message : 'Failed to load chats')
     } finally {
       if (id === requestId.current) setLoading(false)
     }
-  }, [api, params])
+  }, [api, params, statusLoaded])
 
   useEffect(() => {
     void load()
@@ -176,7 +199,7 @@ export default function ChatsPage() {
         <KitFilterBar
           searchQuery={query}
           onSearchChange={setQuery}
-          searchPlaceholder="Search chat text…"
+          searchPlaceholder="Search chats…"
           searchAriaLabel="Search chats"
           activeFilterCount={activeCount}
           summary={filters.search ? `${items.length}${cursor ? '+' : ''} matches` : activeCount ? `${activeCount} filter${activeCount === 1 ? '' : 's'}` : ''}
@@ -185,6 +208,19 @@ export default function ChatsPage() {
             setFilters({ ...EMPTY_CHAT_FILTERS, sort: filters.sort, desc: filters.desc })
           }}
         >
+          <Field label="Search">
+            <select
+              aria-label="Search mode"
+              className={SELECT_CLASS}
+              value={filters.mode}
+              title={CHAT_SEARCH_MODES.find((m) => m.value === filters.mode)?.hint}
+              onChange={(e) => update({ mode: e.target.value as ChatSearchMode })}
+            >
+              {CHAT_SEARCH_MODES.map((m) => (
+                <option key={m.value} value={m.value} title={m.hint}>{m.label}</option>
+              ))}
+            </select>
+          </Field>
           <Field label="Tool">
             <select aria-label="Tool" className={SELECT_CLASS} value={filters.tool} onChange={(e) => update({ tool: e.target.value })}>
               <option value="">All</option>
@@ -267,10 +303,16 @@ export default function ChatsPage() {
           </div>
         ) : items.length === 0 ? (
           <div className="p-4">
+            {filters.search && noticeText(notice) && (
+              <p role="status" className="pb-3 text-xs text-text-subtle">{noticeText(notice)}</p>
+            )}
             <EmptyState variant="no-results" title="No chats in view" description="Adjust filters, or import agent sessions." />
           </div>
         ) : (
           <>
+            {filters.search && noticeText(notice) && (
+              <p role="status" className="px-4 pt-3 text-xs text-text-subtle">{noticeText(notice)}</p>
+            )}
             <ChatsTable items={items} sort={filters.sort} desc={filters.desc} onSort={handleSort} onOpen={setOpenId} />
             {cursor && (
               <div className="p-3 text-center">

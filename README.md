@@ -307,7 +307,22 @@ for full-text search with snippets; `limit` and `cursor`), `/sessions/{id}`
 (paged turns, tool-call metadata, usage, subagent tree, and enrichment with turn
 citations once it has run), `/facets` (tools, models, tags, counts) and
 `/projects?q=` (working directories containing `q`, most used first, for
-search-as-you-type). Semantic search is not offered yet.
+search-as-you-type).
+
+`/sessions?q=…&mode=` picks what `q` searches: `text` (redacted transcript
+text, the default), `summary` (the enrichment text: title, summary, decisions,
+follow-ups, topics, entities), `semantic` (cosine similarity over the summary
+vectors that `transcript embed` stored) or `hybrid` (all three fused by
+reciprocal rank). Summary, semantic and hybrid hits carry `match.field`, a short
+`match.excerpt` with matched words in `[ ]`, and `score`; semantic and hybrid
+return a top-k with no cursor. Semantic search embeds the query on the local
+embedding server from `transcripts.enrichment.embedding` (same model, dimension
+and `query_instruction` as the stored vectors, loopback only) before any
+database read. When that is impossible the page says why in `notice`
+(`semantic_unavailable`, `no_vectors`, `model_mismatch`, `dim_mismatch`) and
+hybrid falls back to summary plus text; `/status` reports `semantic: true` only
+when the stored vectors match the configured model and the server answers
+(reachability is cached for 15 s). Query text is never written to the log.
 
 Reads share the database file with the ingest writers and, in DELETE journal
 mode, a reader blocks their commits, so every search is short. Results are ranked

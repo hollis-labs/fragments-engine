@@ -73,6 +73,10 @@ type SessionSummary struct {
 	ToolCalls int    `json:"tool_calls"`
 	Errors    int    `json:"errors"`
 	Snippet   string `json:"snippet,omitempty"`
+	// Score is cosine similarity (semantic) or the fused rank score (hybrid).
+	Score float64 `json:"score,omitempty"`
+	// Match says which field matched a summary, semantic or hybrid search.
+	Match *Match `json:"match,omitempty"`
 	// Enrichment-derived, present only once the enrichment pipeline has run.
 	Enriched bool     `json:"enriched,omitempty"`
 	Tags     []string `json:"tags,omitempty"`
@@ -86,6 +90,11 @@ type SessionPage struct {
 	// SnippetsSkipped counts results returned without a snippet because the
 	// snippet time budget ran out.
 	SnippetsSkipped int `json:"snippets_skipped,omitempty"`
+	// Mode is the search mode that produced the items, which differs from the
+	// one requested when a mode was unavailable.
+	Mode string `json:"mode,omitempty"`
+	// Notice is a stable code explaining a fallback or an empty semantic result.
+	Notice string `json:"notice,omitempty"`
 }
 
 // HintTooBroad asks the owner to narrow a search that could not finish in time.
@@ -193,13 +202,20 @@ func (f SessionFilter) where() (string, []any) {
 }
 
 func scanSummary(rows *sql.Rows, extra ...any) (SessionSummary, error) {
+	s, _, err := scanSummaryRaw(rows, extra...)
+	return s, err
+}
+
+// scanSummaryRaw also returns the stored Tier 1 result, for callers that match
+// against its fields.
+func scanSummaryRaw(rows *sql.Rows, extra ...any) (SessionSummary, string, error) {
 	var s SessionSummary
 	var title, result string
 	dest := []any{&s.ID, &s.Tool, &s.Kind, &s.ParentID, &s.AgentType, &s.Model, &s.Project, &s.GitBranch,
 		&title, &s.StartedAt, &s.EndedAt, &s.Turns, &s.Tokens, &s.ToolCalls, &s.Errors, &result}
 	dest = append(dest, extra...)
 	if err := rows.Scan(dest...); err != nil {
-		return s, err
+		return s, "", err
 	}
 	s.Title = title
 	if result != "" {
@@ -211,7 +227,7 @@ func scanSummary(rows *sql.Rows, extra ...any) (SessionSummary, error) {
 			}
 		}
 	}
-	return s, nil
+	return s, result, nil
 }
 
 // EnrichmentView is the stored Tier 1 result as shown to the owner. Citations
@@ -420,7 +436,9 @@ func (s *Store) SearchSessions(ctx context.Context, text string, f SessionFilter
 			continue
 		}
 		page.Items[i].Snippet = clip(snip, maxSnippetBytes)
+		page.Items[i].Match = &Match{Field: "transcript", Excerpt: page.Items[i].Snippet}
 	}
+	page.Mode = ModeText
 	s.fillTitles(ctx, page.Items)
 	if page.Items == nil {
 		page.Items = []SessionSummary{}

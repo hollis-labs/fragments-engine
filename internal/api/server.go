@@ -11,6 +11,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	capturecontract "github.com/hollis-labs/fragments-engine/contracts/browser-capture-reader/v1"
@@ -23,6 +24,13 @@ import (
 
 type Server struct {
 	cfgPath string
+	// semProbe caches whether the local embedding server answered recently, so
+	// the status route does not call it on every page load.
+	semProbe struct {
+		mu     sync.Mutex
+		at     time.Time
+		notice string
+	}
 }
 
 const (
