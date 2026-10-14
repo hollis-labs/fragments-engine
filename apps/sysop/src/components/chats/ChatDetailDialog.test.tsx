@@ -39,6 +39,13 @@ describe('ChatDetailDialog', () => {
     Element.prototype.scrollIntoView = vi.fn()
   })
 
+  it('lists tool results that belong to no turn in a footer', async () => {
+    renderDialog(vi.fn().mockResolvedValue(detail({ unattached_calls: [{ name: 'Grep', status: 'ok', result_bytes: 7 }] })))
+    await screen.findByText('synthetic answer')
+    fireEvent.click(screen.getByRole('button', { name: /1 unattached tool result/ }))
+    expect(screen.getByText('Grep')).toBeTruthy()
+  })
+
   it('shows turns, usage, thinking as presence only, and collapsed tool calls', async () => {
     renderDialog(vi.fn().mockResolvedValue(detail()))
     await screen.findByText('synthetic answer')

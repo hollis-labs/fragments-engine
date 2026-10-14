@@ -613,6 +613,10 @@ type SessionDetail struct {
 	TurnTotal int            `json:"turn_total"`
 	NextTurn  int            `json:"next_turn,omitempty"`
 	Subagents []*TreeNode    `json:"subagents"`
+	// UnattachedCalls are tool rows whose turn is not in the capture (a result
+	// whose call was never seen), so the per-turn lists plus this one add up to
+	// the list's tool_calls count.
+	UnattachedCalls []ToolCallMeta `json:"unattached_calls,omitempty"`
 	// Enrichment is present only once the enrichment pipeline has run.
 	Enrichment *EnrichmentView `json:"enrichment,omitempty"`
 }
@@ -686,6 +690,7 @@ func (s *Store) SessionDetail(ctx context.Context, id string, turnOffset, turnLi
 		d.NextTurn = turnOffset + len(d.Turns)
 	}
 	d.Subagents = s.subagentTree(ctx, id)
+	d.UnattachedCalls = s.unattachedCalls(ctx, id)
 	if rec, ok, err := s.LatestEnrichment(ctx, id, 1); err == nil && ok {
 		if e, ok := parseEnrichment(rec.ResultJSON); ok {
 			d.Enrichment = &e
@@ -710,6 +715,24 @@ func (s *Store) callsByTurn(ctx context.Context, id string) (map[string][]ToolCa
 		out[turn] = append(out[turn], c)
 	}
 	return out, rows.Err()
+}
+
+// unattachedCalls lists tool rows that match none of the session's turns.
+func (s *Store) unattachedCalls(ctx context.Context, id string) []ToolCallMeta {
+	rows, err := s.db.QueryContext(ctx, `SELECT name, result_status, result_bytes, started_at, ended_at FROM tx_tool_calls
+ WHERE session_pk = ? AND turn_uuid NOT IN (SELECT event_uuid FROM tx_turns WHERE session_pk = ?) ORDER BY started_at, tool_use_id LIMIT ?`, id, id, maxTreeNodes)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	var out []ToolCallMeta
+	for rows.Next() {
+		var c ToolCallMeta
+		if rows.Scan(&c.Name, &c.Status, &c.ResultBytes, &c.StartedAt, &c.EndedAt) == nil {
+			out = append(out, c)
+		}
+	}
+	return out
 }
 
 // subagentTree walks parent_session_pk breadth-first below id, bounded so a
