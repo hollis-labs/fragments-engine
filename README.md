@@ -60,7 +60,7 @@ safe to publish.
 Transcript acceptance bypasses attachment/LLM analysis, shared captures, routing,
 inbox, and SQLite/Vanta/Tesseract recall. The shared canonical write boundaries
 and manual intake reject transcript producers. There is no public transcript
-search/export API in this slice. Public ingest preview refuses transcript sources
+search/export API in this slice (the owner-only Chats routes below are loopback-only and off by default). Public ingest preview refuses transcript sources
 before collection because raw titles, IDs and locators can contain secrets. Raw attachments and ChatGPT raw-copy/delete
 options are refused; the source archive remains read-only. Existing records in
 the shared database are neither retrospectively redacted nor removed by this
@@ -254,6 +254,43 @@ All accepted text and locators go exclusively through the private redaction stor
 unchanged material is skipped. No shared recall/routing/preview or schedule is
 activated by registering the source. Pattern redaction still cannot recognize
 all encoded secrets, so these artifacts remain owner-private.
+
+### Browsing chats in Sysop (owner-only)
+
+The Sysop **Chats** page and `/v1/transcripts/*` browse, search and sort the
+private store for its owner: `GET /v1/transcripts/status`, `/sessions` (filters
+`tool`, `model`, `project`, `kind`, `has_error`, `has_enrichment`, `tag`, `since`,
+`until`; `sort` of `started|turns|tokens|tool_calls|errors` with `order`; `q`
+for full-text search with snippets; `limit` and `cursor`), `/sessions/{id}`
+(paged turns, tool-call metadata, usage, subagent tree, and enrichment with turn
+citations once it has run) and `/facets`. Semantic search is not offered yet.
+
+This is the one deliberate exception to "the API never serves transcript
+content", so it is fenced:
+
+- **Off by default.** Set `ui.transcripts.enabled: true`. Disabled, every route
+  is a 404 (as is an unreadable config), and Sysop hides the Chats page.
+- **Loopback only.** `serve-api` refuses to start with the flag on and a
+  non-loopback `-addr`; each request must also come from a loopback peer with a
+  loopback `Host`, which blocks DNS rebinding from a browser.
+- **Read-only, redacted, no raw material.** Redacted text and metadata only:
+  session ids are the stored digests, never source paths or native ids; no raw
+  archives or attachment bytes; thinking is shown only as present and its length;
+  tool calls show name, status and result size.
+- **Audited.** Every read logs route, id and count, never content.
+- **No credential yet, by decision.** `authorizeTranscripts` is the seam for a
+  bearer token (auth is tracked separately), and the UI keeps an in-memory slot
+  for one.
+- **Not agent-facing.** No MCP tool or agent CLI wraps these routes; gated agent
+  access is a separate design, so the usual CLI/API/MCP parity rule is deferred.
+
+```yaml
+ui:
+  transcripts:
+    enabled: true
+```
+
+Sysop is embedded in the binary: run `make sysop-build` before `go build`.
 
 ## Where it sits in the stack
 
