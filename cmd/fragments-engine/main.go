@@ -2080,6 +2080,10 @@ func runTranscriptEnrich(cfg config.Config, store *transcript.Store, f enrichFla
 		for class, n := range s.Errors {
 			fmt.Printf("error_class=%s count=%d\n", class, n)
 		}
+		if s.StoreWriteFailures > 0 {
+			fmt.Printf("HALTED on a persistent store write failure (not a provider failure): store_write_failures=%d ledger_gap_usd=%.5f (spend incurred but not in the ledger; included in gateway_cost_usd) failed_session_ids=%v\n",
+				s.StoreWriteFailures, s.LedgerGapUSD, s.StoreFailedIDs)
+		}
 		if s.Attempted > 0 {
 			gates := enrich.EvaluateGates(s)
 			for _, g := range gates {

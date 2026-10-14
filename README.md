@@ -194,6 +194,19 @@ failure rate (<= 5%), citation grounding (>= 95%), project/repo entity grounding
 (>= 90%) and spend against the expected cost (<= 1.2x), as `stage_gates=PASS|FAIL`.
 A run halted by a stop rule never passes.
 
+Store writes and contention: the private store is a rollback-journal SQLite
+file shared with the running service, so a write can meet a lock. Enrichment
+writes (results, the spend ledger, embeddings, Tier-0 facts) retry on lock
+contention with backoff, up to 60 seconds, and a failure names its cause as
+`(busy)` or `(error)` instead of a fixed message. After a paid call the ledger
+row is written first. If that write ultimately fails the run halts at once
+(stops paying), drops the result, logs only the session id and reports the
+unrecorded spend as `ledger_gap_usd`. If the ledger row exists but the result
+cannot be saved, the session is marked failed-with-cost (best effort) and the
+run halts. Both are the hard stop `stopped_by=store_write`, never counted as
+provider failures. Tier-0 facts are refreshed only for the sessions a run will
+enrich.
+
 The Anthropic key is read from the named environment variable at startup, like
 other service keys (FE never loads a `.env` file); it is not logged, stored or
 included in any error, and provider errors are reduced to a status and

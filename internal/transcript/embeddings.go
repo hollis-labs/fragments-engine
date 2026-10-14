@@ -51,12 +51,15 @@ func (s *Store) SaveEmbedding(ctx context.Context, pk, kind string, idx int, mod
 	if err := s.checkOwnership(); err != nil {
 		return err
 	}
-	_, err := s.db.ExecContext(ctx, `INSERT INTO tx_embeddings (session_pk, kind, chunk_idx, model, dim, format, text_digest, vector, created_at) VALUES (?,?,?,?,?,?,?,?,?)
+	err := retryBusyFor(writeDeadline, func() error {
+		_, e := s.db.ExecContext(ctx, `INSERT INTO tx_embeddings (session_pk, kind, chunk_idx, model, dim, format, text_digest, vector, created_at) VALUES (?,?,?,?,?,?,?,?,?)
  ON CONFLICT(session_pk, kind, chunk_idx, model) DO UPDATE SET
  dim = excluded.dim, format = excluded.format, text_digest = excluded.text_digest, vector = excluded.vector, created_at = excluded.created_at`,
-		pk, kind, idx, Redact(model), len(vec), Redact(format), textDigest, encodeVec(vec), stamp(time.Now()))
+			pk, kind, idx, Redact(model), len(vec), Redact(format), textDigest, encodeVec(vec), stamp(time.Now()))
+		return e
+	})
 	if err != nil {
-		return errors.New("transcript: cannot save embedding")
+		return writeFail("save embedding", err)
 	}
 	return nil
 }

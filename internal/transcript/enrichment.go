@@ -349,6 +349,12 @@ func (s *Store) EnrichmentDone(ctx context.Context, pk string, tier int, promptV
 // (string values, never the JSON syntax) so a model echoing a secret cannot
 // persist it.
 func (s *Store) SaveEnrichment(ctx context.Context, r EnrichmentRecord) error {
+	return s.SaveEnrichmentWithin(ctx, r, writeDeadline)
+}
+
+// SaveEnrichmentWithin is SaveEnrichment with an explicit retry deadline, for
+// best-effort writes that must not stall a halt.
+func (s *Store) SaveEnrichmentWithin(ctx context.Context, r EnrichmentRecord, deadline time.Duration) error {
 	if s == nil {
 		return ErrPrivateStoreRequired
 	}
@@ -377,26 +383,29 @@ func (s *Store) SaveEnrichment(ctx context.Context, r EnrichmentRecord) error {
 	if r.CreatedAt == "" {
 		r.CreatedAt = stamp(time.Now())
 	}
-	_, err = s.db.ExecContext(ctx, `INSERT INTO tx_enrichment (session_pk, tier, prompt_version, model, provider, content_digest, status, error_class,
+	err = retryBusyFor(deadline, func() error {
+		_, e := s.db.ExecContext(ctx, `INSERT INTO tx_enrichment (session_pk, tier, prompt_version, model, provider, content_digest, status, error_class,
  result_json, quality_json, tokens_in, tokens_out, calls, chunks, run_id, request_prefix, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
  ON CONFLICT(session_pk, tier, prompt_version, model, content_digest) DO UPDATE SET
   provider = excluded.provider, status = excluded.status, error_class = excluded.error_class, result_json = excluded.result_json,
   quality_json = excluded.quality_json, tokens_in = excluded.tokens_in, tokens_out = excluded.tokens_out, calls = excluded.calls,
   chunks = excluded.chunks, run_id = excluded.run_id, request_prefix = excluded.request_prefix, created_at = excluded.created_at`,
-		r.SessionPK, r.Tier, Redact(r.PromptVersion), Redact(r.Model), Redact(r.Provider), r.ContentDigest, r.Status, Redact(r.ErrorClass),
-		result, quality, r.TokensIn, r.TokensOut, r.Calls, r.Chunks, Redact(r.RunID), Redact(r.RequestPrefix), r.CreatedAt)
+			r.SessionPK, r.Tier, Redact(r.PromptVersion), Redact(r.Model), Redact(r.Provider), r.ContentDigest, r.Status, Redact(r.ErrorClass),
+			result, quality, r.TokensIn, r.TokensOut, r.Calls, r.Chunks, Redact(r.RunID), Redact(r.RequestPrefix), r.CreatedAt)
+		return e
+	})
 	if err != nil {
-		return errors.New("transcript: cannot save enrichment")
+		return writeFail("save enrichment", err)
 	}
 	if r.Tier == 1 && r.Status == "ok" {
-		return s.indexEnrichment(ctx, r.SessionPK, result)
+		return s.indexEnrichment(ctx, r.SessionPK, result, deadline)
 	}
 	return nil
 }
 
 // indexEnrichment keeps the private full-text index in step with the newest ok
 // Tier 1 result. The text is already redacted.
-func (s *Store) indexEnrichment(ctx context.Context, pk, resultJSON string) error {
+func (s *Store) indexEnrichment(ctx context.Context, pk, resultJSON string, deadline time.Duration) error {
 	var r struct {
 		Title, Summary string
 		Topics         []string
@@ -410,20 +419,23 @@ func (s *Store) indexEnrichment(ctx context.Context, pk, resultJSON string) erro
 	b, _ := json.Marshal(raw)
 	_ = json.Unmarshal(b, &r)
 	ents := append(append(append(append([]string{}, r.Entities.Projects...), r.Entities.Repos...), r.Entities.Tools...), r.Entities.Technologies...)
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return errors.New("transcript: cannot index enrichment")
-	}
-	defer tx.Rollback()
-	if _, err := tx.ExecContext(ctx, `DELETE FROM tx_enrichment_search WHERE session_pk = ?`, pk); err != nil {
-		return errors.New("transcript: cannot index enrichment")
-	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO tx_enrichment_search (session_pk, title, summary, topics, entities) VALUES (?,?,?,?,?)`,
-		pk, r.Title, r.Summary, strings.Join(r.Topics, " "), strings.Join(ents, " ")); err != nil {
-		return errors.New("transcript: cannot index enrichment")
-	}
-	if err := tx.Commit(); err != nil {
-		return errors.New("transcript: cannot index enrichment")
+	// The delete and insert are one transaction, retried as a whole on contention.
+	if err := retryBusyFor(deadline, func() error {
+		tx, err := s.db.BeginTx(ctx, nil)
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback()
+		if _, err := tx.ExecContext(ctx, `DELETE FROM tx_enrichment_search WHERE session_pk = ?`, pk); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO tx_enrichment_search (session_pk, title, summary, topics, entities) VALUES (?,?,?,?,?)`,
+			pk, r.Title, r.Summary, strings.Join(r.Topics, " "), strings.Join(ents, " ")); err != nil {
+			return err
+		}
+		return tx.Commit()
+	}); err != nil {
+		return writeFail("index enrichment", err)
 	}
 	return nil
 }
@@ -462,11 +474,14 @@ func (s *Store) AppendSpend(ctx context.Context, r SpendRecord) error {
 	if s == nil {
 		return ErrPrivateStoreRequired
 	}
-	_, err := s.db.ExecContext(ctx, `INSERT INTO tx_enrichment_spend (run_id, session_pk, request_id, provider, model, tokens_in, tokens_out, tokens_cache_read, tokens_cache_write, cost_usd, at)
+	err := retryBusyFor(writeDeadline, func() error {
+		_, e := s.db.ExecContext(ctx, `INSERT INTO tx_enrichment_spend (run_id, session_pk, request_id, provider, model, tokens_in, tokens_out, tokens_cache_read, tokens_cache_write, cost_usd, at)
  VALUES (?,?,?,?,?,?,?,?,?,?,?)`, Redact(r.RunID), r.SessionPK, Redact(r.RequestID), Redact(r.Provider), Redact(r.Model), r.TokensIn, r.TokensOut,
-		r.CacheRead, r.CacheWrite, r.CostUSD, stamp(time.Now()))
+			r.CacheRead, r.CacheWrite, r.CostUSD, stamp(time.Now()))
+		return e
+	})
 	if err != nil {
-		return errors.New("transcript: cannot record spend")
+		return writeFail("record spend", err)
 	}
 	return nil
 }
