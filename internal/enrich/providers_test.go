@@ -213,7 +213,7 @@ func TestDryRunPrintsAnUpperBoundFromConfiguredPrices(t *testing.T) {
 	o := opts()
 	o.DryRun, o.EstPricing = true, testPricing
 	s, err := (&Runner{Store: st, Opts: o}).Run(context.Background())
-	want := testPricing.Cost(s.EstInputTokens*13/10, s.MaxOutputToks, 0, 0) // one call here; includes the tokenizer allowance
+	want := testPricing.Cost(s.EstInputTokens*17/10, s.MaxOutputToks, 0, 0) // one call here; includes the tokenizer allowance
 	if err != nil || s.Calls != 1 || s.EstMaxCostUSD <= 0 || math.Abs(s.EstMaxCostUSD-want) > 1e-12 {
 		t.Fatalf("%+v %v", s, err)
 	}
@@ -425,10 +425,10 @@ func TestDryRunBoundPricesEachCallOnItsOwnTier(t *testing.T) {
 		t.Fatalf("%+v %v", s, err)
 	}
 	per := s.EstInputTokens / s.Calls
-	if per*13/10 > tiered.LongThreshold {
+	if per*17/10 > tiered.LongThreshold {
 		t.Fatalf("fixture too big (%d tokens per call)", per)
 	}
-	want := float64(s.Calls) * tiered.Cost(per*13/10, o.MaxOutputTokens, 0, 0)
+	want := float64(s.Calls) * tiered.Cost(per*17/10, o.MaxOutputTokens, 0, 0)
 	if want > 1 || math.Abs(s.EstMaxCostUSD-want) > 0.05 {
 		t.Fatalf("bound %v want about %v (each call is under the threshold)", s.EstMaxCostUSD, want)
 	}

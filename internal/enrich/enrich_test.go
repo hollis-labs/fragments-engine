@@ -780,3 +780,37 @@ func TestRunMeasuresGroundingLatencyAndPerSessionCost(t *testing.T) {
 		t.Fatal("median helpers")
 	}
 }
+
+func TestTitleTruncationPrefersAWordBoundary(t *testing.T) {
+	var q Quality
+	long := "Refactor the transcript enrichment pipeline to support direct providers and cost caps today"
+	got := trunc(long, 60, &q)
+	if q.Truncated != 1 || len([]rune(got)) > 60 || strings.HasSuffix(got, " ") || !strings.HasPrefix(long, got) {
+		t.Fatalf("%q", got)
+	}
+	if got != "Refactor the transcript enrichment pipeline to support" {
+		t.Fatalf("cut mid-word or too short: %q", got)
+	}
+	// No nearby space: cut at the limit rather than lose most of the text.
+	if got := trunc(strings.Repeat("x", 100), 60, &q); len(got) != 60 {
+		t.Fatalf("hard cut: %d", len(got))
+	}
+}
+
+func TestRetryClassesAreRecorded(t *testing.T) {
+	st := openStore(t)
+	addSession(t, st, "S1", old, "q", "a")
+	gw := &fakeGW{reply: func(n int, r Request) (Response, error) {
+		if n == 1 {
+			return Response{Text: "not json", InputTokens: 1}, nil
+		}
+		return Response{Text: goodJSON, InputTokens: 1}, nil
+	}}
+	if _, err := (&Runner{Store: st, GW: gw, Opts: opts()}).Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	rec, _, _ := st.LatestEnrichment(context.Background(), sessionPK(t, st, "S1"), 1)
+	if !strings.Contains(rec.QualityJSON, `"retry_classes":["parse_not_json"]`) {
+		t.Fatalf("quality %s", rec.QualityJSON)
+	}
+}

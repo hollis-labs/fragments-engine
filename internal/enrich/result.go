@@ -61,13 +61,15 @@ type Result struct {
 // Quality records how the output measured against its source; it is metadata
 // about the run, never transcript content.
 type Quality struct {
-	UngroundedCites    int    `json:"ungrounded_cites"`
-	UngroundedEntities int    `json:"ungrounded_entities"`
-	Truncated          int    `json:"truncated"`
-	Retries            int    `json:"retries"`
-	Cites              int    `json:"cites"`
-	EntitiesChecked    int    `json:"entities_checked"`
-	ResponseModel      string `json:"response_model,omitempty"`
+	UngroundedCites    int `json:"ungrounded_cites"`
+	UngroundedEntities int `json:"ungrounded_entities"`
+	Truncated          int `json:"truncated"`
+	Retries            int `json:"retries"`
+	// RetryClasses names why each retry happened (fixed parse classes only).
+	RetryClasses    []string `json:"retry_classes,omitempty"`
+	Cites           int      `json:"cites"`
+	EntitiesChecked int      `json:"entities_checked"`
+	ResponseModel   string   `json:"response_model,omitempty"`
 }
 
 // ParseError carries only a fixed class, never model output.
@@ -139,13 +141,20 @@ func Parse(raw string, validSeqs map[int]bool, source string) (Result, Quality, 
 	return redactResult(r), q, nil
 }
 
+// trunc cuts s to at most max runes, preferring a word boundary when one is
+// close to the cut so a title is not left ending mid-word.
 func trunc(s string, max int, q *Quality) string {
 	if utf8.RuneCountInString(s) <= max {
 		return s
 	}
 	q.Truncated++
-	r := []rune(s)
-	return string(r[:max])
+	r := []rune(s)[:max]
+	for i := len(r) - 1; i > max-max/4 && i > 0; i-- {
+		if r[i] == ' ' {
+			return strings.TrimRight(string(r[:i]), " ,;:-")
+		}
+	}
+	return string(r)
 }
 
 func tags(in []string, q *Quality) []string {

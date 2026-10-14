@@ -14,6 +14,9 @@ import (
 )
 
 const (
+	// tokenizerAllowance is the factor applied to the chars/4 estimate when
+	// bounding dollars: the first live sample measured 1.4x to 1.6x per call.
+	tokenizerAllowanceNum, tokenizerAllowanceDen = 17, 10
 	// CallerID labels every gateway call so Tether can attribute usage.
 	CallerID = "fragments-engine/transcript-enrichment"
 	// defaultSingleCallTokens is the largest session sent in one call; bigger
@@ -211,13 +214,14 @@ func (r *Runner) Run(ctx context.Context) (Summary, error) {
 	sum.Calls, sum.EstInputTokens, sum.MapReduce = 0, 0, 0
 	// Each request is priced on its own (prompt-length tiers), so the dollar
 	// bound is summed per call. chars/4 undercounts on newer tokenizers
-	// (Anthropic documents about 30% more tokens), so each prompt gets a 1.3x
-	// allowance, and every call is assumed to use its full output cap.
+	// (Anthropic documents about 30% more tokens), so each prompt gets a 1.7x
+	// allowance (measured on the first live sample: 1.4x to 1.6x per call), and
+	// every call is assumed to use its full output cap.
 	call := func(promptTokens int) {
 		sum.Calls++
 		sum.EstInputTokens += promptTokens
 		if o.EstPricing.Configured() {
-			sum.EstMaxCostUSD += o.EstPricing.Cost(promptTokens*13/10, o.MaxOutputTokens, 0, 0)
+			sum.EstMaxCostUSD += o.EstPricing.Cost(promptTokens*tokenizerAllowanceNum/tokenizerAllowanceDen, o.MaxOutputTokens, 0, 0)
 		}
 	}
 	for _, w := range pending {
@@ -345,6 +349,7 @@ type outcome struct {
 	cost                         float64
 	quality                      Quality
 	latenciesMS                  []int
+	retryClasses                 []string
 }
 
 // ask makes one logical model call: up to two attempts (the second names the
@@ -389,6 +394,7 @@ func (r *Runner) ask(ctx context.Context, o Options, w work, prefix, tag, system
 			lastClass = "parse_" + pe.Class
 		}
 		acct.retries++
+		acct.retryClasses = append(acct.retryClasses, lastClass)
 		user = user + "\n\nYour previous reply was rejected (" + lastClass + "). Reply with only the JSON object described in the instructions."
 	}
 	return lastClass, nil
@@ -448,6 +454,7 @@ func (r *Runner) enrichOne(ctx context.Context, o Options, w work) outcome {
 		}
 	}
 	q.Retries = out.retries
+	q.RetryClasses = out.retryClasses
 	out.quality = q
 	raw, _ := json.Marshal(res)
 	qraw, _ := json.Marshal(q)
