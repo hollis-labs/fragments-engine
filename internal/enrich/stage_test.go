@@ -221,14 +221,27 @@ func TestGatesScoreAStage(t *testing.T) {
 }
 
 func TestAllocationKeysAreValidated(t *testing.T) {
-	if err := ValidateAllocation(map[string]int{"claude/<1k": 3, "codex/>60k": 1, "codex/8-30k": 0}); err != nil {
+	if err := ValidateAllocation(map[string]int{"claude/<1k": 3, "codex/>60k": 1, "codex/8-30k": 0, "antigravity/1-8k": 5}); err != nil {
 		t.Fatal(err)
 	}
 	for _, bad := range []map[string]int{
-		{"claude/1k": 1}, {"gemini/<1k": 1}, {"claude": 1}, {"claude/<1k": -1}, {"Claude/<1k": 1}, {"/<1k": 1},
+		{"claude/1k": 1}, {"gemini/<1k": 1}, {"antigravity/1k": 1}, {"claude": 1}, {"claude/<1k": -1}, {"Claude/<1k": 1}, {"/<1k": 1},
 	} {
 		if err := ValidateAllocation(bad); err == nil {
 			t.Fatalf("%v must be refused", bad)
+		}
+	}
+}
+
+func TestKnownToolsAreClaudeCodexAndAntigravity(t *testing.T) {
+	for _, tool := range []string{"claude", "codex", "antigravity"} {
+		if !KnownTool(tool) {
+			t.Fatalf("%s must be accepted", tool)
+		}
+	}
+	for _, tool := range []string{"", "gemini", "Claude"} {
+		if KnownTool(tool) {
+			t.Fatalf("%q must be refused", tool)
 		}
 	}
 }

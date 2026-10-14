@@ -1874,7 +1874,7 @@ func runTranscript(args []string) error {
 	force := fs.Bool("force", false, "enrich: redo sessions that already have a result")
 	maxCost := fs.Float64("max-cost-usd", 0, "enrich: per-run cost cap in USD (default from config)")
 	concurrency := fs.Int("concurrency", 1, "enrich: parallel calls")
-	tool := fs.String("tool", "", "enrich: restrict to one tool (claude or codex)")
+	tool := fs.String("tool", "", "enrich: restrict to one tool (claude, codex or antigravity)")
 	order := fs.String("order", "", "enrich: newest = most recently active first (default: reproducible hash order)")
 	stage := fs.String("stage", "", "enrich: a named allocation from transcripts.enrichment.stages")
 	stopAfter := fs.Int("stop-after-failures", 3, "enrich: halt after this many consecutive failed sessions (0 disables)")
@@ -2012,8 +2012,8 @@ func runTranscriptEnrich(cfg config.Config, store *transcript.Store, f enrichFla
 	if f.order != "" {
 		opts.Order = f.order
 	}
-	if opts.Tool != "" && opts.Tool != "claude" && opts.Tool != "codex" {
-		return fmt.Errorf("--tool must be claude or codex")
+	if opts.Tool != "" && !enrich.KnownTool(opts.Tool) {
+		return fmt.Errorf("--tool must be claude, codex or antigravity")
 	}
 	if opts.Order != "" && opts.Order != "newest" {
 		return fmt.Errorf("--order must be newest (or empty)")

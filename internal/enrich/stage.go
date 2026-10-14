@@ -176,18 +176,23 @@ func AllGatesPass(s Summary, gates []Gate) bool {
 	return true
 }
 
-// ValidateAllocation checks stage allocation keys: claude or codex, a slash, and
-// a known size bucket. A typo would otherwise silently select nothing.
+// ValidateAllocation checks stage allocation keys: a known tool (claude, codex or
+// antigravity), a slash, and a known size bucket. A typo would otherwise silently select nothing.
 func ValidateAllocation(a map[string]int) error {
 	buckets := map[string]bool{"<1k": true, "1-8k": true, "8-30k": true, "30-60k": true, ">60k": true}
 	for k, n := range a {
 		tool, bucket, ok := strings.Cut(k, "/")
-		if !ok || (tool != "claude" && tool != "codex") || !buckets[bucket] {
-			return fmt.Errorf("invalid allocation key %q: use claude or codex, a slash, and a bucket (<1k, 1-8k, 8-30k, 30-60k, >60k)", k)
+		if !ok || !KnownTool(tool) || !buckets[bucket] {
+			return fmt.Errorf("invalid allocation key %q: use claude, codex or antigravity, a slash, and a bucket (<1k, 1-8k, 8-30k, 30-60k, >60k)", k)
 		}
 		if n < 0 {
 			return fmt.Errorf("allocation for %q must not be negative", k)
 		}
 	}
 	return nil
+}
+
+// KnownTool reports whether sessions of this tool can be enriched.
+func KnownTool(tool string) bool {
+	return tool == "claude" || tool == "codex" || tool == "antigravity"
 }
