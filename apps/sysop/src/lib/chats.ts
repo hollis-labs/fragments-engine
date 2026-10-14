@@ -18,8 +18,8 @@ export interface ChatSession {
   errors: number
   snippet?: string
   /** Enrichment fields appear once the enrichment pipeline has run. */
+  enriched?: boolean
   tags?: string[]
-  summary?: string
 }
 
 export interface ChatSessionPage {
@@ -72,6 +72,8 @@ export interface ChatEnrichment {
   decisions?: ChatDecision[]
   follow_ups?: ChatDecision[]
   tags?: string[]
+  session_type?: string
+  outcome?: string
 }
 
 export interface ChatDetail {
@@ -88,6 +90,7 @@ export interface ChatFacets {
   tools: string[]
   models: string[]
   projects: string[]
+  tags?: string[]
   total: number
 }
 
@@ -101,6 +104,7 @@ export interface ChatStatus {
 export type ChatSortKey = 'started' | 'turns' | 'tokens' | 'tool_calls' | 'errors'
 export type ChatKindFilter = 'all' | 'main' | 'subagent'
 export type ChatErrorFilter = 'all' | 'errors' | 'clean'
+export type ChatEnrichedFilter = 'all' | 'yes' | 'no'
 
 export interface ChatFilters {
   search: string
@@ -109,6 +113,8 @@ export interface ChatFilters {
   project: string
   kind: ChatKindFilter
   errors: ChatErrorFilter
+  enriched: ChatEnrichedFilter
+  tag: string
   since: string
   until: string
   sort: ChatSortKey
@@ -122,6 +128,8 @@ export const EMPTY_CHAT_FILTERS: ChatFilters = {
   project: '',
   kind: 'all',
   errors: 'all',
+  enriched: 'all',
+  tag: '',
   since: '',
   until: '',
   sort: 'started',
@@ -141,6 +149,8 @@ export function parseChatFilters(raw: unknown): ChatFilters {
     project: str(r.project),
     kind: r.kind === 'main' || r.kind === 'subagent' ? r.kind : 'all',
     errors: r.errors === 'errors' || r.errors === 'clean' ? r.errors : 'all',
+    enriched: r.enriched === 'yes' || r.enriched === 'no' ? r.enriched : 'all',
+    tag: str(r.tag),
     since: str(r.since),
     until: str(r.until),
     sort: SORT_KEYS.includes(r.sort as ChatSortKey) ? (r.sort as ChatSortKey) : 'started',
@@ -150,8 +160,8 @@ export function parseChatFilters(raw: unknown): ChatFilters {
 
 /** Count of narrowing filters (search and sort excluded) for the filter bar badge. */
 export function activeChatFilterCount(f: ChatFilters): number {
-  return [f.tool, f.model, f.project, f.since, f.until].filter(Boolean).length +
-    (f.kind !== 'all' ? 1 : 0) + (f.errors !== 'all' ? 1 : 0)
+  return [f.tool, f.model, f.project, f.tag, f.since, f.until].filter(Boolean).length +
+    (f.kind !== 'all' ? 1 : 0) + (f.errors !== 'all' ? 1 : 0) + (f.enriched !== 'all' ? 1 : 0)
 }
 
 export function formatTokens(n: number): string {

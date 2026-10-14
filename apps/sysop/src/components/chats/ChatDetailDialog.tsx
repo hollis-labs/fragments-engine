@@ -229,6 +229,11 @@ export function ChatDetailDialog({ sessionId, onClose, onOpenSession }: ChatDeta
               {enrichment && (
                 <div className="mx-4 mt-3 rounded border border-border p-3" aria-label="Enrichment">
                   {enrichment.summary && <p className="text-[13px] text-text">{enrichment.summary}</p>}
+                  {(enrichment.outcome || enrichment.session_type) && (
+                    <p className="mt-1 text-[11px] text-text-subtle">
+                      {[enrichment.session_type, enrichment.outcome].filter(Boolean).join(' · ')}
+                    </p>
+                  )}
                   <DecisionList title="Decisions" items={enrichment.decisions} onCite={cite} />
                   <DecisionList title="Follow-ups" items={enrichment.follow_ups} onCite={cite} />
                 </div>

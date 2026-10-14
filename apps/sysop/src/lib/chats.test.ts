@@ -21,6 +21,7 @@ describe('chat filters', () => {
   it('counts narrowing filters but not search or sort', () => {
     expect(activeChatFilterCount({ ...EMPTY_CHAT_FILTERS, search: 'x', sort: 'turns' })).toBe(0)
     expect(activeChatFilterCount({ ...EMPTY_CHAT_FILTERS, tool: 'claude', kind: 'main', since: '2026-01-01' })).toBe(3)
+    expect(activeChatFilterCount({ ...EMPTY_CHAT_FILTERS, tag: 'alpha', enriched: 'yes' })).toBe(2)
   })
 })
 

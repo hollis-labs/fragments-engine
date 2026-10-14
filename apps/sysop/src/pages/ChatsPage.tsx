@@ -16,6 +16,7 @@ import { SUMMARY_ACCENTS } from '@/lib/constants'
 import {
   EMPTY_CHAT_FILTERS,
   activeChatFilterCount,
+  type ChatEnrichedFilter,
   type ChatErrorFilter,
   type ChatFacets,
   type ChatFilters,
@@ -75,6 +76,8 @@ export default function ChatsPage() {
       project: filters.project,
       kind: filters.kind === 'all' ? '' : filters.kind,
       has_error: filters.errors === 'errors' ? 'true' : filters.errors === 'clean' ? 'false' : '',
+      has_enrichment: filters.enriched === 'yes' ? 'true' : filters.enriched === 'no' ? 'false' : '',
+      tag: filters.tag,
       since: filters.since,
       until: filters.until,
       sort: filters.sort,
@@ -201,6 +204,21 @@ export default function ChatsPage() {
               <option value="clean">No errors</option>
             </select>
           </Field>
+          <Field label="Enriched">
+            <select aria-label="Enriched" className={SELECT_CLASS} value={filters.enriched} onChange={(e) => update({ enriched: e.target.value as ChatEnrichedFilter })}>
+              <option value="all">All</option>
+              <option value="yes">Enriched</option>
+              <option value="no">Not yet</option>
+            </select>
+          </Field>
+          {(facets?.tags ?? []).length > 0 && (
+            <Field label="Tag">
+              <select aria-label="Tag" className={SELECT_CLASS} value={filters.tag} onChange={(e) => update({ tag: e.target.value })}>
+                <option value="">All</option>
+                {(facets?.tags ?? []).map((t) => <option key={t} value={t}>{t}</option>)}
+              </select>
+            </Field>
+          )}
           <Field label="From">
             <input aria-label="From date" type="date" className={SELECT_CLASS} value={filters.since} onChange={(e) => update({ since: e.target.value })} />
           </Field>

@@ -50,6 +50,13 @@ describe('ChatsPage', () => {
     expect(JSON.parse(localStorage.getItem('sysop:chats:filters:v1') ?? '{}')).toMatchObject({ tool: 'codex', sort: 'tokens' })
   })
 
+  it('filters by enrichment state', async () => {
+    const fetchSessions = setup()
+    await screen.findByText('first synthetic')
+    fireEvent.change(screen.getByLabelText('Enriched'), { target: { value: 'yes' } })
+    await waitFor(() => expect(fetchSessions.mock.calls.at(-1)?.[0]).toMatchObject({ has_enrichment: 'true' }))
+  })
+
   it('sends the search box text as q after a pause', async () => {
     const fetchSessions = setup()
     await screen.findByText('first synthetic')

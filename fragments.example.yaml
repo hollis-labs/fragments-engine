@@ -7,6 +7,13 @@ database:
 transcripts:
   private_root: ""
 
+# Owner-only Chats page and /v1/transcripts routes over the private store.
+# Off by default: disabled, they are 404. Enabled, serve-api refuses any
+# non-loopback listen address. Read-only, redacted, audited, no credential yet.
+ui:
+  transcripts:
+    enabled: false
+
 delivery:
   file:
     max_attempts: 1

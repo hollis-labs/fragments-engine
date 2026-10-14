@@ -1487,6 +1487,8 @@ export interface FetchTranscriptSessionsParams {
   project?: string
   kind?: string
   has_error?: string
+  has_enrichment?: string
+  tag?: string
   since?: string
   until?: string
   sort?: string

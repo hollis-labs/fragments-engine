@@ -110,3 +110,50 @@ func jsonString(v any) (string, error) {
 	b, err := json.Marshal(v)
 	return string(b), err
 }
+
+func TestEnrichmentIsOptionalAndJoinsWhenPresent(t *testing.T) {
+	st := openStore(t)
+	seedBrowse(t, st)
+	ctx := context.Background()
+	no := false
+	page, _ := st.ListSessions(ctx, SessionFilter{HasEnrichment: &no})
+	if len(page.Items) != 3 || page.Items[0].Enriched {
+		t.Fatalf("unenriched list: %+v", page.Items)
+	}
+	d, _ := st.SessionDetail(ctx, "main1", 0, 0)
+	if d.Enrichment != nil {
+		t.Fatalf("enrichment without a row: %+v", d.Enrichment)
+	}
+
+	insert := func(prompt, status, result, created string) {
+		if _, err := st.db.Exec(`INSERT INTO tx_enrichment (session_pk, tier, prompt_version, model, content_digest, status, result_json, created_at)
+ VALUES ('main1', 1, ?, 'm', 'd', ?, ?, ?)`, prompt, status, result, created); err != nil {
+			t.Fatal(err)
+		}
+	}
+	insert("old", "ok", `{"title":"Old title","topics":["stale"]}`, "2026-10-12T00:00:00Z")
+	insert("new", "ok", `{"title":"Synthetic enriched title","summary":"synthetic summary","topics":["alpha","beta"],"outcome":"completed",
+ "decisions":[{"text":"chose X","turns":[2]}],"follow_ups":[{"text":"do Y","turns":[1]}]}`, "2026-10-13T00:00:00Z")
+	insert("failed", "error", `{"title":"Failed run"}`, "2026-10-14T00:00:00Z")
+
+	yes := true
+	page, err := st.ListSessions(ctx, SessionFilter{HasEnrichment: &yes})
+	if err != nil || len(page.Items) != 1 || page.Items[0].Title != "Synthetic enriched title" || len(page.Items[0].Tags) != 2 {
+		t.Fatalf("enriched list: %+v %v", page.Items, err)
+	}
+	if page, _ = st.ListSessions(ctx, SessionFilter{Tag: "beta"}); len(page.Items) != 1 {
+		t.Fatalf("tag beta: %+v", page.Items)
+	}
+	if page, _ = st.ListSessions(ctx, SessionFilter{Tag: "stale"}); len(page.Items) != 0 {
+		t.Fatalf("stale tag from a superseded row matched: %+v", page.Items)
+	}
+	d, _ = st.SessionDetail(ctx, "main1", 0, 0)
+	if d.Enrichment == nil || d.Enrichment.Summary != "synthetic summary" || len(d.Enrichment.Decisions) != 1 ||
+		d.Enrichment.Decisions[0].Turns[0] != 2 || d.Enrichment.FollowUps[0].Text != "do Y" || d.Enrichment.Outcome != "completed" {
+		t.Fatalf("detail enrichment: %+v", d.Enrichment)
+	}
+	f, _ := st.SessionFacets(ctx)
+	if len(f.Tags) != 2 || f.Tags[0] != "alpha" {
+		t.Fatalf("facet tags: %v", f.Tags)
+	}
+}

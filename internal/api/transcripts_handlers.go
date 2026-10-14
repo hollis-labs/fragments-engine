@@ -158,6 +158,15 @@ func transcriptFilter(r *http.Request) transcript.SessionFilter {
 		v := false
 		f.HasError = &v
 	}
+	switch q.Get("has_enrichment") {
+	case "true":
+		v := true
+		f.HasEnrichment = &v
+	case "false":
+		v := false
+		f.HasEnrichment = &v
+	}
+	f.Tag = q.Get("tag")
 	if f.Kind != "main" && f.Kind != "subagent" {
 		f.Kind = ""
 	}

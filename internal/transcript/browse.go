@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strconv"
@@ -36,10 +37,13 @@ type SessionFilter struct {
 	Since    time.Time
 	Until    time.Time
 	HasError *bool
-	Sort     string // started, turns, tokens, tool_calls, errors
-	Desc     bool
-	Limit    int
-	Cursor   string
+	// HasEnrichment and Tag use the newest ok Tier 1 enrichment, when any.
+	HasEnrichment *bool
+	Tag           string
+	Sort          string // started, turns, tokens, tool_calls, errors
+	Desc          bool
+	Limit         int
+	Cursor        string
 }
 
 // SessionSummary is one row of the browse list.
@@ -60,6 +64,9 @@ type SessionSummary struct {
 	ToolCalls int    `json:"tool_calls"`
 	Errors    int    `json:"errors"`
 	Snippet   string `json:"snippet,omitempty"`
+	// Enrichment-derived, present only once the enrichment pipeline has run.
+	Enriched bool     `json:"enriched,omitempty"`
+	Tags     []string `json:"tags,omitempty"`
 }
 
 type SessionPage struct {
@@ -69,13 +76,14 @@ type SessionPage struct {
 
 const summaryCols = `s.session_pk, s.tool, s.kind, s.parent_session_pk, s.agent_type, s.model, s.cwd, s.git_branch,
  COALESCE(t.title, ''), s.started_at, s.ended_at, s.turn_count,
- COALESCE(u.tokens, 0), COALESCE(c.calls, 0), COALESCE(c.errs, 0)`
+ COALESCE(u.tokens, 0), COALESCE(c.calls, 0), COALESCE(c.errs, 0), COALESCE(en.result_json, '')`
 
 const summaryJoins = `
  JOIN tx_sessions s ON s.session_pk = %s
  LEFT JOIN transcripts t ON t.id = s.session_pk
  LEFT JOIN (SELECT session_pk, SUM(input_tokens + output_tokens + cache_read_tokens + cache_creation_tokens) AS tokens FROM tx_usage GROUP BY session_pk) u ON u.session_pk = s.session_pk
- LEFT JOIN (SELECT session_pk, COUNT(*) AS calls, SUM(CASE WHEN result_status = 'error' THEN 1 ELSE 0 END) AS errs FROM tx_tool_calls GROUP BY session_pk) c ON c.session_pk = s.session_pk`
+ LEFT JOIN (SELECT session_pk, COUNT(*) AS calls, SUM(CASE WHEN result_status = 'error' THEN 1 ELSE 0 END) AS errs FROM tx_tool_calls GROUP BY session_pk) c ON c.session_pk = s.session_pk
+ LEFT JOIN tx_enrichment en ON en.id = (SELECT e.id FROM tx_enrichment e WHERE e.session_pk = s.session_pk AND e.tier = 1 AND e.status = 'ok' ORDER BY e.created_at DESC, e.id DESC LIMIT 1)`
 
 var listSelect = `SELECT ` + summaryCols + ` FROM (SELECT session_pk FROM tx_sessions) k` + fmt.Sprintf(summaryJoins, "k.session_pk")
 
@@ -150,6 +158,17 @@ func (f SessionFilter) where() (string, []any) {
 			conds = append(conds, `COALESCE(c.errs, 0) = 0`)
 		}
 	}
+	if f.HasEnrichment != nil {
+		if *f.HasEnrichment {
+			conds = append(conds, `en.id IS NOT NULL`)
+		} else {
+			conds = append(conds, `en.id IS NULL`)
+		}
+	}
+	if f.Tag != "" {
+		conds = append(conds, `en.id IS NOT NULL AND EXISTS (SELECT 1 FROM json_each(COALESCE(NULLIF(en.result_json, ''), '{}'), '$.topics') j WHERE j.value = ?)`)
+		args = append(args, f.Tag)
+	}
 	if len(conds) == 0 {
 		return "", nil
 	}
@@ -158,9 +177,9 @@ func (f SessionFilter) where() (string, []any) {
 
 func scanSummary(rows *sql.Rows, withSnippet bool) (SessionSummary, error) {
 	var s SessionSummary
-	var title string
+	var title, result string
 	dest := []any{&s.ID, &s.Tool, &s.Kind, &s.ParentID, &s.AgentType, &s.Model, &s.Project, &s.GitBranch,
-		&title, &s.StartedAt, &s.EndedAt, &s.Turns, &s.Tokens, &s.ToolCalls, &s.Errors}
+		&title, &s.StartedAt, &s.EndedAt, &s.Turns, &s.Tokens, &s.ToolCalls, &s.Errors, &result}
 	if withSnippet {
 		dest = append(dest, &s.Snippet)
 	}
@@ -168,7 +187,51 @@ func scanSummary(rows *sql.Rows, withSnippet bool) (SessionSummary, error) {
 		return s, err
 	}
 	s.Title = title
+	if result != "" {
+		if e, ok := parseEnrichment(result); ok {
+			s.Enriched = true
+			s.Tags = e.Tags
+			if e.Title != "" {
+				s.Title = e.Title
+			}
+		}
+	}
 	return s, nil
+}
+
+// EnrichmentView is the stored Tier 1 result as shown to the owner. Citations
+// are tx_turns.seq values.
+type EnrichmentView struct {
+	Title       string   `json:"title,omitempty"`
+	Summary     string   `json:"summary,omitempty"`
+	SessionType string   `json:"session_type,omitempty"`
+	Outcome     string   `json:"outcome,omitempty"`
+	Tags        []string `json:"tags,omitempty"`
+	Decisions   []Claim  `json:"decisions,omitempty"`
+	FollowUps   []Claim  `json:"follow_ups,omitempty"`
+}
+
+// parseEnrichment reads a stored Tier 1 result, whose topics become tags.
+func parseEnrichment(resultJSON string) (EnrichmentView, bool) {
+	var raw struct {
+		Title       string   `json:"title"`
+		Summary     string   `json:"summary"`
+		SessionType string   `json:"session_type"`
+		Outcome     string   `json:"outcome"`
+		Topics      []string `json:"topics"`
+		Decisions   []Claim  `json:"decisions"`
+		FollowUps   []Claim  `json:"follow_ups"`
+	}
+	if json.Unmarshal([]byte(resultJSON), &raw) != nil {
+		return EnrichmentView{}, false
+	}
+	return EnrichmentView{Title: raw.Title, Summary: raw.Summary, SessionType: raw.SessionType, Outcome: raw.Outcome,
+		Tags: raw.Topics, Decisions: raw.Decisions, FollowUps: raw.FollowUps}, true
+}
+
+type Claim struct {
+	Text  string `json:"text"`
+	Turns []int  `json:"turns,omitempty"`
 }
 
 // fillTitles gives untitled sessions the first line of their first user turn.
@@ -306,6 +369,7 @@ type Facets struct {
 	Tools    []string `json:"tools"`
 	Models   []string `json:"models"`
 	Projects []string `json:"projects"`
+	Tags     []string `json:"tags"`
 	Total    int      `json:"total"`
 }
 
@@ -325,11 +389,31 @@ func (s *Store) distinct(ctx context.Context, column string) []string {
 	return out
 }
 
+// enrichmentTags lists the most used topics across current enrichments.
+func (s *Store) enrichmentTags(ctx context.Context) []string {
+	out := []string{}
+	rows, err := s.db.QueryContext(ctx, `SELECT j.value FROM tx_enrichment en, json_each(COALESCE(NULLIF(en.result_json, ''), '{}'), '$.topics') j
+ WHERE en.tier = 1 AND en.status = 'ok' AND en.id = (SELECT e.id FROM tx_enrichment e WHERE e.session_pk = en.session_pk AND e.tier = 1 AND e.status = 'ok' ORDER BY e.created_at DESC, e.id DESC LIMIT 1)
+ GROUP BY j.value ORDER BY COUNT(*) DESC, j.value LIMIT 200`)
+	if err != nil {
+		return out
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var v string
+		if rows.Scan(&v) == nil {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
 func (s *Store) SessionFacets(ctx context.Context) (Facets, error) {
 	if s == nil {
 		return Facets{}, ErrPrivateStoreRequired
 	}
 	f := Facets{Tools: s.distinct(ctx, "tool"), Models: s.distinct(ctx, "model"), Projects: s.distinct(ctx, "cwd")}
+	f.Tags = s.enrichmentTags(ctx)
 	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM tx_sessions`).Scan(&f.Total); err != nil {
 		return Facets{}, errors.New("transcript: cannot count sessions")
 	}
@@ -382,6 +466,8 @@ type SessionDetail struct {
 	TurnTotal int            `json:"turn_total"`
 	NextTurn  int            `json:"next_turn,omitempty"`
 	Subagents []*TreeNode    `json:"subagents"`
+	// Enrichment is present only once the enrichment pipeline has run.
+	Enrichment *EnrichmentView `json:"enrichment,omitempty"`
 }
 
 // SessionDetail returns the session, a page of its turns and its subagent tree.
@@ -453,6 +539,11 @@ func (s *Store) SessionDetail(ctx context.Context, id string, turnOffset, turnLi
 		d.NextTurn = turnOffset + len(d.Turns)
 	}
 	d.Subagents = s.subagentTree(ctx, id)
+	if rec, ok, err := s.LatestEnrichment(ctx, id, 1); err == nil && ok {
+		if e, ok := parseEnrichment(rec.ResultJSON); ok {
+			d.Enrichment = &e
+		}
+	}
 	return d, nil
 }
 
