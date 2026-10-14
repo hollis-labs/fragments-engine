@@ -166,8 +166,9 @@ func (g *AnthropicGateway) Chat(ctx context.Context, r Request) (Response, error
 		return Response{}, classifyAnthropic(resp.StatusCode, data)
 	}
 	var out struct {
-		Model   string `json:"model"`
-		Content []struct {
+		Model      string `json:"model"`
+		StopReason string `json:"stop_reason"`
+		Content    []struct {
 			Type string `json:"type"`
 			Text string `json:"text"`
 		} `json:"content"`
@@ -188,7 +189,7 @@ func (g *AnthropicGateway) Chat(ctx context.Context, r Request) (Response, error
 		}
 	}
 	return Response{
-		Text: text.String(), Provider: AnthropicDirectProvider, Model: out.Model,
+		Text: text.String(), StopReason: out.StopReason, Provider: AnthropicDirectProvider, Model: out.Model,
 		InputTokens: out.Usage.In, OutputTokens: out.Usage.Out, CacheReadTokens: out.Usage.CacheRead, CacheWriteTokens: out.Usage.CacheWrite,
 		CostUSD: g.pricing.Cost(out.Usage.In, out.Usage.Out, out.Usage.CacheRead, out.Usage.CacheWrite),
 	}, nil

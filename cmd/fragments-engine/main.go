@@ -1994,7 +1994,7 @@ func runTranscriptEnrich(cfg config.Config, store *transcript.Store, f enrichFla
 	opts := enrich.Options{
 		DryRun: f.dryRun, Limit: f.limit, NativeSessionID: f.session, Force: f.force,
 		Provider: pick(f.provider, ec.Provider, enrich.AnthropicDirectProvider), Model: pick(f.model, ec.Model, "claude-haiku-5-5"),
-		PromptVersion: ec.PromptVersion, MaxCostUSD: maxRun, TotalCapUSD: total, MaxOutputTokens: ec.MaxOutputTokens,
+		PromptVersion: ec.PromptVersion, MaxCostUSD: maxRun, TotalCapUSD: total, MaxOutputTokens: ec.MaxOutputTokens, MapReduceMaxOutputTokens: ec.MapReduceMaxOutputTokens,
 		MinIdle: time.Duration(idle) * time.Minute, AllowedProviders: ec.AllowedProviders, Concurrency: f.concurrency,
 		ExcludeSessions: ec.ExcludeSessions, ExcludeCWDPrefixes: ec.ExcludeCWDPrefixes,
 		StopAfterFailures: f.stopAfter, MaxFailureRate: 0.2, MinAttemptsForRate: 5,

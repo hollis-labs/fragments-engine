@@ -57,6 +57,9 @@ type EnrichmentConfig struct {
 	ExcludeCWDPrefixes []string `json:"exclude_cwd_prefixes" yaml:"exclude_cwd_prefixes"`
 	MinIdleMinutes     int      `json:"min_idle_minutes" yaml:"min_idle_minutes"`
 	MaxOutputTokens    int      `json:"max_output_tokens" yaml:"max_output_tokens"`
+	// MapReduceMaxOutputTokens caps the part and combine calls of a long session
+	// (default 4096); MaxOutputTokens still caps single-call sessions.
+	MapReduceMaxOutputTokens int `json:"map_reduce_max_output_tokens" yaml:"map_reduce_max_output_tokens"`
 }
 
 // EnrichmentStage is a named, reusable selection for a staged run. Allocation
