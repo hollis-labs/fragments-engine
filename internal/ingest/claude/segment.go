@@ -239,12 +239,16 @@ func readLine(r *bufio.Reader, lineNo int, offset int64) ([]byte, error) {
 func parseSegment(ctx context.Context, path string, start int64, startLine int, tail []byte, excerpt int) (segmentResult, error) {
 	file, err := os.Open(path)
 	if err != nil {
-		return segmentResult{}, fmt.Errorf("open session file: %w", err)
+		class := "unreadable_file"
+		if os.IsNotExist(err) {
+			class = "vanished"
+		}
+		return segmentResult{}, &domain.CollectionError{Class: class}
 	}
 	defer file.Close()
 	if start > 0 {
 		if _, err := file.Seek(start, io.SeekStart); err != nil {
-			return segmentResult{}, fmt.Errorf("seek session file: %w", err)
+			return segmentResult{}, &domain.CollectionError{Class: "read_error", Offset: start}
 		}
 	}
 	res := segmentResult{offset: start, lineNo: startLine, tail: append([]byte(nil), tail...)}
@@ -265,7 +269,7 @@ func parseSegment(ctx context.Context, path string, start int64, startLine int, 
 			if _, ok := readErr.(*domain.CollectionError); ok {
 				return segmentResult{}, readErr
 			}
-			return segmentResult{}, fmt.Errorf("read session file: %w", readErr)
+			return segmentResult{}, &domain.CollectionError{Class: "read_error", Line: res.lineNo + 1, Offset: res.offset}
 		}
 		if len(line) == 0 {
 			break

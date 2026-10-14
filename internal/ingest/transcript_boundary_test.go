@@ -119,3 +119,72 @@ func privateTranscriptTestRoot(t *testing.T) string {
 	}
 	return filepath.Join(parent, "private")
 }
+
+type multiSource struct {
+	kind       string
+	candidates []domain.PipelineFragment
+}
+
+func (s *multiSource) Kind() string { return s.kind }
+func (s *multiSource) Collect(context.Context, config.IngestConfig) ([]domain.PipelineFragment, error) {
+	return s.candidates, nil
+}
+
+// One record the private store refuses must cost only itself: the run goes on,
+// the rest is stored, and the refusal is counted.
+func TestOneRejectedTranscriptRecordDoesNotAbortTheRun(t *testing.T) {
+	huge := make([]byte, 17<<20) // over the 16 MiB record cap once marshalled
+	for i := range huge {
+		huge[i] = 'a'
+	}
+	source := &multiSource{kind: "codex_sessions", candidates: []domain.PipelineFragment{
+		{Source: "codex", SourceType: "transcript", SourceID: "good-1", Content: "first"},
+		{Source: "codex", SourceType: "transcript", SourceID: "too-big", Content: string(huge)},
+		{Source: "codex", SourceType: "transcript", SourceID: "good-2", Content: "second"},
+	}}
+	p := NewPipeline(nil, nil, nil, source)
+	private, err := transcript.Open(privateTranscriptTestRoot(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer private.Close()
+	p.SetTranscriptStore(private)
+	cfg := config.IngestConfig{Name: "source", Kind: "codex_sessions"}
+	run, err := p.RunOnce(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("a single rejected record aborted the run: %v", err)
+	}
+	if run.Inserted != 2 || run.Skipped != 1 || run.SkipReasons["record_rejected"] != 1 {
+		t.Fatalf("run %+v", run)
+	}
+	// And a second run changes nothing: the two good records are unchanged.
+	run, err = p.RunOnce(context.Background(), cfg)
+	if err != nil || run.Inserted != 0 || run.Skipped != 3 {
+		t.Fatalf("second run %+v %v", run, err)
+	}
+}
+
+// Imported-with-a-note classes are visible but are not counted as skipped.
+func TestIncompleteTailIsNotCountedAsSkipped(t *testing.T) {
+	skipper := &noteSource{}
+	p := NewPipeline(nil, nil, nil, skipper)
+	private, err := transcript.Open(privateTranscriptTestRoot(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer private.Close()
+	p.SetTranscriptStore(private)
+	run, err := p.RunOnce(context.Background(), config.IngestConfig{Name: "source", Kind: "codex_sessions"})
+	if err != nil || run.Inserted != 1 || run.Skipped != 1 || run.SkipReasons["incomplete_tail"] != 1 || run.SkipReasons["invalid_record"] != 1 {
+		t.Fatalf("%+v %v", run, err)
+	}
+}
+
+type noteSource struct{}
+
+func (noteSource) Kind() string { return "codex_sessions" }
+func (noteSource) Collect(ctx context.Context, _ config.IngestConfig) ([]domain.PipelineFragment, error) {
+	domain.NoteSkipAt(ctx, "incomplete_tail", "a.jsonl", 9, 123) // imported: not a skip
+	domain.NoteSkipAt(ctx, "invalid_record", "b.jsonl", 4, 77)   // really skipped
+	return []domain.PipelineFragment{{Source: "codex", SourceType: "transcript", SourceID: "x", Content: "text"}}, nil
+}

@@ -73,16 +73,28 @@ func TestCollectRolloutsAndDistinctPhysicalFiles(t *testing.T) {
 	}
 }
 
-func TestEventOnlyFallbackAndSafeMalformedRefusal(t *testing.T) {
+func collectWithSkips(t *testing.T, root string) ([]domain.PipelineFragment, *domain.SkipCollector, error) {
+	t.Helper()
+	skips := &domain.SkipCollector{}
+	got, err := (Source{}).Collect(domain.WithSkipCollector(context.Background(), skips), config.IngestConfig{Source: config.IngestSource{Root: root}})
+	return got, skips, err
+}
+
+func TestEventOnlyFallbackAndSafeMalformedHandling(t *testing.T) {
+	const meta = `{"type":"session_meta","payload":{"id":"synthetic-thread"}}`
 	for _, tc := range []struct {
-		name, raw string
-		wantErr   bool
+		name, raw, skipClass string
+		wantFragment         bool
 	}{
-		{"event-only", `{"type":"session_meta","payload":{"id":"synthetic-thread"}}
-{"type":"event_msg","payload":{"type":"user_message","message":"synthetic question"}}
-{"type":"event_msg","payload":{"type":"agent_message","message":"synthetic answer"}}`, false},
-		{"malformed", `password=synthetic-no-diagnostic`, true},
-		{"missing-meta", `{"type":"event_msg","payload":{"type":"user_message","message":"synthetic-no-diagnostic"}}`, true},
+		{"event-only", meta + "\n" + `{"type":"event_msg","payload":{"type":"user_message","message":"synthetic question"}}` + "\n" +
+			`{"type":"event_msg","payload":{"type":"agent_message","message":"synthetic answer"}}`, "", true},
+		// No trailing newline and not valid JSON: a half-written final line.
+		{"half-written-only-line", `password=synthetic-no-diagnostic`, "incomplete_tail", false},
+		// The same text WITH a newline is a complete, invalid record.
+		{"invalid-complete-line", "password=synthetic-no-diagnostic\n", "invalid_record", false},
+		{"missing-meta", `{"type":"event_msg","payload":{"type":"user_message","message":"synthetic-no-diagnostic"}}` + "\n", "missing_session_meta", false},
+		// Valid JSON that is not a record is complete but wrong, not a tail.
+		{"complete-json-wrong-shape", meta + "\n" + `{"surprise":true}`, "invalid_record", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			root := t.TempDir()
@@ -90,13 +102,24 @@ func TestEventOnlyFallbackAndSafeMalformedRefusal(t *testing.T) {
 			if err := os.WriteFile(path, []byte(tc.raw), 0600); err != nil {
 				t.Fatal(err)
 			}
-			got, err := (Source{}).Collect(context.Background(), config.IngestConfig{Source: config.IngestSource{Root: root}})
-			if tc.wantErr {
-				if err == nil || strings.Contains(err.Error(), "synthetic-no-diagnostic") || len(got) != 0 {
-					t.Fatal("malformed archive not safely refused")
+			got, skips, err := collectWithSkips(t, root)
+			if err != nil {
+				t.Fatalf("a bad file must never fail the run: %v", err)
+			}
+			if tc.wantFragment != (len(got) == 1) {
+				t.Fatalf("fragments = %d", len(got))
+			}
+			if tc.wantFragment && (!strings.Contains(got[0].Content, "synthetic question") || !strings.Contains(got[0].Content, "synthetic answer")) {
+				t.Fatal("fallback lost")
+			}
+			by := skips.ByClass()
+			if tc.skipClass == "" && len(skips.Skips) != 0 || tc.skipClass != "" && (by[tc.skipClass] != 1 || len(skips.Skips) != 1) {
+				t.Fatalf("skips = %v", by)
+			}
+			for _, sk := range skips.Skips {
+				if strings.Contains(sk.Error(), "synthetic") || strings.Contains(sk.Error(), root) || strings.Contains(sk.Error(), "rollout") {
+					t.Fatal("skip detail leaks content or path")
 				}
-			} else if err != nil || len(got) != 1 || !strings.Contains(got[0].Content, "synthetic question") || !strings.Contains(got[0].Content, "synthetic answer") {
-				t.Fatalf("fallback lost: %v", err)
 			}
 			after, err := os.ReadFile(path)
 			if err != nil || string(after) != tc.raw {
@@ -115,7 +138,7 @@ func TestParserEnforcesReadBudget(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := parseSession(context.Background(), path, info.ModTime(), int64(len(syntheticRollout)-1)); err == nil {
+	if _, _, err := parseSession(context.Background(), path, info.ModTime(), int64(len(syntheticRollout)-1)); err == nil {
 		t.Fatal("read beyond budget accepted")
 	}
 }
@@ -145,7 +168,9 @@ func TestForkedRolloutKeepsOwnIdentityAndRecordsParent(t *testing.T) {
 
 // Failures expose a class, a hash of the relative path, a line and a byte
 // offset, and nothing from the record.
-func TestCollectionFailuresCarrySanitizedDiagnostics(t *testing.T) {
+// Failures are counted per file with a class, the path hash, a line and a byte
+// offset, and nothing from the record.
+func TestPerFileFailuresCarrySanitizedPositions(t *testing.T) {
 	long := strings.Repeat("x", 11*1024*1024)
 	for _, tc := range []struct {
 		name, raw, class string
@@ -165,23 +190,21 @@ func TestCollectionFailuresCarrySanitizedDiagnostics(t *testing.T) {
 			if err := os.WriteFile(filepath.Join(root, "sub", "rollout.jsonl"), []byte(tc.raw), 0600); err != nil {
 				t.Fatal(err)
 			}
-			_, err := (Source{}).Collect(context.Background(), config.IngestConfig{Source: config.IngestSource{Root: root}})
-			var diag *domain.CollectionError
-			if !errors.As(err, &diag) {
-				t.Fatalf("no diagnostic: %v", err)
+			_, skips, err := collectWithSkips(t, root)
+			if err != nil || len(skips.Skips) != 1 {
+				t.Fatalf("%v %v", err, skips.Skips)
 			}
-			if diag.Class != tc.class || diag.Line != tc.line || diag.Offset != tc.offset || diag.PathHash != domain.HashPath("sub/rollout.jsonl") {
-				t.Fatalf("diagnostic %+v", diag)
+			sk := skips.Skips[0]
+			if sk.Class != tc.class || sk.Line != tc.line || sk.Offset != tc.offset || sk.PathHash != domain.HashPath("sub/rollout.jsonl") {
+				t.Fatalf("skip %+v", sk)
 			}
-			if strings.Contains(err.Error(), "synthetic") || strings.Contains(err.Error(), root) || strings.Contains(err.Error(), "rollout") {
-				t.Fatal("diagnostic leaks content or path")
+			if strings.Contains(sk.Error(), "synthetic") || strings.Contains(sk.Error(), root) || strings.Contains(sk.Error(), "rollout") {
+				t.Fatal("skip detail leaks content or path")
 			}
 		})
 	}
 }
 
-// Over-cap inputs are skipped and counted, never silently dropped and never a
-// reason to abort the rest of the archive.
 func TestOverCapFilesAreSkippedAndCounted(t *testing.T) {
 	old := maxRetainedText
 	maxRetainedText = 64
@@ -208,5 +231,151 @@ func TestOverCapFilesAreSkippedAndCounted(t *testing.T) {
 	}
 	if n := skips.ByClass()["size_limit"]; n != 2 {
 		t.Fatalf("skips = %v", skips.ByClass())
+	}
+}
+
+const goodMeta = `{"timestamp":"2026-10-09T01:00:00Z","type":"session_meta","payload":{"id":"thread-ID"}}`
+const goodMsg = `{"timestamp":"2026-10-09T01:00:01Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"MSG"}]}}`
+
+func rollout(id string, msgs ...string) string {
+	out := strings.Replace(goodMeta, "thread-ID", id, 1) + "\n"
+	for _, m := range msgs {
+		out += strings.Replace(goodMsg, "MSG", m, 1) + "\n"
+	}
+	return out
+}
+
+func write(t *testing.T, root, rel, raw string) string {
+	t.Helper()
+	path := filepath.Join(root, filepath.FromSlash(rel))
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(raw), 0600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// A session still being written when it was copied ends in a half record. The
+// complete records are imported, the file is counted as incomplete_tail, and a
+// later copy that completes it is picked up because its bytes change.
+func TestHalfWrittenTailIsImportedThenCompletedLater(t *testing.T) {
+	root := t.TempDir()
+	complete := rollout("t1", "first message", "second message")
+	half := `{"timestamp":"2026-10-09T01:00:02Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"third mess`
+	path := write(t, root, "sessions/rollout-a.jsonl", complete+half)
+	got, skips, err := collectWithSkips(t, root)
+	if err != nil || len(got) != 1 {
+		t.Fatalf("%v %d", err, len(got))
+	}
+	if !strings.Contains(got[0].Content, "first message") || !strings.Contains(got[0].Content, "second message") || strings.Contains(got[0].Content, "third") {
+		t.Fatalf("content %q", got[0].Content)
+	}
+	if len(skips.Skips) != 1 || skips.Skips[0].Class != "incomplete_tail" || skips.Skips[0].Line != 4 || skips.Skips[0].Offset != int64(len(complete)) {
+		t.Fatalf("tail skip %+v", skips.Skips)
+	}
+	first := got[0].Content
+	// Run again on the unchanged file: same result, same note (it is still half-written).
+	got, skips, _ = collectWithSkips(t, root)
+	if len(got) != 1 || got[0].Content != first || skips.ByClass()["incomplete_tail"] != 1 {
+		t.Fatal("an unchanged half-written file must behave the same on the next run")
+	}
+	// The writer finishes the record and appends another.
+	done := complete + `{"timestamp":"2026-10-09T01:00:02Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"third message"}]}}` + "\n" + strings.Replace(goodMsg, "MSG", "fourth message", 1) + "\n"
+	if err := os.WriteFile(path, []byte(done), 0600); err != nil {
+		t.Fatal(err)
+	}
+	got, skips, err = collectWithSkips(t, root)
+	if err != nil || len(got) != 1 || len(skips.Skips) != 0 {
+		t.Fatalf("completed file: %v %d %v", err, len(got), skips.Skips)
+	}
+	if !strings.Contains(got[0].Content, "third message") || !strings.Contains(got[0].Content, "fourth message") || got[0].Content == first {
+		t.Fatal("the completed record was not picked up")
+	}
+}
+
+// A final line without a newline is still a record if it is whole.
+func TestUnterminatedButCompleteFinalRecordIsImported(t *testing.T) {
+	root := t.TempDir()
+	write(t, root, "a.jsonl", strings.TrimSuffix(rollout("t1", "alpha", "omega"), "\n"))
+	got, skips, err := collectWithSkips(t, root)
+	if err != nil || len(got) != 1 || len(skips.Skips) != 0 || !strings.Contains(got[0].Content, "omega") {
+		t.Fatalf("%v %d %v", err, len(got), skips.Skips)
+	}
+}
+
+// A brand-new file whose first line is still being written has nothing to
+// import yet; it is noted, not an error.
+func TestNewFileWithOnlyAHalfWrittenFirstLine(t *testing.T) {
+	root := t.TempDir()
+	write(t, root, "a.jsonl", `{"timestamp":"2026-10-09T01:00:00Z","type":"session_me`)
+	write(t, root, "b.jsonl", rollout("t2", "still imported"))
+	got, skips, err := collectWithSkips(t, root)
+	if err != nil || len(got) != 1 || skips.ByClass()["incomplete_tail"] != 1 {
+		t.Fatalf("%v %d %v", err, len(got), skips.ByClass())
+	}
+}
+
+// One bad file never blocks the others: it is counted with its class, hash, line
+// and offset, and every other file is still collected.
+func TestBadFileDoesNotBlockOtherFiles(t *testing.T) {
+	root := t.TempDir()
+	write(t, root, "a-good.jsonl", rollout("good1", "one"))
+	bad := rollout("bad", "keep") + "this is not json\n" + strings.Replace(goodMsg, "MSG", "after", 1) + "\n"
+	write(t, root, "b-bad.jsonl", bad)
+	write(t, root, "c-good.jsonl", rollout("good2", "two"))
+	got, skips, err := collectWithSkips(t, root)
+	if err != nil || len(got) != 2 || got[0].SourceID != "good1" || got[1].SourceID != "good2" {
+		t.Fatalf("%v %d", err, len(got))
+	}
+	if len(skips.Skips) != 1 {
+		t.Fatalf("skips %v", skips.Skips)
+	}
+	sk := skips.Skips[0]
+	wantOffset := int64(len(rollout("bad", "keep")))
+	if sk.Class != "invalid_record" || sk.Line != 3 || sk.Offset != wantOffset || sk.PathHash != domain.HashPath("b-bad.jsonl") {
+		t.Fatalf("skip %+v want offset %d", sk, wantOffset)
+	}
+}
+
+func TestCompleteFileIsUnchangedAcrossRuns(t *testing.T) {
+	root := t.TempDir()
+	write(t, root, "a.jsonl", rollout("t1", "one", "two"))
+	first, s1, err := collectWithSkips(t, root)
+	if err != nil || len(first) != 1 || len(s1.Skips) != 0 {
+		t.Fatal(err)
+	}
+	second, s2, _ := collectWithSkips(t, root)
+	if len(second) != 1 || second[0].Content != first[0].Content || len(s2.Skips) != 0 {
+		t.Fatal("a complete file must collect identically every run")
+	}
+}
+
+// Files and directories the importer cannot read, or that vanish, are counted
+// and skipped; they do not abort the source.
+func TestUnreadableFileAndDirectoryAreSkippedNotFatal(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("permission bits do not bind root")
+	}
+	root := t.TempDir()
+	write(t, root, "a-good.jsonl", rollout("good", "ok"))
+	locked := write(t, root, "b-locked.jsonl", rollout("locked", "x"))
+	if err := os.Chmod(locked, 0); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chmod(locked, 0600)
+	write(t, root, "dir/c-hidden.jsonl", rollout("hidden", "y"))
+	if err := os.Chmod(filepath.Join(root, "dir"), 0); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chmod(filepath.Join(root, "dir"), 0700)
+	got, skips, err := collectWithSkips(t, root)
+	if err != nil || len(got) != 1 || got[0].SourceID != "good" {
+		t.Fatalf("%v %d", err, len(got))
+	}
+	by := skips.ByClass()
+	if by["unreadable_file"] != 1 || by["unreadable_dir"] != 1 {
+		t.Fatalf("skips %v", by)
 	}
 }

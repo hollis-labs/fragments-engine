@@ -17,6 +17,11 @@ import (
 	_ "modernc.org/sqlite"
 )
 
+// ErrRecordRejected marks a failure that belongs to one record (oversized,
+// attachments, missing identity), as opposed to a store failure (ownership, I/O).
+// A caller may skip and count the record; it must still abort on anything else.
+var ErrRecordRejected = errors.New("transcript: record rejected")
+
 // Store is deliberately separate from the shared canonical database. Its only
 // write entry point is Accept. No raw material, raw attachment, embedding,
 // delivery callback, or external destination is retained here.
@@ -137,11 +142,11 @@ func (s *Store) Accept(ctx context.Context, registration string, in domain.Pipel
 		return s.acceptDetail(ctx, registration, in)
 	}
 	if !valid(in) || strings.TrimSpace(registration) == "" {
-		return "", errors.New("transcript: source identity and text are required")
+		return "", fmt.Errorf("%w: source identity and text are required", ErrRecordRejected)
 	}
 	clean, material, err := sanitize(in)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("%w: %w", ErrRecordRejected, err)
 	}
 	if err := s.checkOwnership(); err != nil {
 		return "", err
@@ -273,7 +278,7 @@ func (s *Store) acceptDetail(ctx context.Context, registration string, in domain
 		return "", errors.New("transcript: source identity is required")
 	}
 	if len(in.Attachments) != 0 {
-		return "", ErrAttachments
+		return "", fmt.Errorf("%w: %w", ErrRecordRejected, ErrAttachments)
 	}
 	if err := s.checkOwnership(); err != nil {
 		return "", err
@@ -322,7 +327,7 @@ func (s *Store) acceptDetail(ctx context.Context, registration string, in domain
 		}
 		clean, material, err := sanitize(in)
 		if err != nil {
-			return "", err
+			return "", fmt.Errorf("%w: %w", ErrRecordRejected, err)
 		}
 		contentDigest := digest(material)
 		var previous string
