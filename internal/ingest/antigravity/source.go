@@ -59,7 +59,16 @@ func (Source) Collect(ctx context.Context, cfg config.IngestConfig) ([]domain.Pi
 			if err != nil {
 				return nil, errors.New("cannot inspect Antigravity input")
 			}
-			if !before.Mode().IsRegular() || before.Size() > maxBytes {
+			if !before.Mode().IsRegular() {
+				continue
+			}
+			relPath, relErr := filepath.Rel(root, path)
+			if relErr != nil {
+				return nil, errors.New("invalid Antigravity input locator")
+			}
+			relPath = filepath.ToSlash(relPath)
+			if before.Size() > maxBytes {
+				domain.NoteSkip(ctx, "size_limit", relPath)
 				continue
 			}
 			var content string
@@ -67,6 +76,12 @@ func (Source) Collect(ctx context.Context, cfg config.IngestConfig) ([]domain.Pi
 				content, err = conversation(ctx, path, maxBytes)
 			} else {
 				content, err = brain(ctx, path, maxBytes)
+			}
+			if errors.Is(err, ErrSnapshotRequired) {
+				// Fail closed for this database only. It is retried on the next
+				// fire, once the producer has synced a checkpointed snapshot.
+				domain.NoteSkip(ctx, "pending_wal", relPath)
+				continue
 			}
 			if err != nil {
 				return nil, err
@@ -78,10 +93,7 @@ func (Source) Collect(ctx context.Context, cfg config.IngestConfig) ([]domain.Pi
 			if strings.TrimSpace(content) == "" {
 				continue
 			}
-			rel, err := filepath.Rel(root, path)
-			if err != nil {
-				return nil, errors.New("invalid Antigravity input locator")
-			}
+			rel := relPath
 			id := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
 			created := before.ModTime().UTC()
 			out = append(out, domain.PipelineFragment{

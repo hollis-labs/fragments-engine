@@ -10,6 +10,9 @@ type IngestRun struct {
 	Inserted   int
 	Updated    int
 	Skipped    int
+	// SkipReasons breaks out inputs a transcript source skipped (counted in
+	// Skipped) by sanitized class. It is not persisted.
+	SkipReasons map[string]int
 }
 
 // IngestRunRecord is a persisted ingest run row, including async lifecycle

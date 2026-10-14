@@ -82,14 +82,30 @@ pre-persistence redaction path. Configuring a layout does not activate a schedul
 
 The disabled `codex_sessions` example reads JSONL files recursively under its
 configured archive root, including `sessions/YYYY/MM/DD` and archived sessions.
-Symlinks, `.rsync-partial` transfer directories and files above
-`max_file_size_mb` (default 50 MiB) are ignored.
+Symlinks and `.rsync-partial` transfer directories are ignored.
 The parser requires `session_meta` with a thread ID and reads user/assistant
 `response_item` text blocks. Event-only rollouts fall back to `user_message` and
 `agent_message` events; duplicated legacy events are ignored when response
-messages exist. Tool traces, reasoning and media are not imported. Malformed
-records or conflicting/missing identity metadata fail without exposing payloads
-in diagnostics. Physical rollout files have distinct segment identities.
+messages exist. Tool traces, reasoning and media are not imported. Physical
+rollout files have distinct segment identities. A forked rollout starts with its
+own `session_meta` and then replays its parent's: the first record is the file's
+identity and a later one for another thread is recorded as `parent_thread_id`.
+
+Limits bound what is kept, not what is read. Rollouts are mostly tool output and
+images, so a 300 MiB file can hold a few hundred KiB of messages. A line over
+16 MiB of retained message text (the private store's record cap) skips that
+file, and `max_file_size_mb` is an optional hard ceiling on a single file
+(default 1 GiB). A single line over 10 MiB cannot be read and fails the run as
+`unreadable_line`. Chunking is not done.
+
+Malformed records or missing identity metadata fail the run without exposing
+payloads. The error carries only a fixed class (`invalid_record`,
+`invalid_session_meta`, `invalid_response_item`, `invalid_event`,
+`unreadable_line`, `missing_session_meta`), a hash of the archive-relative path,
+a line number and a byte offset, e.g.
+`transcript: collection failed (class=invalid_record file=7e874bc89692 line=2 offset=45)`.
+Inputs skipped per file (`size_limit`, `pending_wal`) are counted in the run's
+`skipped` total, broken out by class in the CLI summary, and logged by class.
 
 The recorded format is based on [Codex's public rollout definitions](https://github.com/openai/codex/blob/5fe4fc8f7cd16688b5c661d8cdb76e2a340b046d/codex-rs/history/src/rollout_payload.rs)
 and [message types](https://github.com/openai/codex/blob/5fe4fc8f7cd16688b5c661d8cdb76e2a340b046d/codex-rs/protocol/src/models.rs).
@@ -111,11 +127,15 @@ metadata are omitted; unsupported formats/malformed text fail without payload
 output. There is no heuristic scan for message-like protobuf strings.
 
 SQLite is opened read-only and immutable with temporary storage in memory.
-Nonempty WAL/journal files or unsafe sidecars refuse the collection: pending
-changes must be supplied as a checkpoint-consistent snapshot, never silently
-ignored. Absence of a sidecar alone does not prove a complete sync: the source
-owner must supply a consistent checkpointed snapshot. The importer does not
-checkpoint a source or make raw disk copies.
+A database with a nonempty WAL/journal sidecar is skipped (`pending_wal`), not
+read: pending changes are never silently ignored, and one hot database does not
+block the rest of the archive. It is counted and retried on the next fire. Other
+unsafe sidecars still refuse the collection. The importer does not checkpoint a
+source or make raw disk copies, so the producer owns consistency: it must
+checkpoint before syncing (`sqlite3 SRC ".backup DEST"`, or
+`PRAGMA wal_checkpoint(TRUNCATE)` on a quiescent database) and must not sync a
+nonempty `-wal` or `-journal`. Absence of a sidecar alone does not prove a
+complete sync.
 Do not ingest a database that is being modified; detected replacement/size/time
 changes refuse collection. Source timestamps are file observations, not invented
 conversation creation times.
@@ -124,8 +144,8 @@ Brain `.txt`, `.md`, `.log`, `.json` and `.jsonl` files are imported as UTF-8 te
 artifacts with separate physical-file segment identities, including compact/full
 logs as distinct artifacts rather than inferred conversation turns. Binary files
 and media are not copied. Invalid UTF-8/control bytes fail; symlinks, incomplete
-`.rsync-partial` directories and files over `max_file_size_mb` (default 50 MiB)
-are ignored. The entire collection is prepared in memory before acceptance.
+`.rsync-partial` directories are ignored; files over `max_file_size_mb`
+(default 50 MiB) are skipped and counted (`size_limit`). The entire collection is prepared in memory before acceptance.
 All accepted text and locators go exclusively through the private redaction store;
 unchanged material is skipped. No shared recall/routing/preview or schedule is
 activated by registering the source. Pattern redaction still cannot recognize
