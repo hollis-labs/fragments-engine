@@ -555,3 +555,154 @@ func TestMapChunkFailureStopsBeforeReduceAndRetriesLater(t *testing.T) {
 		t.Fatal("a failed session must not look done")
 	}
 }
+
+// fakeEmbedder maps text to a tiny deterministic vector: one axis per keyword.
+type fakeEmbedder struct {
+	calls int
+	err   error
+}
+
+func (f *fakeEmbedder) Embed(_ context.Context, model string, texts []string) ([][]float32, error) {
+	f.calls++
+	if f.err != nil {
+		return nil, f.err
+	}
+	out := make([][]float32, len(texts))
+	for i, t := range texts {
+		t = strings.ToLower(t)
+		v := []float32{0.01, 0.01, 0.01}
+		for k, w := range []string{"roadmap", "database", "network"} {
+			if strings.Contains(t, w) {
+				v[k] = 1
+			}
+		}
+		out[i] = v
+	}
+	return out, nil
+}
+
+func replyWith(title, summary, topic string) func(int, Request) (Response, error) {
+	return func(int, Request) (Response, error) {
+		doc := fmt.Sprintf(`{"schema_version":1,"title":%q,"summary":%q,"session_type":"coding","outcome":"completed","topics":[%q],"decisions":[],"follow_ups":[],"entities":{"projects":[],"repos":[],"tools":[],"technologies":[]},"language":"en"}`, title, summary, topic)
+		return Response{Text: doc, InputTokens: 10, OutputTokens: 10}, nil
+	}
+}
+
+func TestSummariesAreSearchableByTextAndMeaningAndStayPrivate(t *testing.T) {
+	st := openStore(t)
+	addSession(t, st, "A", old, "q", "a")
+	addSession(t, st, "B", old, "q2", "a2")
+	gw := &fakeGW{reply: func(i int, r Request) (Response, error) {
+		if strings.Contains(r.User, "q2") { // session B
+			return replyWith("Tune database indexes", "Added database indexes to speed up queries.", "database")(i, r)
+		}
+		return replyWith("Fix the roadmap parser", "Reworked the roadmap parser and its tests.", "roadmap")(i, r)
+	}}
+	if _, err := (&Runner{Store: st, GW: gw, Opts: opts()}).Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	hits, err := st.SearchEnriched(ctx, `roadmap parser`, 10)
+	if err != nil || len(hits) != 1 || hits[0].Title != "Fix the roadmap parser" || hits[0].NativeSessionID != "A" {
+		t.Fatalf("text search %+v %v", hits, err)
+	}
+	// Operators are plain words: if OR were live this would match both sessions.
+	if hits, _ = st.SearchEnriched(ctx, `roadmap OR database`, 10); len(hits) != 0 {
+		t.Fatalf("FTS syntax in a query must be inert: %+v", hits)
+	}
+	if hits, err = st.SearchEnriched(ctx, `NEAR( ) AND ' " --`, 10); err != nil || len(hits) != 0 {
+		t.Fatalf("hostile query: %+v %v", hits, err)
+	}
+	emb := &fakeEmbedder{}
+	s, err := EmbedSummaries(ctx, st, emb, "nomic-embed-text", 0)
+	if err != nil || s.Embedded != 2 || emb.calls != 1 {
+		t.Fatalf("embed %+v %v", s, err)
+	}
+	// Idempotent: nothing new, no call.
+	if s, _ = EmbedSummaries(ctx, st, emb, "nomic-embed-text", 0); s.Embedded != 0 || s.Skipped != 2 || emb.calls != 1 {
+		t.Fatalf("second embed pass %+v calls=%d", s, emb.calls)
+	}
+	q, _ := emb.Embed(ctx, "nomic-embed-text", []string{"how did we speed up the database"})
+	near, err := st.NearestSummaries(ctx, "nomic-embed-text", q[0], 2)
+	if err != nil || len(near) != 2 || near[0].NativeSessionID != "B" || near[0].Rank <= near[1].Rank {
+		t.Fatalf("semantic search %+v %v", near, err)
+	}
+	if other, _ := st.NearestSummaries(ctx, "another-model", q[0], 2); len(other) != 0 {
+		t.Fatal("vectors from different models must not be compared")
+	}
+	// A changed summary makes the vector stale and it is recomputed.
+	gw2 := &fakeGW{reply: replyWith("Fix the roadmap parser", "Rewrote everything about the network layer.", "network")}
+	o := opts()
+	o.Force = true
+	o.NativeSessionID = "A"
+	if _, err := (&Runner{Store: st, GW: gw2, Opts: o}).Run(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if s, _ = EmbedSummaries(ctx, st, emb, "nomic-embed-text", 0); s.Embedded != 1 {
+		t.Fatalf("stale vector not refreshed: %+v", s)
+	}
+	// Embeddings only ever go to a local Ollama.
+	for _, bad := range []string{"https://api.example.invalid", "http://192.0.2.7:11434"} {
+		if _, err := NewOllamaEmbedder(bad); err == nil {
+			t.Fatalf("%q must be refused", bad)
+		}
+	}
+}
+
+func TestOllamaEmbedderRequestAndResponse(t *testing.T) {
+	var got map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&got)
+		fmt.Fprint(w, `{"embeddings":[[0.5,0.25],[1,0]]}`)
+	}))
+	defer srv.Close()
+	e, err := NewOllamaEmbedder(srv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	vecs, err := e.Embed(context.Background(), "nomic-embed-text", []string{"a", "b"})
+	if err != nil || len(vecs) != 2 || vecs[0][1] != 0.25 || got["model"] != "nomic-embed-text" {
+		t.Fatalf("%v %v %v", vecs, err, got)
+	}
+}
+
+func TestPickSampleIsReproducibleAndDistinct(t *testing.T) {
+	var cands []Candidate
+	for i := 0; i < 80; i++ {
+		cands = append(cands, Candidate{NativeSessionID: fmt.Sprintf("c%d", i), Tool: "claude", EstTokens: 200 + i*350, Calls: 1, ToolCalls: i * 8, ToolErrors: i * 2, Subagents: i % 7})
+	}
+	cands = append(cands, Candidate{NativeSessionID: "big1", Tool: "claude", EstTokens: 90000, Calls: 4, MapReduce: true},
+		Candidate{NativeSessionID: "big2", Tool: "claude", EstTokens: 120000, Calls: 5, MapReduce: true},
+		Candidate{NativeSessionID: "x1", Tool: "codex", EstTokens: 500, Calls: 1},
+		Candidate{NativeSessionID: "x2", Tool: "codex", EstTokens: 3000, Calls: 1},
+		Candidate{NativeSessionID: "x3", Tool: "codex", EstTokens: 20000, Calls: 1})
+	a, b := PickSample(cands), PickSample(append([]Candidate(nil), cands...))
+	if len(a) != 20 {
+		t.Fatalf("sample size %d: %v", len(a), bucketCounts(a))
+	}
+	seen := map[string]bool{}
+	for i, it := range a {
+		if seen[it.NativeSessionID] {
+			t.Fatalf("duplicate %s", it.NativeSessionID)
+		}
+		seen[it.NativeSessionID] = true
+		if it.NativeSessionID != b[i].NativeSessionID || it.Bucket != b[i].Bucket {
+			t.Fatal("sample is not reproducible")
+		}
+	}
+	buckets := map[string]int{}
+	for _, it := range a {
+		buckets[it.Bucket]++
+	}
+	if buckets["map-reduce"] != 2 || buckets["codex-short"] != 1 || buckets["codex-medium"] != 1 || buckets["codex-long"] != 1 {
+		t.Fatalf("buckets %v", buckets)
+	}
+}
+
+func bucketCounts(items []SampleItem) map[string]int {
+	m := map[string]int{}
+	for _, it := range items {
+		m[it.Bucket]++
+	}
+	return m
+}

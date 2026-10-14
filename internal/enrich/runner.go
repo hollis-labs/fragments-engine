@@ -23,14 +23,15 @@ const (
 
 // Options configure a run. Zero values are filled by Normalize.
 type Options struct {
-	DryRun          bool
-	Limit           int
-	NativeSessionID string
-	Provider, Model string
-	Force           bool
-	PromptVersion   string
-	MaxCostUSD      float64 // per run
-	TotalCapUSD     float64 // across all runs, from the spend ledger; a hard stop
+	DryRun           bool
+	Limit            int
+	NativeSessionID  string   // one session, kept for callers that pass a single id
+	NativeSessionIDs []string // restrict the run to these sessions
+	Provider, Model  string
+	Force            bool
+	PromptVersion    string
+	MaxCostUSD       float64 // per run
+	TotalCapUSD      float64 // across all runs, from the spend ledger; a hard stop
 	// ExcludeSessions and ExcludeCWDPrefixes are the never-send switch: matching
 	// sessions are never given to a model.
 	ExcludeSessions    []string
@@ -131,15 +132,10 @@ func (r *Runner) Run(ctx context.Context) (Summary, error) {
 			return sum, errors.New("enrichment: no gateway configured")
 		}
 	}
-	refs, err := r.Store.MainSessions(ctx, o.MinIdle, o.Now(), o.NativeSessionID)
+	refs, err := r.sessions(ctx, o)
 	if err != nil {
 		return sum, err
 	}
-	legacy, err := r.Store.LegacySessions(ctx, o.NativeSessionID)
-	if err != nil {
-		return sum, err
-	}
-	refs = append(refs, legacy...)
 	prior, err := r.Store.Spend(ctx, "")
 	if err != nil {
 		return sum, err
@@ -476,4 +472,34 @@ func excluded(o Options, in transcript.EnrichmentInput) bool {
 		}
 	}
 	return false
+}
+
+// sessions lists the main sessions and Codex text records in scope for a run.
+func (r *Runner) sessions(ctx context.Context, o Options) ([]transcript.SessionRef, error) {
+	refs, err := r.Store.MainSessions(ctx, o.MinIdle, o.Now(), "")
+	if err != nil {
+		return nil, err
+	}
+	legacy, err := r.Store.LegacySessions(ctx, "")
+	if err != nil {
+		return nil, err
+	}
+	refs = append(refs, legacy...)
+	want := map[string]bool{}
+	for _, id := range o.NativeSessionIDs {
+		want[id] = true
+	}
+	if o.NativeSessionID != "" {
+		want[o.NativeSessionID] = true
+	}
+	if len(want) == 0 {
+		return refs, nil
+	}
+	var out []transcript.SessionRef
+	for _, ref := range refs {
+		if want[ref.NativeSessionID] {
+			out = append(out, ref)
+		}
+	}
+	return out, nil
 }

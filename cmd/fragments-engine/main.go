@@ -1858,7 +1858,7 @@ func skipReasons(reasons map[string]int) string {
 // input or tool output is ever printed.
 func runTranscript(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: fragments-engine transcript <tool-calls|usage|enrich> --config PATH [flags]")
+		return fmt.Errorf("usage: fragments-engine transcript <tool-calls|usage|enrich|embed|search> --config PATH [flags]")
 	}
 	fs := flag.NewFlagSet("transcript "+args[0], flag.ContinueOnError)
 	configPath := fs.String("config", "fragments.example.yaml", "path to config file")
@@ -1874,6 +1874,11 @@ func runTranscript(args []string) error {
 	force := fs.Bool("force", false, "enrich: redo sessions that already have a result")
 	maxCost := fs.Float64("max-cost-usd", 0, "enrich: per-run cost cap in USD (default from config)")
 	concurrency := fs.Int("concurrency", 1, "enrich: parallel calls")
+	sessions := fs.String("sessions", "", "enrich: comma-separated native session ids to restrict the run to")
+	sample := fs.Bool("sample", false, "enrich: restrict the run to the reproducible verification sample (prints ids by bucket)")
+	query := fs.String("query", "", "search: text to find in enriched summaries")
+	semantic := fs.Bool("semantic", false, "search: rank by embedding similarity instead of text")
+	embedModel := fs.String("embed-model", "nomic-embed-text", "embed/search --semantic: local embedding model")
 	if err := fs.Parse(args[1:]); err != nil {
 		return err
 	}
@@ -1893,7 +1898,11 @@ func runTranscript(args []string) error {
 	switch args[0] {
 	case "enrich":
 		return runTranscriptEnrich(cfg, store, enrichFlags{dryRun: *dryRun, limit: *limit, session: *session, model: *model, provider: *provider,
-			force: *force, maxCost: *maxCost, concurrency: *concurrency})
+			force: *force, maxCost: *maxCost, concurrency: *concurrency, sessions: *sessions, sample: *sample})
+	case "embed":
+		return runTranscriptEmbed(store, *embedModel, *limit)
+	case "search":
+		return runTranscriptSearch(store, *query, *semantic, *embedModel, *limit)
 	case "tool-calls":
 		filter := transcript.ToolCallFilter{Name: *name, NativeSessionID: *session, Status: *status, Limit: *limit}
 		for _, bound := range []struct {
@@ -1940,6 +1949,8 @@ type enrichFlags struct {
 	force           bool
 	maxCost         float64
 	concurrency     int
+	sessions        string
+	sample          bool
 }
 
 // runTranscriptEnrich plans or runs transcript enrichment. A dry run needs no
@@ -1978,6 +1989,29 @@ func runTranscriptEnrich(cfg config.Config, store *transcript.Store, f enrichFla
 		MinIdle: time.Duration(idle) * time.Minute, AllowedProviders: ec.AllowedProviders, Concurrency: f.concurrency,
 		ExcludeSessions: ec.ExcludeSessions, ExcludeCWDPrefixes: ec.ExcludeCWDPrefixes,
 	}
+	if f.sessions != "" {
+		for _, id := range strings.Split(f.sessions, ",") {
+			if id = strings.TrimSpace(id); id != "" {
+				opts.NativeSessionIDs = append(opts.NativeSessionIDs, id)
+			}
+		}
+	}
+	if f.sample {
+		cands, err := (&enrich.Runner{Store: store, Opts: opts}).Candidates(context.Background())
+		if err != nil {
+			return err
+		}
+		picked := enrich.PickSample(cands)
+		fmt.Printf("sample: %d sessions (ids only)\n", len(picked))
+		for _, it := range picked {
+			fmt.Printf("  bucket=%s tool=%s id=%s est_tokens=%d calls=%d map_reduce=%t tool_calls=%d subagents=%d\n",
+				it.Bucket, it.Tool, it.NativeSessionID, it.EstTokens, it.Calls, it.MapReduce, it.ToolCalls, it.Subagents)
+			opts.NativeSessionIDs = append(opts.NativeSessionIDs, it.NativeSessionID)
+		}
+		if len(picked) == 0 {
+			return fmt.Errorf("no sessions matched the sample buckets")
+		}
+	}
 	var gw enrich.Gateway
 	if !f.dryRun {
 		if ec.Gateway.Address == "" {
@@ -2010,4 +2044,47 @@ func runTranscriptEnrich(cfg config.Config, store *transcript.Store, f enrichFla
 		}
 	}
 	return err
+}
+
+// runTranscriptEmbed embeds enriched summaries with a local Ollama; it never
+// calls a hosted model.
+func runTranscriptEmbed(store *transcript.Store, model string, limit int) error {
+	e, err := enrich.NewOllamaEmbedder(os.Getenv("OLLAMA_HOST"))
+	if err != nil {
+		return err
+	}
+	s, err := enrich.EmbedSummaries(context.Background(), store, e, model, limit)
+	fmt.Printf("embed: model=%s candidates=%d embedded=%d skipped=%d failed=%d\n", model, s.Candidates, s.Embedded, s.Skipped, s.Failed)
+	return err
+}
+
+// runTranscriptSearch finds sessions by their enriched title, summary, topics
+// and entities. It prints titles because the owner is reading their own store.
+func runTranscriptSearch(store *transcript.Store, query string, semantic bool, model string, limit int) error {
+	if strings.TrimSpace(query) == "" {
+		return fmt.Errorf("transcript search requires --query")
+	}
+	var hits []transcript.SearchHit
+	var err error
+	if semantic {
+		e, eerr := enrich.NewOllamaEmbedder(os.Getenv("OLLAMA_HOST"))
+		if eerr != nil {
+			return eerr
+		}
+		vecs, eerr := e.Embed(context.Background(), model, []string{query})
+		if eerr != nil {
+			return eerr
+		}
+		hits, err = store.NearestSummaries(context.Background(), model, vecs[0], limit)
+	} else {
+		hits, err = store.SearchEnriched(context.Background(), query, limit)
+	}
+	if err != nil {
+		return err
+	}
+	for _, h := range hits {
+		fmt.Printf("%.4f\t%s\t%s\n", h.Rank, h.NativeSessionID, h.Title)
+	}
+	fmt.Printf("results=%d\n", len(hits))
+	return nil
 }

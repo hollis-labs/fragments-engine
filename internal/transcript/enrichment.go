@@ -388,6 +388,43 @@ func (s *Store) SaveEnrichment(ctx context.Context, r EnrichmentRecord) error {
 	if err != nil {
 		return errors.New("transcript: cannot save enrichment")
 	}
+	if r.Tier == 1 && r.Status == "ok" {
+		return s.indexEnrichment(ctx, r.SessionPK, result)
+	}
+	return nil
+}
+
+// indexEnrichment keeps the private full-text index in step with the newest ok
+// Tier 1 result. The text is already redacted.
+func (s *Store) indexEnrichment(ctx context.Context, pk, resultJSON string) error {
+	var r struct {
+		Title, Summary string
+		Topics         []string
+		Entities       struct{ Projects, Repos, Tools, Technologies []string }
+	}
+	var raw map[string]any
+	if json.Unmarshal([]byte(resultJSON), &raw) != nil {
+		return errors.New("transcript: cannot index enrichment")
+	}
+	// Field names in the stored contract are lower snake case.
+	b, _ := json.Marshal(raw)
+	_ = json.Unmarshal(b, &r)
+	ents := append(append(append(append([]string{}, r.Entities.Projects...), r.Entities.Repos...), r.Entities.Tools...), r.Entities.Technologies...)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return errors.New("transcript: cannot index enrichment")
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `DELETE FROM tx_enrichment_search WHERE session_pk = ?`, pk); err != nil {
+		return errors.New("transcript: cannot index enrichment")
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO tx_enrichment_search (session_pk, title, summary, topics, entities) VALUES (?,?,?,?,?)`,
+		pk, r.Title, r.Summary, strings.Join(r.Topics, " "), strings.Join(ents, " ")); err != nil {
+		return errors.New("transcript: cannot index enrichment")
+	}
+	if err := tx.Commit(); err != nil {
+		return errors.New("transcript: cannot index enrichment")
+	}
 	return nil
 }
 
