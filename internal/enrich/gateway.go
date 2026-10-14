@@ -25,7 +25,10 @@ type Response struct {
 	Text                      string
 	Provider, Model           string
 	InputTokens, OutputTokens int
-	CostUSD                   float64
+	// CacheReadTokens and CacheWriteTokens are reported separately by providers
+	// that cache prompts; they are priced differently from plain input.
+	CacheReadTokens, CacheWriteTokens int
+	CostUSD                           float64
 }
 
 // Gateway is the only way enrichment reaches a model.

@@ -2,6 +2,7 @@ package enrich
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/hollis-labs/fragments-engine/internal/domain"
 	"github.com/hollis-labs/fragments-engine/internal/transcript"
+	_ "modernc.org/sqlite"
 )
 
 const goodJSON = `{"schema_version":1,"title":"Synthetic roadmap review","summary":"The person reviewed a synthetic roadmap. Two items were decided. One follow-up remains.","session_type":"planning","outcome":"completed","topics":["Roadmap Review","planning","planning"],"decisions":[{"text":"Ship the synthetic plan first","turns":[0,1,99]}],"follow_ups":[{"text":"Write the synthetic doc","turns":[1]}],"entities":{"projects":["synthetic-proj","not-mentioned-anywhere"],"repos":[],"tools":["Read"],"technologies":["go"]},"language":"en"}`
@@ -37,18 +39,38 @@ func (f *fakeGW) Chat(_ context.Context, r Request) (Response, error) {
 }
 func (f *fakeGW) count() int { f.mu.Lock(); defer f.mu.Unlock(); return len(f.calls) }
 
+var storePaths sync.Map // *transcript.Store -> database file, for read-only inspection in tests
+
 func openStore(t *testing.T) *transcript.Store {
 	t.Helper()
 	dir, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	st, err := transcript.Open(filepath.Join(dir, "private"))
+	root := filepath.Join(dir, "private")
+	st, err := transcript.Open(root)
 	if err != nil {
 		t.Fatal(err)
 	}
+	storePaths.Store(st, filepath.Join(root, "transcripts.db"))
 	t.Cleanup(func() { st.Close() })
 	return st
+}
+
+// rawDB opens a separate connection to a test store's file, to inspect what was
+// persisted without adding an accessor to production code.
+func rawDB(t *testing.T, st *transcript.Store) *sql.DB {
+	t.Helper()
+	p, ok := storePaths.Load(st)
+	if !ok {
+		t.Fatal("unknown store")
+	}
+	db, err := sql.Open("sqlite", "file:"+p.(string)+"?mode=ro")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	return db
 }
 
 var old = time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
@@ -623,11 +645,11 @@ func TestSummariesAreSearchableByTextAndMeaningAndStayPrivate(t *testing.T) {
 		t.Fatalf("second embed pass %+v calls=%d", s, emb.calls)
 	}
 	q, _ := emb.Embed(ctx, "nomic-embed-text", []string{"how did we speed up the database"})
-	near, err := st.NearestSummaries(ctx, "nomic-embed-text", q[0], 2)
+	near, err := st.NearestSummaries(ctx, "nomic-embed-text", "plain", q[0], 2)
 	if err != nil || len(near) != 2 || near[0].NativeSessionID != "B" || near[0].Rank <= near[1].Rank {
 		t.Fatalf("semantic search %+v %v", near, err)
 	}
-	if other, _ := st.NearestSummaries(ctx, "another-model", q[0], 2); len(other) != 0 {
+	if other, _ := st.NearestSummaries(ctx, "another-model", "plain", q[0], 2); len(other) != 0 {
 		t.Fatal("vectors from different models must not be compared")
 	}
 	// A changed summary makes the vector stale and it is recomputed.

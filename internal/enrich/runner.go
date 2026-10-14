@@ -40,6 +40,7 @@ type Options struct {
 	MaxOutputTokens    int
 	AllowedProviders   []string
 	Concurrency        int
+	EstPricing         Pricing // optional: lets a dry run print a dollar upper bound
 	RunID              string
 	SingleCallTokens   int
 	ChunkTokens        int
@@ -88,7 +89,10 @@ type Plan struct {
 	Calls          int
 	EstInputTokens int // characters/4: an estimate, not a tokenizer count
 	MaxOutputToks  int
-	TrimmedTurns   int
+	// EstMaxCostUSD is an upper bound from the configured prices: estimated
+	// input plus the full output cap on every call. Zero without prices.
+	EstMaxCostUSD float64
+	TrimmedTurns  int
 }
 
 // Summary is a run's outcome. Cost is what the gateway reported, summed; FE
@@ -204,6 +208,9 @@ func (r *Runner) Run(ctx context.Context) (Summary, error) {
 		sum.EstInputTokens += len(w.chunks) * (o.MaxOutputTokens / 2) // reduce reads the partials
 	}
 	sum.MaxOutputToks = sum.Calls * o.MaxOutputTokens
+	if o.EstPricing.Configured() {
+		sum.EstMaxCostUSD = o.EstPricing.Cost(sum.EstInputTokens, sum.MaxOutputToks, 0, 0)
+	}
 	if o.DryRun {
 		return sum, nil
 	}
@@ -325,7 +332,8 @@ func (r *Runner) ask(ctx context.Context, o Options, w work, prefix, tag, system
 		acct.cost += resp.CostUSD
 		// Written before the reply is judged: a rejected reply still cost tokens.
 		_ = r.Store.AppendSpend(ctx, transcript.SpendRecord{RunID: o.RunID, SessionPK: w.in.Ref.SessionPK, RequestID: reqID,
-			Provider: o.Provider, Model: o.Model, TokensIn: resp.InputTokens, TokensOut: resp.OutputTokens, CostUSD: resp.CostUSD})
+			Provider: o.Provider, Model: o.Model, TokensIn: resp.InputTokens, TokensOut: resp.OutputTokens,
+			CacheRead: resp.CacheReadTokens, CacheWrite: resp.CacheWriteTokens, CostUSD: resp.CostUSD})
 		verr := validate(resp.Text)
 		if verr == nil {
 			return "", nil

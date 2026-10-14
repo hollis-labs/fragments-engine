@@ -14,10 +14,44 @@ import (
 	"github.com/hollis-labs/fragments-engine/internal/transcript"
 )
 
-// Embedder turns text into a vector. The default is a local Ollama, so no
+// Embedder turns text into vectors. Every implementation is local-only, so no
 // transcript-derived text leaves the machine for embedding.
 type Embedder interface {
 	Embed(ctx context.Context, model string, texts []string) ([][]float32, error)
+}
+
+// QueryEmbedder is implemented by embedders that treat search queries
+// differently from documents (instruction-aware models).
+type QueryEmbedder interface {
+	EmbedQuery(ctx context.Context, model, query string) ([]float32, error)
+}
+
+// Formatter names the prompt format used for documents, recorded with every
+// vector so that changing it re-indexes rather than mixing formats.
+type Formatter interface{ Format() string }
+
+func formatOf(e Embedder) string {
+	if f, ok := e.(Formatter); ok {
+		return f.Format()
+	}
+	return "plain"
+}
+
+// EmbedQuery embeds a search query with the embedder's query format.
+func EmbedQuery(ctx context.Context, e Embedder, model, q string) ([]float32, error) {
+	if qe, ok := e.(QueryEmbedder); ok {
+		return qe.EmbedQuery(ctx, model, q)
+	}
+	v, err := e.Embed(ctx, model, []string{q})
+	if err != nil {
+		return nil, err
+	}
+	return v[0], nil
+}
+
+// isLoopbackHTTP reports whether u is an http URL on this machine.
+func isLoopbackHTTP(u string) bool {
+	return strings.HasPrefix(u, "http://localhost:") || strings.HasPrefix(u, "http://127.0.0.1:") || strings.HasPrefix(u, "http://[::1]:")
 }
 
 // OllamaEmbedder calls a local Ollama /api/embed.
@@ -31,7 +65,7 @@ func NewOllamaEmbedder(host string) (*OllamaEmbedder, error) {
 	if host == "" {
 		host = "http://localhost:11434"
 	}
-	if !(strings.HasPrefix(host, "http://localhost:") || strings.HasPrefix(host, "http://127.0.0.1:") || strings.HasPrefix(host, "http://[::1]:")) {
+	if !isLoopbackHTTP(host) {
 		return nil, errors.New("embeddings: the Ollama host must be on this machine")
 	}
 	return &OllamaEmbedder{Host: host, Client: &http.Client{Timeout: 120 * time.Second}}, nil
@@ -72,6 +106,7 @@ type EmbedSummary struct {
 // vector is missing or stale. limit 0 means all. It never calls a model.
 func EmbedSummaries(ctx context.Context, st *transcript.Store, e Embedder, model string, limit int) (EmbedSummary, error) {
 	var sum EmbedSummary
+	format := formatOf(e)
 	texts, err := st.SummaryTexts(ctx)
 	if err != nil {
 		return sum, err
@@ -83,7 +118,7 @@ func EmbedSummaries(ctx context.Context, st *transcript.Store, e Embedder, model
 			sum.Skipped++
 			continue
 		}
-		ok, err := st.EmbeddingCurrent(ctx, t.SessionPK, "summary", 0, model, t.Digest)
+		ok, err := st.EmbeddingCurrent(ctx, t.SessionPK, "summary", 0, model, format, t.Digest)
 		if err != nil {
 			return sum, err
 		}
@@ -113,7 +148,7 @@ func EmbedSummaries(ctx context.Context, st *transcript.Store, e Embedder, model
 			return sum, err
 		}
 		for j, g := range group {
-			if err := st.SaveEmbedding(ctx, g.SessionPK, "summary", 0, model, g.Digest, vecs[j]); err != nil {
+			if err := st.SaveEmbedding(ctx, g.SessionPK, "summary", 0, model, format, g.Digest, vecs[j]); err != nil {
 				sum.Failed++
 				continue
 			}

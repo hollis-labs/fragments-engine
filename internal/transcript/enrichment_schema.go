@@ -17,12 +17,13 @@ CREATE TABLE IF NOT EXISTS tx_enrichment (
 CREATE VIRTUAL TABLE IF NOT EXISTS tx_enrichment_search USING fts5(session_pk UNINDEXED, title, summary, topics, entities);
 CREATE TABLE IF NOT EXISTS tx_embeddings (
  session_pk TEXT NOT NULL, kind TEXT NOT NULL, chunk_idx INTEGER NOT NULL, model TEXT NOT NULL, dim INTEGER NOT NULL,
- text_digest TEXT NOT NULL, vector BLOB NOT NULL, created_at TEXT NOT NULL,
+ format TEXT NOT NULL DEFAULT '', text_digest TEXT NOT NULL, vector BLOB NOT NULL, created_at TEXT NOT NULL,
  PRIMARY KEY (session_pk, kind, chunk_idx, model)
 );
 CREATE TABLE IF NOT EXISTS tx_enrichment_spend (
  id INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT NOT NULL, session_pk TEXT NOT NULL, request_id TEXT NOT NULL,
  provider TEXT NOT NULL, model TEXT NOT NULL, tokens_in INTEGER NOT NULL, tokens_out INTEGER NOT NULL,
+ tokens_cache_read INTEGER NOT NULL DEFAULT 0, tokens_cache_write INTEGER NOT NULL DEFAULT 0,
  cost_usd REAL NOT NULL DEFAULT 0, at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS tx_enrichment_spend_run ON tx_enrichment_spend (run_id);

@@ -1878,7 +1878,7 @@ func runTranscript(args []string) error {
 	sample := fs.Bool("sample", false, "enrich: restrict the run to the reproducible verification sample (prints ids by bucket)")
 	query := fs.String("query", "", "search: text to find in enriched summaries")
 	semantic := fs.Bool("semantic", false, "search: rank by embedding similarity instead of text")
-	embedModel := fs.String("embed-model", "nomic-embed-text", "embed/search --semantic: local embedding model")
+	embedModel := fs.String("embed-model", "", "embed/search --semantic: local embedding model (default from config)")
 	if err := fs.Parse(args[1:]); err != nil {
 		return err
 	}
@@ -1900,9 +1900,9 @@ func runTranscript(args []string) error {
 		return runTranscriptEnrich(cfg, store, enrichFlags{dryRun: *dryRun, limit: *limit, session: *session, model: *model, provider: *provider,
 			force: *force, maxCost: *maxCost, concurrency: *concurrency, sessions: *sessions, sample: *sample})
 	case "embed":
-		return runTranscriptEmbed(store, *embedModel, *limit)
+		return runTranscriptEmbed(cfg, store, *embedModel, *limit)
 	case "search":
-		return runTranscriptSearch(store, *query, *semantic, *embedModel, *limit)
+		return runTranscriptSearch(cfg, store, *query, *semantic, *embedModel, *limit)
 	case "tool-calls":
 		filter := transcript.ToolCallFilter{Name: *name, NativeSessionID: *session, Status: *status, Limit: *limit}
 		for _, bound := range []struct {
@@ -1984,7 +1984,7 @@ func runTranscriptEnrich(cfg config.Config, store *transcript.Store, f enrichFla
 	}
 	opts := enrich.Options{
 		DryRun: f.dryRun, Limit: f.limit, NativeSessionID: f.session, Force: f.force,
-		Provider: pick(f.provider, ec.Provider, "anthropic-work"), Model: pick(f.model, ec.Model, "claude-haiku-5-5"),
+		Provider: pick(f.provider, ec.Provider, enrich.AnthropicDirectProvider), Model: pick(f.model, ec.Model, "claude-haiku-5-5"),
 		PromptVersion: ec.PromptVersion, MaxCostUSD: maxRun, TotalCapUSD: total, MaxOutputTokens: ec.MaxOutputTokens,
 		MinIdle: time.Duration(idle) * time.Minute, AllowedProviders: ec.AllowedProviders, Concurrency: f.concurrency,
 		ExcludeSessions: ec.ExcludeSessions, ExcludeCWDPrefixes: ec.ExcludeCWDPrefixes,
@@ -2012,16 +2012,16 @@ func runTranscriptEnrich(cfg config.Config, store *transcript.Store, f enrichFla
 			return fmt.Errorf("no sessions matched the sample buckets")
 		}
 	}
+	if opts.Provider == enrich.AnthropicDirectProvider {
+		opts.EstPricing = enrichPricing(ec.Anthropic.Pricing)
+	}
 	var gw enrich.Gateway
 	if !f.dryRun {
-		if ec.Gateway.Address == "" {
-			return fmt.Errorf("transcripts.enrichment.gateway.address is not configured")
+		// The allow-list is checked before any credential is read.
+		if !containsString(ec.AllowedProviders, opts.Provider) {
+			return fmt.Errorf("enrichment: provider %q is not in transcripts.enrichment.allowed_providers; nothing is sent", opts.Provider)
 		}
-		token := ""
-		if ec.Gateway.TokenEnv != "" {
-			token = os.Getenv(ec.Gateway.TokenEnv)
-		}
-		g, err := enrich.NewHTTPGateway(ec.Gateway.Address, token)
+		g, err := buildEnrichGateway(ec, opts.Provider)
 		if err != nil {
 			return err
 		}
@@ -2036,6 +2036,9 @@ func runTranscriptEnrich(cfg config.Config, store *transcript.Store, f enrichFla
 		mode, opts.Provider, opts.Model, enrich.PromptVersion, maxRun, total, s.PriorCostUSD)
 	fmt.Printf("sessions=%d already_done=%d excluded=%d map_reduce=%d pending=%d calls=%d est_input_tokens=%d (chars/4 estimate) max_output_tokens=%d trimmed_turns=%d\n",
 		s.Sessions, s.AlreadyDone, s.Excluded, s.MapReduce, s.Pending, s.Calls, s.EstInputTokens, s.MaxOutputToks, s.TrimmedTurns)
+	if s.EstMaxCostUSD > 0 {
+		fmt.Printf("est_max_cost_usd=%.4f (upper bound from the configured prices: estimated input + full output cap per call)\n", s.EstMaxCostUSD)
+	}
 	if !f.dryRun {
 		fmt.Printf("attempted=%d ok=%d failed=%d retries=%d tokens_in=%d tokens_out=%d gateway_cost_usd=%.4f facts_saved=%d stopped_by=%s\n",
 			s.Attempted, s.OK, s.Failed, s.Retries, s.TokensIn, s.TokensOut, s.CostUSD, s.FactsSaved, s.StoppedBy)
@@ -2046,36 +2049,100 @@ func runTranscriptEnrich(cfg config.Config, store *transcript.Store, f enrichFla
 	return err
 }
 
-// runTranscriptEmbed embeds enriched summaries with a local Ollama; it never
-// calls a hosted model.
-func runTranscriptEmbed(store *transcript.Store, model string, limit int) error {
-	e, err := enrich.NewOllamaEmbedder(os.Getenv("OLLAMA_HOST"))
+func containsString(list []string, v string) bool {
+	for _, s := range list {
+		if s == v {
+			return true
+		}
+	}
+	return false
+}
+
+func enrichPricing(p config.EnrichmentPricing) enrich.Pricing {
+	return enrich.Pricing{InputPerMTok: p.InputPerMTok, OutputPerMTok: p.OutputPerMTok, CacheReadPerMTok: p.CacheReadPerMTok, CacheWritePerMTok: p.CacheWritePerMTok}
+}
+
+// buildEnrichGateway returns the model backend for a provider id: the direct
+// Anthropic API, or the Tether AI gateway for any other id.
+func buildEnrichGateway(ec config.EnrichmentConfig, provider string) (enrich.Gateway, error) {
+	if provider == enrich.AnthropicDirectProvider {
+		return enrich.NewAnthropicGateway(ec.Anthropic.BaseURL, ec.Anthropic.APIKeyEnv, ec.Anthropic.Version, enrichPricing(ec.Anthropic.Pricing), os.Getenv)
+	}
+	if ec.Gateway.Address == "" {
+		return nil, fmt.Errorf("transcripts.enrichment.gateway.address is not configured")
+	}
+	token := ""
+	if ec.Gateway.TokenEnv != "" {
+		token = os.Getenv(ec.Gateway.TokenEnv)
+	}
+	return enrich.NewHTTPGateway(ec.Gateway.Address, token)
+}
+
+// buildEnrichEmbedder returns a local embedder and the model to use. Both
+// supported providers refuse hosts that are not on this machine.
+func buildEnrichEmbedder(ec config.EnrichmentConfig, modelFlag string) (enrich.Embedder, string, error) {
+	emb := ec.Embedding
+	model := modelFlag
+	if model == "" {
+		model = emb.Model
+	}
+	switch emb.Provider {
+	case "openai_compat_local":
+		if model == "" {
+			return nil, "", fmt.Errorf("transcripts.enrichment.embedding.model is required for openai_compat_local")
+		}
+		e, err := enrich.NewOpenAICompatEmbedder(emb.BaseURL, emb.Dim, emb.QueryInstruction, emb.BatchSize)
+		return e, model, err
+	case "", "ollama":
+		if model == "" {
+			model = "nomic-embed-text"
+		}
+		host := emb.BaseURL
+		if host == "" {
+			host = os.Getenv("OLLAMA_HOST")
+		}
+		e, err := enrich.NewOllamaEmbedder(host)
+		return e, model, err
+	default:
+		return nil, "", fmt.Errorf("unknown embedding provider %q", emb.Provider)
+	}
+}
+
+// runTranscriptEmbed embeds enriched summaries with a local embedding server;
+// it never calls a hosted model.
+func runTranscriptEmbed(cfg config.Config, store *transcript.Store, modelFlag string, limit int) error {
+	e, model, err := buildEnrichEmbedder(cfg.Transcripts.Enrichment, modelFlag)
 	if err != nil {
 		return err
 	}
+	start := time.Now()
 	s, err := enrich.EmbedSummaries(context.Background(), store, e, model, limit)
-	fmt.Printf("embed: model=%s candidates=%d embedded=%d skipped=%d failed=%d\n", model, s.Candidates, s.Embedded, s.Skipped, s.Failed)
+	fmt.Printf("embed: model=%s candidates=%d embedded=%d skipped=%d failed=%d elapsed=%s\n", model, s.Candidates, s.Embedded, s.Skipped, s.Failed, time.Since(start).Round(time.Millisecond))
 	return err
 }
 
 // runTranscriptSearch finds sessions by their enriched title, summary, topics
 // and entities. It prints titles because the owner is reading their own store.
-func runTranscriptSearch(store *transcript.Store, query string, semantic bool, model string, limit int) error {
+func runTranscriptSearch(cfg config.Config, store *transcript.Store, query string, semantic bool, modelFlag string, limit int) error {
 	if strings.TrimSpace(query) == "" {
 		return fmt.Errorf("transcript search requires --query")
 	}
 	var hits []transcript.SearchHit
 	var err error
 	if semantic {
-		e, eerr := enrich.NewOllamaEmbedder(os.Getenv("OLLAMA_HOST"))
+		e, model, eerr := buildEnrichEmbedder(cfg.Transcripts.Enrichment, modelFlag)
 		if eerr != nil {
 			return eerr
 		}
-		vecs, eerr := e.Embed(context.Background(), model, []string{query})
+		vec, eerr := enrich.EmbedQuery(context.Background(), e, model, query)
 		if eerr != nil {
 			return eerr
 		}
-		hits, err = store.NearestSummaries(context.Background(), model, vecs[0], limit)
+		format := "plain"
+		if f, ok := e.(enrich.Formatter); ok {
+			format = f.Format()
+		}
+		hits, err = store.NearestSummaries(context.Background(), model, format, vec, limit)
 	} else {
 		hits, err = store.SearchEnriched(context.Background(), query, limit)
 	}

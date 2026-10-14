@@ -31,15 +31,17 @@ func decodeVec(b []byte) []float32 {
 	return v
 }
 
-// EmbeddingCurrent reports whether a vector for exactly this text already exists.
-func (s *Store) EmbeddingCurrent(ctx context.Context, pk, kind string, idx int, model, textDigest string) (bool, error) {
+// EmbeddingCurrent reports whether a vector made from exactly this text, with
+// this model and prompt format, already exists. A different model or format
+// makes the vector stale, so a model change is a clean reindex.
+func (s *Store) EmbeddingCurrent(ctx context.Context, pk, kind string, idx int, model, format, textDigest string) (bool, error) {
 	var n int
-	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM tx_embeddings WHERE session_pk = ? AND kind = ? AND chunk_idx = ? AND model = ? AND text_digest = ?`,
-		pk, kind, idx, model, textDigest).Scan(&n)
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM tx_embeddings WHERE session_pk = ? AND kind = ? AND chunk_idx = ? AND model = ? AND format = ? AND text_digest = ?`,
+		pk, kind, idx, model, format, textDigest).Scan(&n)
 	return n > 0, err
 }
 
-func (s *Store) SaveEmbedding(ctx context.Context, pk, kind string, idx int, model, textDigest string, vec []float32) error {
+func (s *Store) SaveEmbedding(ctx context.Context, pk, kind string, idx int, model, format, textDigest string, vec []float32) error {
 	if s == nil {
 		return ErrPrivateStoreRequired
 	}
@@ -49,9 +51,10 @@ func (s *Store) SaveEmbedding(ctx context.Context, pk, kind string, idx int, mod
 	if err := s.checkOwnership(); err != nil {
 		return err
 	}
-	_, err := s.db.ExecContext(ctx, `INSERT INTO tx_embeddings VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(session_pk, kind, chunk_idx, model) DO UPDATE SET
- dim = excluded.dim, text_digest = excluded.text_digest, vector = excluded.vector, created_at = excluded.created_at`,
-		pk, kind, idx, Redact(model), len(vec), textDigest, encodeVec(vec), stamp(time.Now()))
+	_, err := s.db.ExecContext(ctx, `INSERT INTO tx_embeddings (session_pk, kind, chunk_idx, model, dim, format, text_digest, vector, created_at) VALUES (?,?,?,?,?,?,?,?,?)
+ ON CONFLICT(session_pk, kind, chunk_idx, model) DO UPDATE SET
+ dim = excluded.dim, format = excluded.format, text_digest = excluded.text_digest, vector = excluded.vector, created_at = excluded.created_at`,
+		pk, kind, idx, Redact(model), len(vec), Redact(format), textDigest, encodeVec(vec), stamp(time.Now()))
 	if err != nil {
 		return errors.New("transcript: cannot save embedding")
 	}
@@ -130,14 +133,15 @@ func (s *Store) SearchEnriched(ctx context.Context, query string, limit int) ([]
 }
 
 // NearestSummaries returns the k summaries whose vectors are closest to vec by
-// cosine similarity, among vectors made with the same model.
-func (s *Store) NearestSummaries(ctx context.Context, model string, vec []float32, k int) ([]SearchHit, error) {
+// cosine similarity, among vectors made with the same model, prompt format and
+// dimension: vectors from different models or formats are never compared.
+func (s *Store) NearestSummaries(ctx context.Context, model, format string, vec []float32, k int) ([]SearchHit, error) {
 	if k <= 0 || k > 200 {
 		k = 10
 	}
 	rows, err := s.db.QueryContext(ctx, `SELECT v.session_pk, COALESCE(x.native_session_id, ''), v.vector,
   COALESCE((SELECT json_extract(e.result_json, '$.title') FROM tx_enrichment e WHERE e.session_pk = v.session_pk AND e.tier = 1 AND e.status = 'ok' ORDER BY e.created_at DESC, e.id DESC LIMIT 1), '')
- FROM tx_embeddings v LEFT JOIN tx_sessions x ON x.session_pk = v.session_pk WHERE v.kind = 'summary' AND v.model = ? AND v.dim = ?`, model, len(vec))
+ FROM tx_embeddings v LEFT JOIN tx_sessions x ON x.session_pk = v.session_pk WHERE v.kind = 'summary' AND v.model = ? AND v.format = ? AND v.dim = ?`, model, format, len(vec))
 	if err != nil {
 		return nil, errors.New("transcript: cannot read embeddings")
 	}

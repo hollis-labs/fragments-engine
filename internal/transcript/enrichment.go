@@ -448,6 +448,7 @@ func (s *Store) LatestEnrichment(ctx context.Context, pk string, tier int) (Enri
 type SpendRecord struct {
 	RunID, SessionPK, RequestID, Provider, Model string
 	TokensIn, TokensOut                          int
+	CacheRead, CacheWrite                        int
 	CostUSD                                      float64
 }
 
@@ -461,8 +462,9 @@ func (s *Store) AppendSpend(ctx context.Context, r SpendRecord) error {
 	if s == nil {
 		return ErrPrivateStoreRequired
 	}
-	_, err := s.db.ExecContext(ctx, `INSERT INTO tx_enrichment_spend (run_id, session_pk, request_id, provider, model, tokens_in, tokens_out, cost_usd, at)
- VALUES (?,?,?,?,?,?,?,?,?)`, Redact(r.RunID), r.SessionPK, Redact(r.RequestID), Redact(r.Provider), Redact(r.Model), r.TokensIn, r.TokensOut, r.CostUSD, stamp(time.Now()))
+	_, err := s.db.ExecContext(ctx, `INSERT INTO tx_enrichment_spend (run_id, session_pk, request_id, provider, model, tokens_in, tokens_out, tokens_cache_read, tokens_cache_write, cost_usd, at)
+ VALUES (?,?,?,?,?,?,?,?,?,?,?)`, Redact(r.RunID), r.SessionPK, Redact(r.RequestID), Redact(r.Provider), Redact(r.Model), r.TokensIn, r.TokensOut,
+		r.CacheRead, r.CacheWrite, r.CostUSD, stamp(time.Now()))
 	if err != nil {
 		return errors.New("transcript: cannot record spend")
 	}

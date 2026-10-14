@@ -117,6 +117,59 @@ and none of it reaches shared recall, routing or destinations.
 `transcripts.db` that has these tables with a build that predates them is
 refused, so keep a backup before the first run of a new build on a live store.
 
+### Transcript enrichment
+
+`fragments-engine transcript enrich` describes private sessions for search:
+Tier 0 facts (no model) from the stored turns and tool calls, and a Tier 1 JSON
+description (title, summary, session type, outcome, topics, decisions and
+follow-ups citing turn numbers, entities) from a model. Long sessions are split
+into parts and combined; Claude sessions and Codex text records are covered.
+Results live only in the owner-private `transcripts.db`.
+
+Nothing is sent to a model unless the provider is listed in
+`transcripts.enrichment.allowed_providers` (empty by default; a run fails closed
+before any call). `exclude_sessions` and `exclude_cwd_prefixes` are a never-send
+switch. Input is the redacted text only. `--dry-run` makes no call and prints
+counts and a characters/4 token estimate (and a dollar upper bound when prices
+are configured); `--limit N`, `--sessions a,b`, `--sample` (a reproducible
+20-session verification set) and `--force` narrow or repeat a run.
+
+```yaml
+transcripts:
+  private_root: /path/to/private
+  enrichment:
+    provider: anthropic-direct          # the allow-list id; the Tether gateway uses its own provider ids
+    model: claude-haiku-5-5
+    allowed_providers: [anthropic-direct]
+    max_cost_usd: 2                     # per run, a hard stop
+    max_total_cost_usd: 10              # across all runs, from the spend ledger; a hard stop
+    anthropic:
+      api_key_env: ANTHROPIC_API_KEY    # NAME of the environment variable; the key is never in this file
+      pricing:                          # USD per million tokens; no defaults.
+        input_per_mtok: 0               # Confirm every number against Anthropic's published
+        output_per_mtok: 0              # pricing before the first live call: the caps are
+        cache_read_per_mtok: 0          # computed from these values, and a run refuses to
+        cache_write_per_mtok: 0         # start while input and output are unset.
+    embedding:
+      provider: openai_compat_local     # or ollama; both refuse any host that is not on this machine
+      base_url: http://127.0.0.1:8183
+      model: qwen3-embedding-0.6b
+      dim: 1024
+      query_instruction: "Given a search query about a past coding conversation, retrieve the conversation summaries that answer it"
+```
+
+The Anthropic key is read from the named environment variable at startup, like
+other service keys (FE never loads a `.env` file); it is not logged, stored or
+included in any error. Every call, including a rejected reply, is written to the
+append-only `tx_enrichment_spend` ledger with its tokens (cache reads and writes
+separately) and the cost computed from the configured prices, and both caps are
+enforced from that ledger. Embeddings use a local OpenAI-style `/v1/embeddings`
+server (llama.cpp `--embeddings`) or Ollama; each vector records its model,
+dimension and prompt format, so changing any of them re-indexes cleanly.
+`transcript embed` and `transcript search [--semantic]` use them. The schema
+adds tables to `transcripts.db`; a build that predates them refuses such a
+database, so back it up before the first run of a new build.
+
 ### Codex session archives
 
 The disabled `codex_sessions` example reads JSONL files recursively under its

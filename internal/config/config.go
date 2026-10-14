@@ -34,7 +34,9 @@ type TranscriptConfig struct {
 // EnrichmentConfig drives transcript enrichment. Nothing leaves the machine
 // unless a provider is listed in AllowedProviders: the default is empty.
 type EnrichmentConfig struct {
-	Gateway EnrichmentGateway `json:"gateway" yaml:"gateway"`
+	Gateway   EnrichmentGateway   `json:"gateway" yaml:"gateway"`
+	Anthropic EnrichmentAnthropic `json:"anthropic" yaml:"anthropic"`
+	Embedding EnrichmentEmbedding `json:"embedding" yaml:"embedding"`
 	// AllowedProviders are the gateway provider ids that may receive redacted
 	// transcript text. Empty means no model call is made.
 	AllowedProviders []string `json:"allowed_providers" yaml:"allowed_providers"`
@@ -53,6 +55,38 @@ type EnrichmentConfig struct {
 	ExcludeCWDPrefixes []string `json:"exclude_cwd_prefixes" yaml:"exclude_cwd_prefixes"`
 	MinIdleMinutes     int      `json:"min_idle_minutes" yaml:"min_idle_minutes"`
 	MaxOutputTokens    int      `json:"max_output_tokens" yaml:"max_output_tokens"`
+}
+
+// EnrichmentAnthropic configures the direct Anthropic provider (allow-list id
+// "anthropic-direct"). The API key is read from the environment variable named
+// by APIKeyEnv at startup; it is never stored in this file, logged or persisted.
+type EnrichmentAnthropic struct {
+	BaseURL   string            `json:"base_url" yaml:"base_url"` // default https://api.anthropic.com; https only
+	APIKeyEnv string            `json:"api_key_env" yaml:"api_key_env"`
+	Version   string            `json:"version" yaml:"version"` // anthropic-version header; default 2023-06-01
+	Pricing   EnrichmentPricing `json:"pricing" yaml:"pricing"`
+}
+
+// EnrichmentPricing is USD per million tokens. There are no built-in defaults:
+// the values must be confirmed against Anthropic's published pricing before the
+// first live call, and spend caps are computed from them.
+type EnrichmentPricing struct {
+	InputPerMTok      float64 `json:"input_per_mtok" yaml:"input_per_mtok"`
+	OutputPerMTok     float64 `json:"output_per_mtok" yaml:"output_per_mtok"`
+	CacheReadPerMTok  float64 `json:"cache_read_per_mtok" yaml:"cache_read_per_mtok"`
+	CacheWritePerMTok float64 `json:"cache_write_per_mtok" yaml:"cache_write_per_mtok"`
+}
+
+// EnrichmentEmbedding selects a local embedding server. Provider is
+// "openai_compat_local" (an OpenAI-style /v1/embeddings server on this machine,
+// e.g. llama.cpp) or "ollama" (the default). Both refuse non-local hosts.
+type EnrichmentEmbedding struct {
+	Provider         string `json:"provider" yaml:"provider"`
+	BaseURL          string `json:"base_url" yaml:"base_url"`
+	Model            string `json:"model" yaml:"model"`
+	Dim              int    `json:"dim" yaml:"dim"`
+	QueryInstruction string `json:"query_instruction" yaml:"query_instruction"`
+	BatchSize        int    `json:"batch_size" yaml:"batch_size"`
 }
 
 // EnrichmentGateway locates the Tether AI gateway. Address is "unix:/path" or
