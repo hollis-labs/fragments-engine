@@ -4,7 +4,8 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
-	"errors"
+	"database/sql"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -18,7 +19,6 @@ import (
 	"github.com/hollis-labs/fragments-engine/internal/ingest/claude"
 	"github.com/hollis-labs/fragments-engine/internal/ingest/filesystemdocs"
 	"github.com/hollis-labs/fragments-engine/internal/service"
-	"github.com/hollis-labs/fragments-engine/internal/transcript"
 )
 
 func TestFragmentsService_IntakeAndSearchDocuments(t *testing.T) {
@@ -279,17 +279,22 @@ func TestFragmentsService_RelatedFragments(t *testing.T) {
 	}
 }
 
-func TestFragmentsService_ChatGPTAttachmentsStayUnpersisted(t *testing.T) {
+func TestFragmentsService_ChatGPTPrivatePathCarriesNoAttachments(t *testing.T) {
 	root, err := filepath.Abs(filepath.Join("..", "..", "testdata", "chatgpt-export"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	assertTranscriptAttachmentsRefused(t, root)
+	_ = assertChatGPTPrivateNoAttachments(t, root)
 }
 
-func assertTranscriptAttachmentsRefused(t *testing.T, root string) {
+// assertChatGPTPrivateNoAttachments runs the chatgpt export through the private
+// transcript path and checks that the run succeeds, the conversation lands only
+// in the private store, no attachment is persisted anywhere, and the metadata
+// carries counts instead.
+func assertChatGPTPrivateNoAttachments(t *testing.T, root string) string {
 	t.Helper()
-	cfg, err := config.Load(writeChatGPTIntegrationConfig(t, root))
+	cfgPath := writeChatGPTIntegrationConfig(t, root)
+	cfg, err := config.Load(cfgPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -303,16 +308,66 @@ func assertTranscriptAttachmentsRefused(t *testing.T, root string) {
 		t.Fatal(err)
 	}
 	defer instance.Close()
-	if _, err := instance.Fragments.RunAllIngests(context.Background(), cfg); !errors.Is(err, transcript.ErrAttachments) {
-		t.Fatalf("raw attachments accepted: %v", err)
+	runs, err := instance.Fragments.RunAllIngests(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("private chatgpt run failed: %v", err)
+	}
+	if len(runs) != 1 || runs[0].Inserted != 1 || runs[0].Skipped != 0 {
+		t.Fatalf("unexpected run result: %+v", runs)
 	}
 	results, err := instance.Fragments.Search(context.Background(), "roadmap", 10)
 	if err != nil || len(results) != 0 {
 		t.Fatalf("transcript reached shared recall: %d %v", len(results), err)
 	}
+
+	shared, err := sql.Open("sqlite", cfg.Database.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer shared.Close()
+	for _, table := range []string{"fragments", "attachments", "fragment_attachments"} {
+		var n int
+		if err := shared.QueryRow("SELECT count(*) FROM " + table).Scan(&n); err != nil {
+			t.Fatalf("count %s: %v", table, err)
+		}
+		if n != 0 {
+			t.Fatalf("shared table %s holds %d rows", table, n)
+		}
+	}
+
+	private, err := sql.Open("sqlite", filepath.Join(cfg.Transcripts.PrivateRoot, "transcripts.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer private.Close()
+	var count int
+	var material string
+	if err := private.QueryRow("SELECT count(*), coalesce(max(material_json), '') FROM transcripts").Scan(&count, &material); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("expected 1 private transcript, got %d", count)
+	}
+	var record struct {
+		Attachments []any          `json:"Attachments"`
+		Metadata    map[string]any `json:"Metadata"`
+	}
+	if err := json.Unmarshal([]byte(material), &record); err != nil {
+		t.Fatalf("decode private record: %v", err)
+	}
+	if len(record.Attachments) != 0 {
+		t.Fatalf("private record persisted %d attachments", len(record.Attachments))
+	}
+	if n, _ := record.Metadata["attachment_count"].(float64); n < 1 {
+		t.Fatalf("expected attachment_count in metadata, got %#v", record.Metadata["attachment_count"])
+	}
+	if n, _ := record.Metadata["url_refs_skipped"].(float64); n < 1 {
+		t.Fatalf("expected url_refs_skipped in metadata, got %#v", record.Metadata["url_refs_skipped"])
+	}
+	return filepath.Join(cfg.Transcripts.PrivateRoot, "transcripts.db")
 }
 
-func TestFragmentsService_ChatGPTDocxAttachmentEnrichment(t *testing.T) {
+func TestFragmentsService_ChatGPTPrivatePathNeverReadsOrEnrichesDocx(t *testing.T) {
 	fixtureRoot, err := filepath.Abs(filepath.Join("..", "..", "testdata", "chatgpt-export", "export-001"))
 	if err != nil {
 		t.Fatalf("resolve fixture root: %v", err)
@@ -347,7 +402,20 @@ func TestFragmentsService_ChatGPTDocxAttachmentEnrichment(t *testing.T) {
 		t.Fatalf("write updated conversations: %v", err)
 	}
 
-	assertTranscriptAttachmentsRefused(t, root)
+	privateDB := assertChatGPTPrivateNoAttachments(t, root)
+	// The docx text must not have been read or enriched on the private path.
+	db, err := sql.Open("sqlite", privateDB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var hits int
+	if err := db.QueryRow("SELECT count(*) FROM transcripts WHERE content LIKE ? OR material_json LIKE ?", "%should also be searchable%", "%should also be searchable%").Scan(&hits); err != nil {
+		t.Fatal(err)
+	}
+	if hits != 0 {
+		t.Fatalf("docx attachment text reached the private store (%d rows)", hits)
+	}
 }
 
 func TestFragmentsService_VantaRecallBackend(t *testing.T) {
