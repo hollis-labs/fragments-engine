@@ -50,6 +50,9 @@ type PipelineFragment struct {
 	// Normalizer identifies the versioned material-normalization policy used
 	// before calculating an immutable FragmentRevision digest.
 	Normalizer AdapterVersion
+	// Detail is the structured transcript view a private source parsed beside
+	// Content. It is excluded from JSON so it can never ride into material.
+	Detail *TranscriptDetail `json:"-"`
 }
 
 type PipelineAttachment struct {

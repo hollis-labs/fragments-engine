@@ -40,6 +40,10 @@ const (
 	ingestFailedJobsTable = "ingest_failed_jobs"
 )
 
+// Transcripts returns the owner-private transcript store, or nil when no
+// private root is configured.
+func (a *App) Transcripts() *transcript.Store { return a.transcripts }
+
 type App struct {
 	store            *store.Store
 	transcripts      *transcript.Store

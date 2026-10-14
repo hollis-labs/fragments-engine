@@ -1,15 +1,13 @@
 package claude
 
 import (
-	"bufio"
 	"context"
-	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
-	"time"
 
 	"github.com/hollis-labs/fragments-engine/internal/config"
 	"github.com/hollis-labs/fragments-engine/internal/domain"
@@ -17,12 +15,24 @@ import (
 
 const kind = "claude_code"
 
+const (
+	defaultMaxFileBytes = 1 << 30
+	maxLineBytes        = 10 << 20
+	tailWindow          = 4096
+	maxExcerptBytes     = 2048
+	rawExcerptBytes     = 16 << 10
+)
+
 type Source struct{}
 
 func (Source) Kind() string {
 	return kind
 }
 
+// Collect reads Claude session files into searchable fragments plus the
+// structured turns, tool calls and usage beside them. A file with a stored
+// cursor is read only from that cursor, and only if the bytes before it are
+// unchanged; otherwise it is parsed whole and its derived rows are replaced.
 func (Source) Collect(ctx context.Context, cfg config.IngestConfig) ([]domain.PipelineFragment, error) {
 	root := config.ExpandHome(cfg.Source.Root)
 	paths, err := sessionFiles(ctx, root)
@@ -30,7 +40,7 @@ func (Source) Collect(ctx context.Context, cfg config.IngestConfig) ([]domain.Pi
 		return nil, err
 	}
 
-	maxSizeBytes := int64(50 * 1024 * 1024)
+	maxSizeBytes := int64(defaultMaxFileBytes)
 	rules, err := config.DecodeRules[config.ClaudeCodeRules](cfg)
 	if err != nil {
 		return nil, err
@@ -38,42 +48,48 @@ func (Source) Collect(ctx context.Context, cfg config.IngestConfig) ([]domain.Pi
 	if rules.MaxFileSizeMB > 0 {
 		maxSizeBytes = int64(rules.MaxFileSizeMB) * 1024 * 1024
 	}
+	excerpt := rules.ToolResultExcerptBytes
+	if excerpt < 0 {
+		excerpt = 0
+	}
+	if excerpt > maxExcerptBytes {
+		excerpt = maxExcerptBytes
+	}
 
 	out := make([]domain.PipelineFragment, 0, len(paths))
 	for _, path := range paths {
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		default:
+		if err := ctx.Err(); err != nil {
+			return nil, err
 		}
 		info, err := os.Lstat(path)
-		if err != nil || !info.Mode().IsRegular() || info.Size() > maxSizeBytes {
+		if err != nil || !info.Mode().IsRegular() {
 			continue
 		}
-		fragment, err := parseSessionFile(path)
+		relPath, err := filepath.Rel(root, path)
 		if err != nil {
-			return nil, fmt.Errorf("parse claude session %s: %w", path, err)
-		}
-		if strings.TrimSpace(fragment.Content) == "" {
 			continue
 		}
-		if segment := subagentSegment(root, path); segment != "" {
-			fragment.SourceIdentity.SegmentKey = segment
-			fragment.Metadata["subagent_segment"] = segment
-			fragment.CanonicalPath += "/" + segment
+		relPath = filepath.ToSlash(relPath)
+		if info.Size() > maxSizeBytes {
+			domain.NoteSkip(ctx, "size_limit", relPath)
+			continue
+		}
+		fragment, skip, err := collectSegment(ctx, root, path, relPath, info, excerpt)
+		if err != nil {
+			var diag *domain.CollectionError
+			if errors.As(err, &diag) && diag.Class == "unreadable_line" {
+				domain.NoteSkip(ctx, diag.Class, relPath)
+				continue
+			}
+			return nil, domain.AttributeFile(err, relPath)
+		}
+		if skip != "" {
+			domain.NoteSkip(ctx, skip, relPath)
+			continue
 		}
 		out = append(out, fragment)
 	}
 	return out, nil
-}
-
-type event struct {
-	Type      string         `json:"type"`
-	Timestamp string         `json:"timestamp"`
-	SessionID string         `json:"sessionId"`
-	Slug      string         `json:"slug"`
-	CWD       string         `json:"cwd"`
-	Message   map[string]any `json:"message"`
 }
 
 // Native roots contain projects/<project>; synced archives contain <project>.
@@ -155,145 +171,4 @@ func subagentSegment(root, path string) string {
 		return ""
 	}
 	return "subagent/" + strings.Join(parts[1:], "/")
-}
-
-func parseSessionFile(path string) (domain.PipelineFragment, error) {
-	file, err := os.Open(path)
-	if err != nil {
-		return domain.PipelineFragment{}, fmt.Errorf("open session file: %w", err)
-	}
-	defer file.Close()
-
-	var (
-		sessionID  string
-		slug       string
-		cwd        string
-		createdAt  time.Time
-		messages   []string
-		sourceFile = path
-	)
-
-	scanner := bufio.NewScanner(file)
-	buffer := make([]byte, 0, 1024*1024)
-	scanner.Buffer(buffer, 10*1024*1024)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" {
-			continue
-		}
-		var ev event
-		if err := json.Unmarshal([]byte(line), &ev); err != nil {
-			continue
-		}
-		if sessionID == "" {
-			sessionID = ev.SessionID
-		}
-		if slug == "" {
-			slug = ev.Slug
-		}
-		if cwd == "" {
-			cwd = ev.CWD
-		}
-		if ts, ok := parseEventTime(ev.Timestamp); ok {
-			if createdAt.IsZero() || ts.Before(createdAt) {
-				createdAt = ts
-			}
-		}
-		switch ev.Type {
-		case "user":
-			text := extractContent(ev.Message)
-			if text != "" {
-				messages = append(messages, "## user\n\n"+text)
-			}
-		case "assistant":
-			text := extractContent(ev.Message)
-			if text != "" {
-				messages = append(messages, "## assistant\n\n"+text)
-			}
-		}
-	}
-	if err := scanner.Err(); err != nil {
-		return domain.PipelineFragment{}, fmt.Errorf("scan session file: %w", err)
-	}
-
-	if sessionID == "" {
-		sessionID = strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
-	}
-	if slug == "" {
-		slug = sessionID
-	}
-
-	title := "Claude session: " + slug
-	meta := map[string]any{
-		"session_id":  sessionID,
-		"slug":        slug,
-		"cwd":         cwd,
-		"source_file": sourceFile,
-	}
-	if createdAt.IsZero() {
-		info, err := os.Stat(path)
-		if err == nil {
-			createdAt = info.ModTime().UTC()
-		} else {
-			createdAt = time.Now().UTC()
-		}
-	}
-
-	content := strings.Join(messages, "\n\n")
-	if content == "" {
-		return domain.PipelineFragment{}, nil
-	}
-
-	canonicalPath := filepath.ToSlash(filepath.Join("fragments", "chats", "claude", createdAt.Format("2006-01-02"), sessionID))
-	return domain.PipelineFragment{
-		Source:        "claude",
-		SourceType:    "chat",
-		SourceID:      sessionID,
-		Title:         title,
-		Content:       content,
-		CreatedAt:     createdAt.UTC(),
-		Metadata:      meta,
-		CanonicalPath: canonicalPath,
-	}, nil
-}
-
-func extractContent(message map[string]any) string {
-	if message == nil {
-		return ""
-	}
-	raw, ok := message["content"]
-	if !ok {
-		return ""
-	}
-	switch content := raw.(type) {
-	case string:
-		return strings.TrimSpace(content)
-	case []any:
-		parts := make([]string, 0, len(content))
-		for _, block := range content {
-			blockMap, ok := block.(map[string]any)
-			if !ok {
-				continue
-			}
-			if blockMap["type"] == "text" {
-				if text, ok := blockMap["text"].(string); ok && strings.TrimSpace(text) != "" {
-					parts = append(parts, text)
-				}
-			}
-		}
-		return strings.TrimSpace(strings.Join(parts, "\n"))
-	default:
-		return ""
-	}
-}
-
-func parseEventTime(raw string) (time.Time, bool) {
-	if strings.TrimSpace(raw) == "" {
-		return time.Time{}, false
-	}
-	ts, err := time.Parse(time.RFC3339, raw)
-	if err == nil {
-		return ts.UTC(), true
-	}
-	return time.Time{}, false
 }

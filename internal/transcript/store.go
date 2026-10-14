@@ -88,6 +88,9 @@ func Open(root string) (*Store, error) {
 		return nil, errors.New("transcript: cannot inspect private schema")
 	}
 	allowed := map[string]bool{"transcripts": true, "transcript_search": true, "transcript_search_data": true, "transcript_search_idx": true, "transcript_search_content": true, "transcript_search_docsize": true, "transcript_search_config": true}
+	for _, name := range derivedTables {
+		allowed[name] = true
+	}
 	for rows.Next() {
 		var name string
 		if err := rows.Scan(&name); err != nil {
@@ -118,6 +121,10 @@ CREATE VIRTUAL TABLE IF NOT EXISTS transcript_search USING fts5(id UNINDEXED, ti
 		_ = db.Close()
 		return nil, errors.New("transcript: cannot initialize private database")
 	}
+	if err := initDerived(db); err != nil {
+		_ = db.Close()
+		return nil, errors.New("transcript: cannot initialize derived tables")
+	}
 	return st, nil
 }
 
@@ -137,6 +144,9 @@ func (s *Store) Accept(ctx context.Context, registration string, in domain.Pipel
 	}
 	if err := ctx.Err(); err != nil {
 		return "", err
+	}
+	if in.Detail != nil {
+		return s.acceptDetail(ctx, registration, in)
 	}
 	if !valid(in) || strings.TrimSpace(registration) == "" {
 		return "", errors.New("transcript: source identity and text are required")
@@ -264,4 +274,97 @@ func checkParents(path string) error {
 		}
 	}
 	return nil
+}
+
+// acceptDetail persists a segment's structured turns, tool calls, usage and
+// cursor together with its searchable text, in one transaction. The searchable
+// text is regenerated from the stored turns, so an incremental parse that only
+// saw appended lines still yields the whole session's text.
+func (s *Store) acceptDetail(ctx context.Context, registration string, in domain.PipelineFragment) (Outcome, error) {
+	if strings.TrimSpace(registration) == "" || strings.TrimSpace(in.Source) == "" || strings.TrimSpace(in.SourceID) == "" {
+		return "", errors.New("transcript: source identity is required")
+	}
+	if len(in.Attachments) != 0 {
+		return "", ErrAttachments
+	}
+	if err := s.checkOwnership(); err != nil {
+		return "", err
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return "", errors.New("transcript: cannot begin private acceptance")
+	}
+	defer tx.Rollback()
+	segment := in.SourceIdentity.SegmentKey
+	pk := sessionPK(registration, in.Source, in.SourceID, segment)
+	var known int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM tx_sessions WHERE session_pk = ?`, pk).Scan(&known); err != nil {
+		return "", errors.New("transcript: cannot read private session")
+	}
+	if _, err := applyDetail(ctx, tx, registration, in.Source, in.SourceID, segment, in.Detail); err != nil {
+		return "", errors.New("transcript: cannot persist derived transcript data")
+	}
+	content, truncated, err := rebuildContent(ctx, tx, pk)
+	if err != nil {
+		return "", errors.New("transcript: cannot rebuild searchable text")
+	}
+	outcome := Skipped
+	if known == 0 {
+		outcome = Inserted
+	}
+	if content != "" {
+		if in.Detail.Incremental {
+			// Appended lines carry no header facts; keep the record's original ones.
+			var base domain.PipelineFragment
+			var raw string
+			if err := tx.QueryRowContext(ctx, `SELECT material_json FROM transcripts WHERE id = ?`, pk).Scan(&raw); err == nil {
+				if json.Unmarshal([]byte(raw), &base) == nil {
+					in.Title, in.Metadata, in.CreatedAt, in.CanonicalPath, in.SourceIdentity = base.Title, base.Metadata, base.CreatedAt, base.CanonicalPath, base.SourceIdentity
+				}
+			}
+		}
+		in.Content = content
+		if truncated {
+			meta := map[string]any{}
+			for k, v := range in.Metadata {
+				meta[k] = v
+			}
+			meta["search_text_truncated"] = true
+			in.Metadata = meta
+		}
+		clean, material, err := sanitize(in)
+		if err != nil {
+			return "", err
+		}
+		contentDigest := digest(material)
+		var previous string
+		err = tx.QueryRowContext(ctx, `SELECT content_digest FROM transcripts WHERE id = ?`, pk).Scan(&previous)
+		switch {
+		case errors.Is(err, sql.ErrNoRows):
+			outcome = Inserted
+		case err != nil:
+			return "", errors.New("transcript: cannot read private record")
+		case previous == contentDigest:
+			outcome = Skipped
+		default:
+			outcome = Updated
+		}
+		if previous != contentDigest {
+			if _, err := tx.ExecContext(ctx, `INSERT INTO transcripts VALUES (?, ?, 1, ?, ?, ?)
+ON CONFLICT(id) DO UPDATE SET content_digest=excluded.content_digest, redaction_version=excluded.redaction_version,
+material_json=excluded.material_json, title=excluded.title, content=excluded.content`, pk, contentDigest, string(material), clean.Title, clean.Content); err != nil {
+				return "", errors.New("transcript: cannot persist redacted record")
+			}
+			if _, err := tx.ExecContext(ctx, `DELETE FROM transcript_search WHERE id = ?`, pk); err != nil {
+				return "", errors.New("transcript: cannot update private index")
+			}
+			if _, err := tx.ExecContext(ctx, `INSERT INTO transcript_search VALUES (?, ?, ?)`, pk, clean.Title, clean.Content); err != nil {
+				return "", errors.New("transcript: cannot index redacted record")
+			}
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return "", errors.New("transcript: cannot commit private record")
+	}
+	return outcome, nil
 }
