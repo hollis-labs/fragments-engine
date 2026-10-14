@@ -18,6 +18,12 @@ import type {
   Route,
   SearchResult,
 } from './types'
+import type {
+  ChatDetail,
+  ChatFacets,
+  ChatSessionPage,
+  ChatStatus,
+} from './chats'
 import {
   normalizeFragment,
   normalizeFragmentBrowseItem,
@@ -1449,11 +1455,85 @@ export async function purgeQueue(input: QueueFailedActionInput): Promise<QueueSt
   return mapQueueStats(data.stats)
 }
 
+// Owner-only transcript routes. No credential is required yet; the token slot
+// is the seam for a bearer header and is held in memory only, never storage.
+let transcriptToken = ''
+
+export function setTranscriptToken(token: string) {
+  transcriptToken = token
+}
+
+function transcriptHeaders(): Record<string, string> {
+  return transcriptToken ? { Authorization: `Bearer ${transcriptToken}` } : {}
+}
+
+/** Returns null when the route set is disabled (404) so the UI can hide the page. */
+export async function fetchTranscriptStatus(options?: ApiRequestOptions): Promise<ChatStatus | null> {
+  try {
+    return await apiFetch<ChatStatus>('/v1/transcripts/status', {
+      signal: options?.signal,
+      headers: transcriptHeaders(),
+    })
+  } catch (err) {
+    if (err instanceof ApiError && (err.status === 404 || err.status === 403)) return null
+    throw err
+  }
+}
+
+export interface FetchTranscriptSessionsParams {
+  q?: string
+  tool?: string
+  model?: string
+  project?: string
+  kind?: string
+  has_error?: string
+  since?: string
+  until?: string
+  sort?: string
+  order?: 'asc' | 'desc'
+  limit?: number
+  cursor?: string
+}
+
+export function fetchTranscriptSessions(
+  params: FetchTranscriptSessionsParams = {},
+  options?: ApiRequestOptions,
+): Promise<ChatSessionPage> {
+  return apiFetch<ChatSessionPage>(
+    '/v1/transcripts/sessions',
+    { signal: options?.signal, headers: transcriptHeaders() },
+    { ...params },
+  )
+}
+
+export function fetchTranscriptSession(
+  id: string,
+  params: { turn_offset?: number; turn_limit?: number } = {},
+  options?: ApiRequestOptions,
+): Promise<ChatDetail> {
+  return apiFetch<ChatDetail>(
+    `/v1/transcripts/sessions/${encodeURIComponent(id)}`,
+    { signal: options?.signal, headers: transcriptHeaders() },
+    { ...params },
+  )
+}
+
+export function fetchTranscriptFacets(options?: ApiRequestOptions): Promise<ChatFacets> {
+  return apiFetch<ChatFacets>('/v1/transcripts/facets', {
+    signal: options?.signal,
+    headers: transcriptHeaders(),
+  })
+}
+
 export const apiClient = {
   fetchInbox,
   fetchInboxEntities,
   fetchInboxEntityItems,
   fetchBrowseFragments,
+  fetchTranscriptStatus,
+  fetchTranscriptSessions,
+  fetchTranscriptSession,
+  fetchTranscriptFacets,
   fetchReaderItems,
   fetchReaderItem,
   executeReaderCommand,

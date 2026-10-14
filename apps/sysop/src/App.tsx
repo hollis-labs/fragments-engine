@@ -1,8 +1,10 @@
+import { useEffect, useState } from 'react'
 import { BrowserRouter, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import {
   Activity,
   BookOpen,
   Cog,
+  MessagesSquare,
   Download,
   Files,
   LayoutDashboard,
@@ -20,18 +22,23 @@ import ActivityPage from '@/pages/ActivityPage'
 import SettingsPage from '@/pages/SettingsPage'
 import ReaderPage from '@/pages/ReaderPage'
 import ReaderDetailPage from '@/pages/ReaderDetailPage'
+import ChatsPage from '@/pages/ChatsPage'
+import { useApi } from '@/hooks/useApi'
 
 interface NavDest {
   path: string
   label: string
   icon: React.ReactNode
   footer?: boolean
+  /** Hidden unless the owner-only transcript routes are enabled. */
+  requiresTranscripts?: boolean
 }
 
 const NAV_DESTS: NavDest[] = [
   { path: '/operations', label: 'Operations', icon: <LayoutDashboard className="h-4 w-4" /> },
   { path: '/reader', label: 'Reader', icon: <BookOpen className="h-4 w-4" /> },
   { path: '/library', label: 'Library', icon: <Files className="h-4 w-4" /> },
+  { path: '/chats', label: 'Chats', icon: <MessagesSquare className="h-4 w-4" />, requiresTranscripts: true },
   { path: '/ingest', label: 'Ingest', icon: <Download className="h-4 w-4" /> },
   { path: '/entities', label: 'Entities', icon: <Tags className="h-4 w-4" /> },
   { path: '/routing', label: 'Routing', icon: <Waypoints className="h-4 w-4" /> },
@@ -42,8 +49,20 @@ const NAV_DESTS: NavDest[] = [
 export function AppShell() {
   const navigate = useNavigate()
   const location = useLocation()
+  const api = useApi()
+  const [transcriptsEnabled, setTranscriptsEnabled] = useState<boolean | null>(null)
 
-  const navItems: NavRailItem[] = NAV_DESTS.map((dest) => ({
+  // The Chats page only exists when the API reports the route set enabled.
+  useEffect(() => {
+    api
+      .fetchTranscriptStatus()
+      .then((status) => setTranscriptsEnabled(Boolean(status?.enabled && status.available)))
+      .catch(() => setTranscriptsEnabled(false))
+  }, [api])
+
+  const navItems: NavRailItem[] = NAV_DESTS.filter(
+    (dest) => !dest.requiresTranscripts || transcriptsEnabled === true,
+  ).map((dest) => ({
     key: dest.path,
     label: dest.label,
     icon: dest.icon,
@@ -64,6 +83,7 @@ export function AppShell() {
             <Route path="/reader" element={<ReaderPage />} />
             <Route path="/reader/:fragmentId" element={<ReaderDetailPage />} />
             <Route path="/library" element={<LibraryPage />} />
+            {transcriptsEnabled !== false && <Route path="/chats" element={<ChatsPage />} />}
             <Route path="/ingest" element={<IngestPage />} />
             <Route path="/entities" element={<EntitiesPage />} />
             <Route path="/routing" element={<RoutingPage />} />
