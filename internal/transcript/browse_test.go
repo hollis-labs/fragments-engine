@@ -158,6 +158,9 @@ func TestEnrichmentIsOptionalAndJoinsWhenPresent(t *testing.T) {
 	if len(f.Tags) != 2 || f.Tags[0] != "alpha" {
 		t.Fatalf("facet tags: %v", f.Tags)
 	}
+	if len(f.TagCounts) != 2 || f.TagCounts[0] != (TagCount{"alpha", 1}) || f.Enriched != 1 {
+		t.Fatalf("tag counts / enriched: %+v %d", f.TagCounts, f.Enriched)
+	}
 }
 
 func TestSearchRanksFirstThenFillsSnippetsInRankOrder(t *testing.T) {

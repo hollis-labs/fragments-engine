@@ -19,7 +19,7 @@ function setup(
   const client = {
     ...apiClient,
     fetchTranscriptSessions,
-    fetchTranscriptFacets: vi.fn().mockResolvedValue({ tools: ['claude', 'codex'], models: [], project_count: 835, total: 7 }),
+    fetchTranscriptFacets: vi.fn().mockResolvedValue({ tools: ['claude', 'codex'], models: [], project_count: 835, total: 7, enriched: 4, tag_counts: [{ tag: 'ops', count: 3 }, { tag: 'infra', count: 1 }] }),
     fetchTranscriptProjects,
     fetchTranscriptStatus: vi.fn().mockResolvedValue(status),
   } as unknown as typeof apiClient
@@ -116,5 +116,54 @@ describe('ChatsPage', () => {
     await waitFor(() => expect(screen.getByText('decision')).toBeTruthy())
     expect(screen.getByText('worker').tagName).toBe('MARK')
     expect((await screen.findByRole('status')).textContent).toMatch(/embedding server/)
+  })
+
+  it('offers an enriched-only quick filter and tag chips with counts', async () => {
+    const { fetchTranscriptSessions: fetchSessions } = setup()
+    await screen.findByText('first synthetic')
+    fireEvent.click(await screen.findByRole('button', { name: /Enriched only \(4\)/ }))
+    await waitFor(() => expect(fetchSessions.mock.calls.at(-1)?.[0]).toMatchObject({ has_enrichment: 'true' }))
+    fireEvent.click(screen.getByRole('button', { name: /ops 3/ }))
+    await waitFor(() => expect(fetchSessions.mock.calls.at(-1)?.[0]).toMatchObject({ tag: 'ops' }))
+    fireEvent.click(screen.getByRole('button', { name: /ops 3/ }))
+    await waitFor(() => expect(fetchSessions.mock.calls.at(-1)?.[0].tag).toBe(''))
+  })
+
+  it('saves a named view and applies it again, search and mode included', async () => {
+    const { fetchTranscriptSessions: fetchSessions } = setup()
+    await screen.findByText('first synthetic')
+    fireEvent.change(screen.getByLabelText('Search mode'), { target: { value: 'summary' } })
+    fireEvent.change(screen.getByLabelText('Search chats'), { target: { value: 'quartz' } })
+    fireEvent.change(screen.getByLabelText('Tool'), { target: { value: 'codex' } })
+    await waitFor(() => expect(fetchSessions.mock.calls.at(-1)?.[0]).toMatchObject({ q: 'quartz', tool: 'codex' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save view' }))
+    fireEvent.change(screen.getByLabelText('Preset name'), { target: { value: 'Quartz work' } })
+    fireEvent.keyDown(screen.getByLabelText('Preset name'), { key: 'Enter' })
+    expect(JSON.parse(localStorage.getItem('sysop:chats:presets:v1') ?? '[]')[0]).toMatchObject({
+      name: 'Quartz work', filters: { search: 'quartz', mode: 'summary', tool: 'codex' },
+    })
+    fireEvent.change(screen.getByLabelText('Tool'), { target: { value: '' } })
+    fireEvent.change(screen.getByLabelText('Search mode'), { target: { value: 'text' } })
+    fireEvent.change(screen.getByLabelText('Presets'), { target: { value: 'Quartz work' } })
+    await waitFor(() => expect(fetchSessions.mock.calls.at(-1)?.[0]).toMatchObject({ q: 'quartz', mode: 'summary', tool: 'codex' }))
+    expect((screen.getByLabelText('Search chats') as HTMLInputElement).value).toBe('quartz')
+  })
+
+  it('navigates with j/k, opens with Enter, and focuses search with /', async () => {
+    setup({ items: [row('a'.repeat(64), 'first synthetic'), row('b'.repeat(64), 'second synthetic')] })
+    await screen.findByText('first synthetic')
+    fireEvent.keyDown(document.body, { key: 'j' })
+    expect(document.querySelector('tr[data-selected="true"]')?.textContent).toContain('first synthetic')
+    fireEvent.keyDown(document.body, { key: 'j' })
+    expect(document.querySelector('tr[data-selected="true"]')?.textContent).toContain('second synthetic')
+    fireEvent.keyDown(document.body, { key: 'k' })
+    expect(document.querySelector('tr[data-selected="true"]')?.textContent).toContain('first synthetic')
+    fireEvent.keyDown(document.body, { key: 'Escape' })
+    expect(document.querySelector('tr[data-selected="true"]')).toBeNull()
+    fireEvent.keyDown(document.body, { key: '/' })
+    expect(document.activeElement).toBe(screen.getByLabelText('Search chats'))
+    // Typing j in the search box must not move the selection.
+    fireEvent.keyDown(screen.getByLabelText('Search chats'), { key: 'j' })
+    expect(document.querySelector('tr[data-selected="true"]')).toBeNull()
   })
 })

@@ -501,7 +501,17 @@ type Facets struct {
 	// project suggestions route to find them.
 	ProjectCount int      `json:"project_count"`
 	Tags         []string `json:"tags"`
-	Total        int      `json:"total"`
+	// TagCounts is Tags with how many enriched sessions carry each topic.
+	TagCounts []TagCount `json:"tag_counts"`
+	// Enriched is how many sessions have a current ok Tier 1 result.
+	Enriched int `json:"enriched"`
+	Total    int `json:"total"`
+}
+
+// TagCount is an enrichment topic and the sessions that carry it.
+type TagCount struct {
+	Tag   string `json:"tag"`
+	Count int    `json:"count"`
 }
 
 func (s *Store) distinct(ctx context.Context, column string) []string {
@@ -521,9 +531,9 @@ func (s *Store) distinct(ctx context.Context, column string) []string {
 }
 
 // enrichmentTags lists the most used topics across current enrichments.
-func (s *Store) enrichmentTags(ctx context.Context) []string {
-	out := []string{}
-	rows, err := s.db.QueryContext(ctx, `SELECT j.value FROM tx_enrichment en, json_each(COALESCE(NULLIF(en.result_json, ''), '{}'), '$.topics') j
+func (s *Store) enrichmentTags(ctx context.Context) []TagCount {
+	out := []TagCount{}
+	rows, err := s.db.QueryContext(ctx, `SELECT j.value, COUNT(*) FROM tx_enrichment en, json_each(COALESCE(NULLIF(en.result_json, ''), '{}'), '$.topics') j
  WHERE en.tier = 1 AND en.status = 'ok' AND en.id = (SELECT e.id FROM tx_enrichment e WHERE e.session_pk = en.session_pk AND e.tier = 1 AND e.status = 'ok' ORDER BY e.created_at DESC, e.id DESC LIMIT 1)
  GROUP BY j.value ORDER BY COUNT(*) DESC, j.value LIMIT 200`)
 	if err != nil {
@@ -531,9 +541,9 @@ func (s *Store) enrichmentTags(ctx context.Context) []string {
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var v string
-		if rows.Scan(&v) == nil {
-			out = append(out, v)
+		var t TagCount
+		if rows.Scan(&t.Tag, &t.Count) == nil {
+			out = append(out, t)
 		}
 	}
 	return out
@@ -545,7 +555,12 @@ func (s *Store) SessionFacets(ctx context.Context) (Facets, error) {
 	}
 	f := Facets{Tools: s.distinct(ctx, "tool"), Models: s.distinct(ctx, "model")}
 	_ = s.db.QueryRowContext(ctx, `SELECT COUNT(DISTINCT cwd) FROM tx_sessions WHERE cwd <> ''`).Scan(&f.ProjectCount)
-	f.Tags = s.enrichmentTags(ctx)
+	f.TagCounts = s.enrichmentTags(ctx)
+	f.Tags = make([]string, len(f.TagCounts))
+	for i, t := range f.TagCounts {
+		f.Tags[i] = t.Tag
+	}
+	_ = s.db.QueryRowContext(ctx, `SELECT COUNT(DISTINCT session_pk) FROM tx_enrichment WHERE tier = 1 AND status = 'ok'`).Scan(&f.Enriched)
 	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM tx_sessions`).Scan(&f.Total); err != nil {
 		return Facets{}, errors.New("transcript: cannot count sessions")
 	}
