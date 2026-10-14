@@ -210,7 +210,7 @@ export function ChatDetailDialog({ sessionId, onClose, onOpenSession }: ChatDeta
                 {session.project && <span title={session.project}>{projectName(session.project)}</span>}
                 {session.git_branch && <span>{session.git_branch}</span>}
                 {session.started_at && <span>{formatShortDate(session.started_at)}</span>}
-                <span>{detail.turn_total} turns</span>
+                <span>{detail.turn_total} turn{detail.turn_total === 1 ? '' : 's'}</span>
               </div>
               <div className="mx-4 grid grid-cols-2 gap-2 rounded border border-border bg-panel-2/40 p-3 text-[12px] sm:grid-cols-5" aria-label="Usage totals">
                 {[
@@ -247,7 +247,7 @@ export function ChatDetailDialog({ sessionId, onClose, onOpenSession }: ChatDeta
                           {node.agent_type || 'subagent'} · {node.title || node.id.slice(0, 8)}
                         </button>
                         <span className="ml-2 text-text-subtle">
-                          {node.turns} turns · {formatTokens(node.tokens)} tokens
+                          {node.turns} turn{node.turns === 1 ? '' : 's'} · {formatTokens(node.tokens)} tokens
                         </span>
                       </li>
                     ))}
