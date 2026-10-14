@@ -2,7 +2,9 @@ package ingest
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"log"
 	"sort"
 	"time"
 
@@ -118,11 +120,18 @@ func (p *Pipeline) RunOnce(ctx context.Context, ingestCfg config.IngestConfig) (
 		}
 	}
 	startedAt := p.now().UTC()
-	collected, err := source.Collect(ctx, ingestCfg)
+	skips := &domain.SkipCollector{}
+	collected, err := source.Collect(domain.WithSkipCollector(ctx, skips), ingestCfg)
 	if err != nil {
 		if private {
 			if ctx.Err() != nil {
 				return domain.IngestRun{}, ctx.Err()
+			}
+			// Source errors can quote record content, so only a CollectionError
+			// (fixed class, path hash, line, offset) may be surfaced.
+			var diag *domain.CollectionError
+			if errors.As(err, &diag) {
+				return domain.IngestRun{}, fmt.Errorf("transcript: collection failed (%s)", diag)
 			}
 			return domain.IngestRun{}, fmt.Errorf("transcript: collection failed")
 		}
@@ -133,6 +142,13 @@ func (p *Pipeline) RunOnce(ctx context.Context, ingestCfg config.IngestConfig) (
 		Name:      ingestCfg.Name,
 		Kind:      ingestCfg.Kind,
 		StartedAt: startedAt,
+	}
+	if reasons := skips.ByClass(); len(reasons) > 0 && private {
+		run.SkipReasons = reasons
+		for class, n := range reasons {
+			run.Skipped += n
+			log.Printf("ingest %s: skipped %d input(s) class=%s", ingestCfg.Name, n, class)
+		}
 	}
 	now := p.now().UTC()
 	for _, materialCandidate := range collected {

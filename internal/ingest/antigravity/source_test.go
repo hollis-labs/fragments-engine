@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/hollis-labs/fragments-engine/internal/config"
+	"github.com/hollis-labs/fragments-engine/internal/domain"
 )
 
 func pb(field int, value []byte) []byte {
@@ -153,8 +154,10 @@ func TestPendingWALRefusedWithoutCheckpoint(t *testing.T) {
 	if err != nil || len(wal) == 0 {
 		t.Fatal("fixture did not create pending WAL")
 	}
-	if _, err := (Source{}).Collect(context.Background(), config.IngestConfig{Source: config.IngestSource{Root: root}}); !errors.Is(err, ErrSnapshotRequired) {
-		t.Fatalf("pending WAL ignored: %v", err)
+	skips := &domain.SkipCollector{}
+	got, err := (Source{}).Collect(domain.WithSkipCollector(context.Background(), skips), config.IngestConfig{Source: config.IngestSource{Root: root}})
+	if err != nil || len(got) != 0 || skips.ByClass()["pending_wal"] != 1 {
+		t.Fatalf("pending WAL not skipped and counted: %d %v %v", len(got), err, skips.ByClass())
 	}
 	after, err := os.ReadFile(path + "-wal")
 	if err != nil || sha256.Sum256(wal) != sha256.Sum256(after) {
@@ -218,5 +221,53 @@ func TestCheckpointedWALDatabaseSupported(t *testing.T) {
 	after, err := os.ReadFile(path)
 	if err != nil || sha256.Sum256(before) != sha256.Sum256(after) {
 		t.Fatal("checkpointed source changed")
+	}
+}
+
+// One hot database must not block the archive: it is skipped and counted while
+// brain artifacts and checkpointed databases still import.
+func TestPendingWALSkipsOnlyThatDatabase(t *testing.T) {
+	root := t.TempDir()
+	okPath := fixtureDB(t, root, 0, pb(19, pb(2, []byte("synthetic checkpointed text"))))
+	db, err := sql.Open("sqlite", okPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`PRAGMA journal_mode=WAL`); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(okPath, filepath.Join(root, "conversations", "ok.db")); err != nil {
+		t.Fatal(err)
+	}
+	hotPath := fixtureDB(t, root, 0, pb(19, pb(2, []byte("synthetic hot text"))))
+	hot, err := sql.Open("sqlite", hotPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer hot.Close()
+	if _, err := hot.Exec(`PRAGMA journal_mode=WAL; INSERT INTO steps VALUES(3,14,0,x'00')`); err != nil {
+		t.Fatal(err)
+	}
+	brainPath := filepath.Join(root, "brain", "synthetic", "notes.md")
+	if err := os.MkdirAll(filepath.Dir(brainPath), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(brainPath, []byte("synthetic brain text"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	skips := &domain.SkipCollector{}
+	got, err := (Source{}).Collect(domain.WithSkipCollector(context.Background(), skips), config.IngestConfig{Source: config.IngestSource{Root: root}})
+	if err != nil || len(got) != 2 {
+		t.Fatalf("collect: %d %v", len(got), err)
+	}
+	keys := []string{got[0].SourceIdentity.SegmentKey, got[1].SourceIdentity.SegmentKey}
+	if keys[0] != "conversations/ok.db" || keys[1] != "brain/synthetic/notes.md" {
+		t.Fatalf("wrong inputs imported: %v", keys)
+	}
+	if skips.ByClass()["pending_wal"] != 1 || len(skips.Skips) != 1 || skips.Skips[0].PathHash != domain.HashPath("conversations/synthetic.db") {
+		t.Fatalf("skip accounting: %+v", skips.Skips)
 	}
 }

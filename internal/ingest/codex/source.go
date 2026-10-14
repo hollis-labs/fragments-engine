@@ -5,6 +5,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -19,6 +20,14 @@ import (
 
 const kind = "codex_sessions"
 
+// maxRetainedText bounds the message text kept from one rollout. It matches the
+// private store's per-record cap, which is the real limit: rollouts are mostly
+// tool output and images, so raw file size says little about what is kept.
+var maxRetainedText = 16 << 20 // var so tests can lower it
+
+// defaultMaxFileBytes is a hard ceiling on a rollout read, not a content rule.
+const defaultMaxFileBytes = 1 << 30
+
 type Source struct{}
 
 func (Source) Kind() string { return kind }
@@ -28,7 +37,7 @@ func (Source) Collect(ctx context.Context, cfg config.IngestConfig) ([]domain.Pi
 	if err != nil {
 		return nil, err
 	}
-	maxBytes := int64(50 * 1024 * 1024)
+	maxBytes := int64(defaultMaxFileBytes)
 	if rules.MaxFileSizeMB > 0 {
 		maxBytes = int64(rules.MaxFileSizeMB) * 1024 * 1024
 	}
@@ -68,19 +77,29 @@ func (Source) Collect(ctx context.Context, cfg config.IngestConfig) ([]domain.Pi
 		if err != nil {
 			return nil, fmt.Errorf("inspect codex session: %w", err)
 		}
-		if !info.Mode().IsRegular() || info.Size() > maxBytes {
-			continue
-		}
-		fragment, err := parseSession(ctx, path, info.ModTime(), maxBytes)
-		if err != nil {
-			return nil, err
-		}
-		if fragment.Content == "" {
+		if !info.Mode().IsRegular() {
 			continue
 		}
 		rel, err := filepath.Rel(root, path)
 		if err != nil {
 			return nil, fmt.Errorf("codex session locator: %w", err)
+		}
+		rel = filepath.ToSlash(rel)
+		if info.Size() > maxBytes {
+			domain.NoteSkip(ctx, "size_limit", rel)
+			continue
+		}
+		fragment, err := parseSession(ctx, path, info.ModTime(), maxBytes)
+		if err != nil {
+			var diag *domain.CollectionError
+			if errors.As(err, &diag) && diag.Class == "size_limit" {
+				domain.NoteSkip(ctx, diag.Class, rel)
+				continue
+			}
+			return nil, domain.AttributeFile(err, rel)
+		}
+		if fragment.Content == "" {
+			continue
 		}
 		// A thread can have multiple physical rollout files (fork/revert histories).
 		// Keep each file distinct without treating its metadata as authority.
@@ -102,6 +121,7 @@ type sessionMeta struct {
 	CWD            string `json:"cwd"`
 	CLIVersion     string `json:"cli_version"`
 	ParentThreadID string `json:"parent_thread_id"`
+	ForkedFromID   string `json:"forked_from_id"`
 }
 type contentBlock struct {
 	Type string `json:"type"`
@@ -128,19 +148,26 @@ func parseSession(ctx context.Context, path string, modTime time.Time, maxBytes 
 	var responses, events []textMessage
 	var created time.Time
 	lineNo := 0
+	var retained int
+	var lineStart, next int64 // byte offsets: current line start, following line start
+	fail := func(class string) error {
+		return &domain.CollectionError{Class: class, Line: lineNo, Offset: lineStart}
+	}
 	for scanner.Scan() {
 		if err := ctx.Err(); err != nil {
 			return domain.PipelineFragment{}, err
 		}
 		lineNo++
 		raw := scanner.Bytes()
+		lineStart = next
+		next += int64(len(raw)) + 1
 		if len(strings.TrimSpace(string(raw))) == 0 {
 			continue
 		}
 		var record line
 		// Never include a decoder error or raw record in diagnostics.
 		if json.Unmarshal(raw, &record) != nil || record.Type == "" {
-			return domain.PipelineFragment{}, fmt.Errorf("invalid codex record at line %d", lineNo)
+			return domain.PipelineFragment{}, fail("invalid_record")
 		}
 		if ts, err := time.Parse(time.RFC3339Nano, record.Timestamp); err == nil && (created.IsZero() || ts.Before(created)) {
 			created = ts
@@ -149,10 +176,19 @@ func parseSession(ctx context.Context, path string, modTime time.Time, maxBytes 
 		case "session_meta":
 			var next sessionMeta
 			if json.Unmarshal(record.Payload, &next) != nil || next.ID == "" {
-				return domain.PipelineFragment{}, fmt.Errorf("invalid codex session metadata at line %d", lineNo)
+				return domain.PipelineFragment{}, fail("invalid_session_meta")
 			}
 			if meta.ID != "" && meta.ID != next.ID {
-				return domain.PipelineFragment{}, fmt.Errorf("conflicting codex session metadata at line %d", lineNo)
+				// A forked rollout replays its parent's session_meta after its own.
+				// The first record names this file's thread; a later record for
+				// another thread is ancestry, never a competing identity.
+				if meta.ParentThreadID == "" {
+					meta.ParentThreadID = next.ID
+				}
+				continue
+			}
+			if next.ParentThreadID == "" {
+				next.ParentThreadID = next.ForkedFromID
 			}
 			meta = next
 			if ts, err := time.Parse(time.RFC3339Nano, meta.Timestamp); err == nil {
@@ -161,7 +197,7 @@ func parseSession(ctx context.Context, path string, modTime time.Time, maxBytes 
 		case "response_item":
 			var msg message
 			if json.Unmarshal(record.Payload, &msg) != nil {
-				return domain.PipelineFragment{}, fmt.Errorf("invalid codex response at line %d", lineNo)
+				return domain.PipelineFragment{}, fail("invalid_response_item")
 			}
 			if msg.Type != "message" || (msg.Role != "user" && msg.Role != "assistant") {
 				continue
@@ -173,12 +209,16 @@ func parseSession(ctx context.Context, path string, modTime time.Time, maxBytes 
 				}
 			}
 			if len(parts) > 0 {
-				responses = append(responses, textMessage{msg.Role, strings.Join(parts, "\n")})
+				text := strings.Join(parts, "\n")
+				if retained += len(text); retained > maxRetainedText {
+					return domain.PipelineFragment{}, fail("size_limit")
+				}
+				responses = append(responses, textMessage{msg.Role, text})
 			}
 		case "event_msg":
 			var msg message
 			if json.Unmarshal(record.Payload, &msg) != nil {
-				return domain.PipelineFragment{}, fmt.Errorf("invalid codex event at line %d", lineNo)
+				return domain.PipelineFragment{}, fail("invalid_event")
 			}
 			role := ""
 			switch msg.Type {
@@ -188,18 +228,24 @@ func parseSession(ctx context.Context, path string, modTime time.Time, maxBytes 
 				role = "assistant"
 			}
 			if role != "" && strings.TrimSpace(msg.Message) != "" {
+				if retained += len(msg.Message); retained > maxRetainedText {
+					return domain.PipelineFragment{}, fail("size_limit")
+				}
 				events = append(events, textMessage{role, msg.Message})
 			}
 		}
 	}
 	if scanner.Err() != nil {
-		return domain.PipelineFragment{}, fmt.Errorf("cannot scan codex session")
+		// The line that overflowed the scanner starts at the running offset.
+		lineNo++
+		lineStart = next
+		return domain.PipelineFragment{}, fail("unreadable_line")
 	}
 	if limited.N == 0 {
-		return domain.PipelineFragment{}, fmt.Errorf("codex session exceeds size limit")
+		return domain.PipelineFragment{}, &domain.CollectionError{Class: "size_limit", Offset: maxBytes}
 	}
 	if meta.ID == "" {
-		return domain.PipelineFragment{}, fmt.Errorf("codex session metadata is required")
+		return domain.PipelineFragment{}, &domain.CollectionError{Class: "missing_session_meta"}
 	}
 	// Legacy event messages duplicate response items; prefer response material.
 	messages := responses

@@ -114,8 +114,8 @@ func runIngestRun(args []string) error {
 		return err
 	}
 	for _, run := range runs {
-		fmt.Printf("%s (%s): inserted=%d skipped=%d started=%s finished=%s\n",
-			run.Name, run.Kind, run.Inserted, run.Skipped,
+		fmt.Printf("%s (%s): inserted=%d skipped=%d%s started=%s finished=%s\n",
+			run.Name, run.Kind, run.Inserted, run.Skipped, skipReasons(run.SkipReasons),
 			run.StartedAt.Format("2006-01-02T15:04:05Z07:00"),
 			run.FinishedAt.Format("2006-01-02T15:04:05Z07:00"),
 		)
@@ -1829,4 +1829,22 @@ func truncateForCLI(v string, limit int) string {
 		return v
 	}
 	return v[:limit] + "..."
+}
+
+// skipReasons renders a run's per-class skip counts as " (class=n ...)", in a
+// stable order, or "" when the source skipped nothing.
+func skipReasons(reasons map[string]int) string {
+	if len(reasons) == 0 {
+		return ""
+	}
+	classes := make([]string, 0, len(reasons))
+	for class := range reasons {
+		classes = append(classes, class)
+	}
+	sort.Strings(classes)
+	parts := make([]string, 0, len(classes))
+	for _, class := range classes {
+		parts = append(parts, fmt.Sprintf("%s=%d", class, reasons[class]))
+	}
+	return " (" + strings.Join(parts, " ") + ")"
 }

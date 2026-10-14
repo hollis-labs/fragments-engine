@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/hollis-labs/fragments-engine/internal/config"
+	"github.com/hollis-labs/fragments-engine/internal/domain"
 )
 
 const syntheticRollout = `{"timestamp":"2026-10-09T01:00:00Z","type":"session_meta","payload":{"id":"synthetic-thread","session_id":"synthetic-root","timestamp":"2026-10-09T01:00:00Z","cwd":"/synthetic/project","cli_version":"synthetic"}}
@@ -82,8 +83,6 @@ func TestEventOnlyFallbackAndSafeMalformedRefusal(t *testing.T) {
 {"type":"event_msg","payload":{"type":"agent_message","message":"synthetic answer"}}`, false},
 		{"malformed", `password=synthetic-no-diagnostic`, true},
 		{"missing-meta", `{"type":"event_msg","payload":{"type":"user_message","message":"synthetic-no-diagnostic"}}`, true},
-		{"conflicting-meta", `{"type":"session_meta","payload":{"id":"one"}}
-{"type":"session_meta","payload":{"id":"two"}}`, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			root := t.TempDir()
@@ -118,5 +117,96 @@ func TestParserEnforcesReadBudget(t *testing.T) {
 	}
 	if _, err := parseSession(context.Background(), path, info.ModTime(), int64(len(syntheticRollout)-1)); err == nil {
 		t.Fatal("read beyond budget accepted")
+	}
+}
+
+// A forked rollout carries its own session_meta first and replays the parent's
+// second. The file keeps its own identity; the parent is recorded as ancestry.
+func TestForkedRolloutKeepsOwnIdentityAndRecordsParent(t *testing.T) {
+	raw := `{"timestamp":"2026-10-09T01:00:00Z","type":"session_meta","payload":{"id":"child-thread","forked_from_id":"parent-thread","timestamp":"2026-10-09T01:00:00Z"}}
+{"timestamp":"2026-10-09T00:00:00Z","type":"session_meta","payload":{"id":"parent-thread","timestamp":"2026-10-08T00:00:00Z"}}
+{"timestamp":"2026-10-09T01:00:02Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"synthetic question"}]}}
+`
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "rollout.jsonl"), []byte(raw), 0600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := (Source{}).Collect(context.Background(), config.IngestConfig{Source: config.IngestSource{Root: root}})
+	if err != nil || len(got) != 1 {
+		t.Fatalf("fork refused: %v", err)
+	}
+	if got[0].SourceID != "child-thread" || got[0].Metadata["parent_thread_id"] != "parent-thread" {
+		t.Fatal("fork identity or ancestry wrong")
+	}
+	if got[0].CreatedAt.Format("2006-01-02") != "2026-10-09" {
+		t.Fatalf("parent timestamp leaked into fork: %v", got[0].CreatedAt)
+	}
+}
+
+// Failures expose a class, a hash of the relative path, a line and a byte
+// offset, and nothing from the record.
+func TestCollectionFailuresCarrySanitizedDiagnostics(t *testing.T) {
+	long := strings.Repeat("x", 11*1024*1024)
+	for _, tc := range []struct {
+		name, raw, class string
+		line             int
+		offset           int64
+	}{
+		{"malformed", "{\"type\":\"session_meta\",\"payload\":{\"id\":\"a\"}}\npassword=synthetic-no-diagnostic\n", "invalid_record", 2, 45},
+		{"bad-meta", `{"type":"session_meta","payload":{"id":""}}` + "\n", "invalid_session_meta", 1, 0},
+		{"long-line", `{"type":"session_meta","payload":{"id":"a"}}` + "\n" + long + "\n", "unreadable_line", 2, 45},
+		{"no-meta", `{"type":"event_msg","payload":{"type":"user_message","message":"synthetic-no-diagnostic"}}` + "\n", "missing_session_meta", 0, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			if err := os.MkdirAll(filepath.Join(root, "sub"), 0700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(root, "sub", "rollout.jsonl"), []byte(tc.raw), 0600); err != nil {
+				t.Fatal(err)
+			}
+			_, err := (Source{}).Collect(context.Background(), config.IngestConfig{Source: config.IngestSource{Root: root}})
+			var diag *domain.CollectionError
+			if !errors.As(err, &diag) {
+				t.Fatalf("no diagnostic: %v", err)
+			}
+			if diag.Class != tc.class || diag.Line != tc.line || diag.Offset != tc.offset || diag.PathHash != domain.HashPath("sub/rollout.jsonl") {
+				t.Fatalf("diagnostic %+v", diag)
+			}
+			if strings.Contains(err.Error(), "synthetic") || strings.Contains(err.Error(), root) || strings.Contains(err.Error(), "rollout") {
+				t.Fatal("diagnostic leaks content or path")
+			}
+		})
+	}
+}
+
+// Over-cap inputs are skipped and counted, never silently dropped and never a
+// reason to abort the rest of the archive.
+func TestOverCapFilesAreSkippedAndCounted(t *testing.T) {
+	old := maxRetainedText
+	maxRetainedText = 64
+	defer func() { maxRetainedText = old }()
+	root := t.TempDir()
+	write := func(name, raw string) {
+		if err := os.WriteFile(filepath.Join(root, name), []byte(raw), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("ok.jsonl", `{"type":"session_meta","payload":{"id":"small"}}
+{"type":"event_msg","payload":{"type":"user_message","message":"short"}}
+`)
+	write("raw-big.jsonl", strings.Repeat("x", 1024*1024+1))
+	write("text-big.jsonl", `{"type":"session_meta","payload":{"id":"big"}}
+{"type":"event_msg","payload":{"type":"user_message","message":"`+strings.Repeat("y", 100)+`"}}
+`)
+	skips := &domain.SkipCollector{}
+	ctx := domain.WithSkipCollector(context.Background(), skips)
+	cfg := config.IngestConfig{Kind: kind, Source: config.IngestSource{Root: root}, Rules: map[string]any{"max_file_size_mb": 1}}
+	got, err := (Source{}).Collect(ctx, cfg)
+	if err != nil || len(got) != 1 || got[0].SourceID != "small" {
+		t.Fatalf("collect: %v %d", err, len(got))
+	}
+	if n := skips.ByClass()["size_limit"]; n != 2 {
+		t.Fatalf("skips = %v", skips.ByClass())
 	}
 }
