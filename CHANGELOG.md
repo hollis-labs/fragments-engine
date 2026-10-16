@@ -20,6 +20,9 @@ This file was backfilled from the git history as a good-faith summary, not an ex
 
 ### Changed
 
+- Adopt grouped `libs/mcp/plugin-mcp` v0.3.0, `libs/ui/ui-go` v0.1.0, `libs/core/util` v0.4.0 and `libs/llm/core` v0.2.0 with Tesseract v0.13.0 so the embedded recall graph resolves without retired module paths. Go 1.26.9 is now required.
+- Explicitly refuse scheduler pruning until the app-owned ingest fire transaction supports durable retention fences; terminal identities continue preventing replay.
+
 - Adopt published `libs/ui-go`, `libs/plugin-mcp`, `libs/util` and `substrate/llm-core` modules and Tesseract v0.11.0, replacing moved standalone imports without local module replacements.
 - Adapt the existing ingest scheduler to durable fire snapshots and fenced claim recovery. A source-schema migration adds scheduler fire and accepted dispatch records; acceptance atomically writes the fire identity, ingest run and SQLite queue envelope, preventing duplicate dispatch after recovery. Existing schedule rows and configuration remain in place.
 - Align embedded projection writes to the app-owned project scope while recalling legacy user-scope records read-only. Use Tesseract’s supported generic `note` kind with a `fragment` tag, and deduplicate projection hits against current FE records; no user actor is asserted or projection data migrated.

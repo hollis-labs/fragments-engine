@@ -7,8 +7,8 @@ import (
 	"log"
 	"time"
 
-	queue "github.com/hollis-labs/libs/util/queue"
-	queuesqlite "github.com/hollis-labs/libs/util/queue/driver/sqlite"
+	queue "github.com/hollis-labs/libs/core/util/queue"
+	queuesqlite "github.com/hollis-labs/libs/core/util/queue/driver/sqlite"
 
 	"github.com/hollis-labs/fragments-engine/internal/config"
 	"github.com/hollis-labs/fragments-engine/internal/service"

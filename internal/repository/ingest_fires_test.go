@@ -2,13 +2,14 @@ package repository
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/hollis-labs/fragments-engine/internal/domain"
 	"github.com/hollis-labs/fragments-engine/internal/store"
-	"github.com/hollis-labs/libs/util/scheduler"
+	"github.com/hollis-labs/libs/core/util/scheduler"
 )
 
 func TestIngestFireRecoveryAndFencing(t *testing.T) {
@@ -82,5 +83,15 @@ func TestIngestFireRecoveryAndFencing(t *testing.T) {
 	fires, err = repo.ListDueFires(ctx, now.Add(3*time.Minute), 10)
 	if err != nil || len(fires) != 0 {
 		t.Fatalf("terminal due=%v %v", fires, err)
+	}
+	if _, err := repo.Prune(ctx, now.Add(time.Hour)); !errors.Is(err, errors.ErrUnsupported) {
+		t.Fatalf("prune must refuse unsupported retention: %v", err)
+	}
+	if ok, err := repo.CreateFire(ctx, creation); err != nil || ok {
+		t.Fatalf("terminal fire recreated after refused pruning=%v %v", ok, err)
+	}
+	sch, _, err = repo.GetSchedule(ctx, "schedule")
+	if err != nil || sch.NextRun != now.Add(time.Minute).Format(time.RFC3339Nano) {
+		t.Fatalf("refused pruning lost the schedule replay fence: %+v %v", sch, err)
 	}
 }

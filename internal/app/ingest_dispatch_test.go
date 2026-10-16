@@ -10,8 +10,8 @@ import (
 	"github.com/hollis-labs/fragments-engine/internal/config"
 	"github.com/hollis-labs/fragments-engine/internal/service"
 	"github.com/hollis-labs/fragments-engine/internal/store"
-	"github.com/hollis-labs/libs/util/queue/driver/sqlite"
-	"github.com/hollis-labs/libs/util/scheduler"
+	"github.com/hollis-labs/libs/core/util/queue/driver/sqlite"
+	"github.com/hollis-labs/libs/core/util/scheduler"
 )
 
 func TestScheduledDispatchIsAtomicAndSurvivesQueueRemoval(t *testing.T) {
