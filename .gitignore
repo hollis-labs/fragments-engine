@@ -14,3 +14,6 @@ data/
 # scripts/seed-config.sh). The ingest CRUD endpoints rewrite the live config
 # file in place, so it must never be the committed, hand-commented template.
 /fragments.yaml
+
+# Cerberus build coordination, not source.
+/.cerberus-build.lock
