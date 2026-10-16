@@ -26,17 +26,25 @@ disclosure; response times are best effort during the pre-release period.
 
 ## Deployment boundary
 
-Fragments Engine is a **single-user, local** service. It has no general HTTP
-authentication layer. The default listener is `127.0.0.1:8091`; keep it on
-loopback or behind a firewall, VPN or SSH tunnel.
+Fragments Engine is a single-owner service. Configure `--token-file` or
+`FRAGMENTS_API_TOKEN_FILE` to require bearer authentication on all `/v1` routes,
+including loopback calls. The shared guard runs in enforce mode. A missing or
+unsafe configured token file refuses startup and fails closed at runtime.
 
-- Reader queries, commands, article bodies and media resources are restricted
-  to loopback callers.
-- Capture routes are **not** protected by that loopback gate. The submitted
-  `principal_id` is provenance, not authentication.
-- There is no built-in TLS. Do not expose the API on a non-loopback interface
-  without a trusted TLS-terminating proxy and your own access control.
-- The MCP surface and CLI act with the full authority of the local user.
+- The default listener is `127.0.0.1:8091`. Keep it behind your existing HTTPS
+  reverse proxy. Non-loopback listeners require authentication; transcript-enabled
+  instances still refuse non-loopback listeners.
+- Reader, media and administrative loopback gates remain. Transcript requests
+  additionally require a loopback Host (the trusted local proxy rewrites it).
+- Sysop uses opaque eight-hour HttpOnly/SameSite=Strict sessions, Secure over
+  HTTPS. Sign-out, restart and credential rotation revoke sessions. Cookie
+  mutations require an allowed Origin. Configure public origins explicitly.
+- The owner bearer grants full API access. It does not isolate applications or
+  processes sharing the OS account; the token file is readable by that account.
+- Capture `principal_id` remains submitted provenance, not authenticated identity.
+- There is no built-in TLS. Public shell/health/auth-status routes contain no
+  private content. Without a configured token file, local operation is unauthenticated.
+- MCP and CLI continue to act with the full authority of the local user.
 
 See [`docs/browser-capture-reader.md`](docs/browser-capture-reader.md).
 
@@ -64,8 +72,8 @@ page tokens to Fragments Engine.
 
 ## Current security limitations
 
-- no authentication on the HTTP API; loopback binding is the boundary
-- capture routes are not loopback-gated and `principal_id` is unauthenticated
+- authentication is opt-in; without a token file local API calls are unauthenticated
+- one owner credential, without per-client scopes; capture `principal_id` is provenance
 - no built-in TLS
 - no at-rest encryption of the database, media or exports
 - pre-1.0 contracts and migration guarantees
