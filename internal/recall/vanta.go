@@ -17,7 +17,7 @@ import (
 	"github.com/hollis-labs/fragments-engine/internal/config"
 	"github.com/hollis-labs/fragments-engine/internal/domain"
 	"github.com/hollis-labs/fragments-engine/internal/repository"
-	embedcontracts "github.com/hollis-labs/substrate/llm-core/embedcontracts"
+	embedcontracts "github.com/hollis-labs/libs/llm/core/embedcontracts"
 	conduit "github.com/hollis-labs/tesseract"
 	vmemory "github.com/hollis-labs/tesseract/memory"
 )

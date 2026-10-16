@@ -1,14 +1,14 @@
 module github.com/hollis-labs/fragments-engine
 
-go 1.26.8
+go 1.26.9
 
 require (
 	github.com/google/jsonschema-go v0.4.3
-	github.com/hollis-labs/libs/plugin-mcp v0.1.1
-	github.com/hollis-labs/libs/ui-go v0.1.0
-	github.com/hollis-labs/libs/util v0.2.0
-	github.com/hollis-labs/substrate/llm-core v0.1.0
-	github.com/hollis-labs/tesseract v0.11.0
+	github.com/hollis-labs/libs/core/util v0.4.0
+	github.com/hollis-labs/libs/llm/core v0.2.0
+	github.com/hollis-labs/libs/mcp/plugin-mcp v0.3.0
+	github.com/hollis-labs/libs/ui/ui-go v0.1.0
+	github.com/hollis-labs/tesseract v0.13.0
 	github.com/ledongthuc/pdf v0.0.0-20250511090121-5959a4027728
 	github.com/mackee/go-readability v0.3.1
 	github.com/microcosm-cc/bluemonday v1.0.27
@@ -34,7 +34,7 @@ require (
 	github.com/segmentio/encoding v0.5.4 // indirect
 	github.com/yosida95/uritemplate/v3 v3.0.2 // indirect
 	go.yaml.in/yaml/v3 v3.0.5 // indirect
-	golang.org/x/net v0.58.0 // indirect
+	golang.org/x/net v0.60.0 // indirect
 	golang.org/x/oauth2 v0.36.0 // indirect
 	golang.org/x/sync v0.23.0 // indirect
 	golang.org/x/time v0.15.0 // indirect
