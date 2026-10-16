@@ -34,4 +34,4 @@ seed-config:
 # The live server must use fragments.yaml, never the fragments.example.yaml
 # template, because the ingest CRUD endpoints rewrite the config file in place.
 serve-api: build seed-config
-	./fragments-engine serve-api --addr :8091 --config fragments.yaml
+	./fragments-engine serve-api --addr 127.0.0.1:8091 --config fragments.yaml

@@ -78,10 +78,6 @@ func checkTranscriptListen(cfgPath, addr string) error {
 	return nil
 }
 
-// authorizeTranscripts is the seam for a bearer token. Auth is deliberately
-// absent in this version, so it admits every loopback request.
-func authorizeTranscripts(_ *http.Request) bool { return true }
-
 func (s *Server) transcriptsGuard(next func(http.ResponseWriter, *http.Request, *service.TranscriptBrowseService)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		cfg, err := config.Load(s.cfgPath)
@@ -91,10 +87,6 @@ func (s *Server) transcriptsGuard(next func(http.ResponseWriter, *http.Request, 
 		}
 		if !isLoopbackRequest(r) || !isLoopbackHost(r.Host) {
 			http.Error(w, "forbidden: endpoint restricted to localhost", http.StatusForbidden)
-			return
-		}
-		if !authorizeTranscripts(r) {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
 		w.Header().Set("Cache-Control", "no-store")
@@ -150,7 +142,7 @@ func (s *Server) handleTranscriptStatus(w http.ResponseWriter, r *http.Request, 
 		"enabled":   true,
 		"available": svc.Available(),
 		"semantic":  notice == "",
-		"auth":      "none",
+		"auth":      s.authMode(),
 		"modes":     []string{transcript.ModeText, transcript.ModeSummary, transcript.ModeSemantic, transcript.ModeHybrid},
 	}
 	if notice != "" {
@@ -273,4 +265,11 @@ func (s *Server) handleTranscriptProjects(w http.ResponseWriter, r *http.Request
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+func (s *Server) authMode() string {
+	if s.security != nil {
+		return "bearer"
+	}
+	return "none"
 }

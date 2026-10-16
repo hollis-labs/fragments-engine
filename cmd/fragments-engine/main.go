@@ -762,11 +762,17 @@ func runEntityFragments(args []string) error {
 func runServeAPI(args []string) error {
 	fs := flag.NewFlagSet("serve-api", flag.ContinueOnError)
 	configPath := fs.String("config", "fragments.example.yaml", "path to config file")
-	addr := fs.String("addr", "127.0.0.1:8091", "listen address (the API has no auth; widen only behind your own access control)")
+	addr := fs.String("addr", "127.0.0.1:8091", "listen address (use loopback behind an HTTPS reverse proxy)")
+	tokenFile := fs.String("token-file", os.Getenv("FRAGMENTS_API_TOKEN_FILE"), "private 0600 API bearer token file")
+	browserOrigins := fs.String("browser-origins", os.Getenv("FRAGMENTS_BROWSER_ORIGINS"), "comma-separated public browser origins behind the HTTPS proxy")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	return api.NewServer(*configPath).ListenAndServe(*addr)
+	server, err := api.NewServer(*configPath).WithSecurity(api.Security{TokenFile: config.ExpandHome(*tokenFile), BrowserOrigins: strings.Split(*browserOrigins, ",")})
+	if err != nil {
+		return err
+	}
+	return server.ListenAndServe(*addr)
 }
 
 func runRecall(args []string) error {

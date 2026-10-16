@@ -790,6 +790,7 @@ async function apiFetch<TResponse>(
 
   const data = await parseResponseBody(response)
   if (!response.ok) {
+    if (response.status === 401) window.dispatchEvent(new Event('fe-auth-required'))
     const message =
       typeof data === 'string'
         ? data
@@ -1456,8 +1457,8 @@ export async function purgeQueue(input: QueueFailedActionInput): Promise<QueueSt
   return mapQueueStats(data.stats)
 }
 
-// Owner-only transcript routes. No credential is required yet; the token slot
-// is the seam for a bearer header and is held in memory only, never storage.
+// Optional explicit bearer for transcript clients. Sysop normally uses its
+// HttpOnly session cookie; this override stays in memory, never storage.
 let transcriptToken = ''
 
 export function setTranscriptToken(token: string) {

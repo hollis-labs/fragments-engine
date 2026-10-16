@@ -413,9 +413,9 @@ content", so it is fenced:
   archives or attachment bytes; thinking is shown only as present and its length;
   tool calls show name, status and result size.
 - **Audited.** Every read logs route, id and count, never content.
-- **No credential yet, by decision.** `authorizeTranscripts` is the seam for a
-  bearer token (auth is tracked separately), and the UI keeps an in-memory slot
-  for one.
+- **Authenticated when configured.** The API-wide bearer guard also protects
+  these routes. Sysop exchanges the token for a short-lived HttpOnly session;
+  backend clients send `Authorization: Bearer <token>`. See HTTP authentication.
 - **Not agent-facing.** No MCP tool or agent CLI wraps these routes; gated agent
   access is a separate design, so the usual CLI/API/MCP parity rule is deferred.
 
@@ -426,6 +426,54 @@ ui:
 ```
 
 Sysop is embedded in the binary: run `make sysop-build` before `go build`.
+
+## HTTP authentication
+
+For access through an existing HTTPS reverse proxy, keep FE listening on
+`127.0.0.1:8091` and configure a bearer token file:
+
+```sh
+fragments-engine serve-api --config /path/to/fragments.yaml \
+  --token-file /path/to/private/api-token \
+  --browser-origins https://fragments.example.com
+```
+
+The equivalent environment variables are `FRAGMENTS_API_TOKEN_FILE` and
+`FRAGMENTS_BROWSER_ORIGINS` (comma-separated exact origins, without trailing
+slashes). The token file must be a regular, owner-owned file with mode `0600`,
+containing a random printable token of 32–256 characters. Keep its directory
+private. For example, `umask 077; openssl rand -hex 32 > /path/to/private/api-token`
+creates a suitable new credential; do not overwrite an existing credential
+unless rotating it intentionally. Never put the token in config YAML, argv or a
+URL. The shared `libs/security/auth` guard and `libs/security/secrets/tokenfile`
+reader enforce this boundary.
+
+When configured, every `/v1` API route requires the token, including localhost
+calls, capture, media, Reader, transcripts and administrative operations. This is
+one owner credential with full API authority, not separate read/write app roles.
+The health endpoint, static Sysop shell and `/v1/auth/status` remain public.
+Missing or invalid credentials return 401; an unavailable token file fails closed.
+The file is watched on requests, so rotation takes effect without a restart.
+Without a token file, local operation remains available, but a non-loopback
+listener is refused. Transcript-enabled instances still require loopback even
+with authentication configured.
+
+Sysop prompts for the token and exchanges it at `POST /v1/auth/session` for an
+opaque, HttpOnly, SameSite=Strict cookie. The cookie is Secure over HTTPS;
+sessions expire after eight hours and are revoked on sign-out, restart or token
+rotation. Tokens never enter localStorage/sessionStorage. Reader media uses the
+same session cookie. Browser mutations using cookies require an allowed Origin;
+configure all public HTTPS origins used by your proxy. The origin list does not
+enable cross-origin browser calls: external GUIs should call through their own
+backends. For Vite development, explicitly include `http://localhost:5178`.
+
+Preserve the existing loopback peer and Host checks. The HTTPS proxy must connect
+to FE on loopback and set `Host: 127.0.0.1:8091` for `/v1/transcripts/*`. It must
+forward the caller's Authorization header and cookies, never inject a shared
+credential for unauthenticated callers. Existing proxy device/network controls
+remain in force. FE does not trust `X-Forwarded-For` as identity or provide TLS
+itself. Backend clients send the bearer header over the HTTPS URL; no SSH tunnel
+is needed.
 
 ## Where it sits in the stack
 

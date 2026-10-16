@@ -23,7 +23,8 @@ import (
 )
 
 type Server struct {
-	cfgPath string
+	cfgPath  string
+	security *httpSecurity
 	// semProbe caches whether the local embedding server answered recently, so
 	// the status route does not call it on every page load.
 	semProbe struct {
@@ -117,7 +118,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/workers/status", localhostOnly(s.handleWorkersStatus))
 	mux.HandleFunc("/v1/config", localhostOnly(s.handleConfigGet))
 	mux.HandleFunc("/v1/config/update", localhostOnly(s.handleConfigUpdate))
-	return mux
+	return s.secureHandler(mux)
 }
 
 func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
@@ -303,7 +304,7 @@ type fragmentMaterializeFFSRequest struct {
 }
 
 func (s *Server) ListenAndServe(addr string) error {
-	if err := checkTranscriptListen(s.cfgPath, addr); err != nil {
+	if err := s.validateListen(addr); err != nil {
 		return err
 	}
 	ctx, cancel := context.WithCancel(context.Background())
