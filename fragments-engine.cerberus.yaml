@@ -20,7 +20,7 @@ resources:
         - :8091
         - --config
         - fragments.yaml
-      dir: /Users/chrispian/dev/hollis-labs/apps/fragments-engine
+      dir: ~/dev/hollis-labs/apps/fragments-engine
       env:
         OPENAI_API_KEY: helper://mux-apikey-helper/openai/work
         FIRECRAWL_API_KEY: keychain://firecrawl/default

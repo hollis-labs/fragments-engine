@@ -181,3 +181,26 @@ func writeDOCXFixture(path, title string, paragraphs []string) error {
 	}
 	return zw.Close()
 }
+
+func TestResolveTesseractSkipsShadowingBinary(t *testing.T) {
+	root := t.TempDir()
+	shadow := filepath.Join(root, "shadow")
+	real := filepath.Join(root, "real")
+	for dir, version := range map[string]string{shadow: "tesseract v0.10.0 — memory service", real: "tesseract 5.5.0\\n leptonica-1.86.0"} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		script := "#!/bin/sh\necho \"" + version + "\"\n"
+		if err := os.WriteFile(filepath.Join(dir, "tesseract"), []byte(script), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("PATH", shadow+string(os.PathListSeparator)+real)
+	got, err := resolveTesseract()
+	if err != nil {
+		t.Fatalf("resolveTesseract: %v", err)
+	}
+	if got != filepath.Join(real, "tesseract") {
+		t.Fatalf("resolved %q, want the OCR binary in %q", got, real)
+	}
+}
