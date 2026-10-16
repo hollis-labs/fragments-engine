@@ -181,3 +181,45 @@ func writeDOCXFixture(path, title string, paragraphs []string) error {
 	}
 	return zw.Close()
 }
+
+func TestResolveTesseractSkipsShadowingBinary(t *testing.T) {
+	t.Setenv("FE_TESSERACT_COMMAND", "")
+	root := t.TempDir()
+	shadow := filepath.Join(root, "shadow")
+	real := filepath.Join(root, "real")
+	for dir, version := range map[string]string{shadow: "tesseract v0.10.0 — memory service", real: "tesseract 5.5.0\\n leptonica-1.86.0"} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		script := "#!/bin/sh\necho \"" + version + "\"\n"
+		if err := os.WriteFile(filepath.Join(dir, "tesseract"), []byte(script), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("PATH", shadow+string(os.PathListSeparator)+real)
+	got, err := resolveTesseract()
+	if err != nil {
+		t.Fatalf("resolveTesseract: %v", err)
+	}
+	if got != filepath.Join(real, "tesseract") {
+		t.Fatalf("resolved %q, want the OCR binary in %q", got, real)
+	}
+}
+
+func TestResolveTesseractHonorsOverride(t *testing.T) {
+	root := t.TempDir()
+	command := filepath.Join(root, "custom-ocr")
+	if err := os.WriteFile(command, []byte("#!/bin/sh\necho custom OCR wrapper\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("FE_TESSERACT_COMMAND", command)
+	got, err := resolveTesseract()
+	if err != nil || got != command {
+		t.Fatalf("resolveTesseract() = %q, %v; want %q, nil", got, err, command)
+	}
+	// An explicit missing command must fail, not silently select a PATH binary.
+	t.Setenv("FE_TESSERACT_COMMAND", filepath.Join(root, "missing-ocr"))
+	if got, err := resolveTesseract(); err == nil {
+		t.Fatalf("resolveTesseract() = %q, nil; want missing override error", got)
+	}
+}

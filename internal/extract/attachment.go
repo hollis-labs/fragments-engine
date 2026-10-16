@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"sort"
 	"strings"
@@ -26,7 +27,9 @@ import (
 
 const maxAttachmentTextBytes = 256 * 1024
 
-var tesseractCommand = "tesseract"
+const defaultTesseractCommand = "tesseract"
+
+var tesseractCommand = defaultTesseractCommand
 var swiftCommand = "swift"
 
 func ExtractLocalAttachment(path, mimeType, kind string) (ExtractedContent, error) {
@@ -264,7 +267,7 @@ func sortedMapKeys(in map[string]any) []string {
 }
 
 func extractImageWithTesseract(path string) (string, error) {
-	bin, err := exec.LookPath(tesseractCommand)
+	bin, err := resolveTesseract()
 	if err != nil {
 		return "", fmt.Errorf("tesseract unavailable: %w", err)
 	}
@@ -328,6 +331,43 @@ let handler = VNImageRequestHandler(cgImage: cg, options: [:])
 do { try handler.perform([request]) } catch { fputs("vision failed: \(error)\n", stderr); exit(1) }
 let texts = (request.results ?? []).compactMap { $0.topCandidates(1).first?.string }
 print(texts.joined(separator: "\n"))`, nil
+}
+
+// resolveTesseract finds the Tesseract OCR engine. Another program named
+// "tesseract" can shadow it on PATH, so for the default command every PATH
+// entry (plus common system locations) is probed and only a binary that
+// identifies as the OCR engine is accepted. FE_TESSERACT_COMMAND overrides.
+func resolveTesseract() (string, error) {
+	if tesseractCommand != defaultTesseractCommand {
+		return exec.LookPath(tesseractCommand)
+	}
+	if override := strings.TrimSpace(os.Getenv("FE_TESSERACT_COMMAND")); override != "" {
+		return exec.LookPath(override)
+	}
+	dirs := append(filepath.SplitList(os.Getenv("PATH")), "/usr/bin", "/usr/local/bin")
+	seen := map[string]bool{}
+	for _, dir := range dirs {
+		if dir == "" || seen[dir] {
+			continue
+		}
+		seen[dir] = true
+		candidate := filepath.Join(dir, defaultTesseractCommand)
+		if isTesseractOCR(candidate) {
+			return candidate, nil
+		}
+	}
+	return "", fmt.Errorf("no Tesseract OCR engine found (a different %q may be shadowing it on PATH)", defaultTesseractCommand)
+}
+
+var tesseractOCRVersion = regexp.MustCompile(`(?m)^tesseract \d`)
+
+func isTesseractOCR(candidate string) bool {
+	info, err := os.Stat(candidate)
+	if err != nil || info.IsDir() {
+		return false
+	}
+	out, err := exec.Command(candidate, "--version").CombinedOutput()
+	return err == nil && tesseractOCRVersion.Match(out)
 }
 
 func summarizeTesseractFailure(path, stderr string, fallback error) string {
