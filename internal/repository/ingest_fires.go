@@ -3,11 +3,23 @@ package repository
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"time"
 
-	scheduler "github.com/hollis-labs/libs/util/scheduler"
-	"github.com/hollis-labs/libs/util/scheduler/sqlstore"
+	scheduler "github.com/hollis-labs/libs/core/util/scheduler"
+	"github.com/hollis-labs/libs/core/util/scheduler/sqlstore"
 )
+
+// Prune refuses retention until the app-owned CreateFire transaction supports
+// durable replay fences. Terminal fire identities currently prevent duplicate
+// dispatch; deleting them through the shared SQL store would lose that fence.
+func (s *IngestScheduleRepository) Prune(ctx context.Context, _ time.Time) (int, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	return 0, fmt.Errorf("ingest fire retention requires durable replay fences: %w", errors.ErrUnsupported)
+}
 
 // CreateFire advances the schedule and inserts the fire in one transaction.
 // The schedule UPDATE is the first statement, so it is the compare-and-swap on

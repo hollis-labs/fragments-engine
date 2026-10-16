@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	scheduler "github.com/hollis-labs/libs/util/scheduler"
+	scheduler "github.com/hollis-labs/libs/core/util/scheduler"
 
 	"github.com/hollis-labs/fragments-engine/internal/config"
 	"github.com/hollis-labs/fragments-engine/internal/domain"

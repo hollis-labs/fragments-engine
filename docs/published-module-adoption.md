@@ -1,6 +1,8 @@
 # Published module adoption
 
-Fragments Engine pins the published replacements for directives (`libs/ui-go`), MCP (`libs/plugin-mcp`), queues and scheduling (`libs/util`), and embedder contracts (`substrate/llm-core`). Embedded Tesseract v0.11.0 shares those embedder and queue types. No local module replacements are required.
+Fragments Engine pins the published replacements for directives (`libs/ui/ui-go`), MCP (`libs/mcp/plugin-mcp`), queues and scheduling (`libs/core/util`), and embedder contracts (`libs/llm/core`). Embedded Tesseract v0.13.0 shares those embedder and queue types. No local module replacements are required.
+
+The grouped scheduler API adds a pruning entrypoint. FE explicitly returns unsupported: its app-owned fire-creation transaction uses retained terminal identities as replay fences and has no deletion retention policy. Adoption preserves those identities and does not delete fire history.
 
 The current scheduler API requires durable fire snapshots. Migration 018 adds the published SQL fire schema and an app-owned accepted-dispatch identity table. Existing ingest schedule rows remain the configuration authority; schedule advancement and fire insertion commit together. The supported SQL store owns claim leases and transition fencing. Dispatch acceptance commits the stable fire ID, run row and queue envelope together, and recovered accepted dispatches return the supported duplicate-job result even after the queue envelope has been consumed.
 

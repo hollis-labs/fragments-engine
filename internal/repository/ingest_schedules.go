@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"time"
 
-	scheduler "github.com/hollis-labs/libs/util/scheduler"
+	scheduler "github.com/hollis-labs/libs/core/util/scheduler"
 
 	"github.com/hollis-labs/fragments-engine/internal/domain"
 )
