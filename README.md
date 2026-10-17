@@ -467,6 +467,13 @@ configure all public HTTPS origins used by your proxy. The origin list does not
 enable cross-origin browser calls: external GUIs should call through their own
 backends. For Vite development, explicitly include `http://localhost:5178`.
 
+Chrome extensions with host permission can call FE from their background worker
+using an explicit bearer. Add their exact `chrome-extension://<extension-id>`
+origin to `FRAGMENTS_BROWSER_ORIGINS`, alongside the existing HTTPS origins.
+Extension IDs must be 32 lowercase letters from `a` through `p`; wildcards,
+ports, paths and other extension schemes are refused. An allowed origin still
+requires authentication; this does not enable CORS for ordinary web pages.
+
 Preserve the existing loopback peer and Host checks. The HTTPS proxy must connect
 to FE on loopback and set `Host: 127.0.0.1:8091` for `/v1/transcripts/*`. It must
 forward the caller's Authorization header and cookies, never inject a shared

@@ -72,6 +72,59 @@ func TestSecurityProtectsEveryAPIFamily(t *testing.T) {
 	}
 }
 
+func TestSecurityChromeExtensionOriginRequiresExplicitAdmissionAndBearer(t *testing.T) {
+	s, tokenPath := securityServer(t)
+	origin := "chrome-extension://" + strings.Repeat("a", 32)
+	otherOrigin := "chrome-extension://" + strings.Repeat("b", 32)
+	if r := securityRequest(s.Handler(), "GET", "/v1/capabilities", testAPIToken, origin, nil); r.Code != 403 {
+		t.Fatalf("unlisted extension origin: got %d, want 403", r.Code)
+	}
+	_, err := s.WithSecurity(Security{TokenFile: tokenPath, BrowserOrigins: []string{origin, "https://fragments.example"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, method := range []string{"GET", "POST", "PUT"} {
+		for _, token := range []string{"", "wrong"} {
+			if r := securityRequest(s.Handler(), method, "/v1/captures", token, origin, nil); r.Code != 401 {
+				t.Errorf("%s with missing/invalid bearer: got %d, want 401", method, r.Code)
+			}
+		}
+	}
+	// Exercise the guard independently of capture request-body validation.
+	protected := s.secureHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	for _, method := range []string{"GET", "POST", "PUT"} {
+		if r := securityRequest(protected, method, "/v1/captures", testAPIToken, origin, nil); r.Code != 204 {
+			t.Errorf("%s with listed extension and bearer: got %d, want 204", method, r.Code)
+		}
+		if r := securityRequest(protected, method, "/v1/captures", testAPIToken, otherOrigin, nil); r.Code != 403 {
+			t.Errorf("%s with different extension: got %d, want 403", method, r.Code)
+		}
+	}
+	if r := securityRequest(s.Handler(), "GET", "/v1/capabilities", testAPIToken, "https://fragments.example", nil); r.Code != 200 {
+		t.Fatalf("existing HTTPS origin: got %d, want 200", r.Code)
+	}
+}
+
+func TestSecurityRejectsMalformedChromeExtensionOrigins(t *testing.T) {
+	_, tokenPath := securityServer(t)
+	id := strings.Repeat("a", 32)
+	for _, origin := range []string{
+		"chrome-extension://*", "chrome-extension://short", "chrome-extension://" + strings.Repeat("q", 32),
+		"chrome-extension://" + id + ":80", "chrome-extension://" + id + "/",
+		"chrome-extension://" + id + "?query=value", "chrome-extension://" + id + "#fragment",
+		"chrome-extension://user@" + id, "moz-extension://" + id,
+	} {
+		t.Run(origin, func(t *testing.T) {
+			_, err := NewServer("").WithSecurity(Security{TokenFile: tokenPath, BrowserOrigins: []string{origin}})
+			if err == nil {
+				t.Fatal("accepted malformed or unsupported extension origin")
+			}
+		})
+	}
+}
+
 func TestSecurityInvalidTokenFileFailsClosedAndRotationRevokes(t *testing.T) {
 	s, path := securityServer(t)
 	h := s.Handler()

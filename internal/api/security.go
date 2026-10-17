@@ -15,7 +15,8 @@ import (
 )
 
 // Security configures the single-owner HTTP credential. BrowserOrigins lists
-// public HTTPS origins whose Host may be rewritten by the local reverse proxy.
+// public HTTPS origins whose Host may be rewritten by the local reverse proxy,
+// or exact Chrome extension origins for explicitly authorized browser clients.
 // It is an origin admission list, not a cross-origin browser API (no CORS).
 type Security struct {
 	TokenFile      string
@@ -58,8 +59,8 @@ func (s *Server) WithSecurity(c Security) (*Server, error) {
 		}
 		u, err := url.Parse(origin)
 		if err != nil || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || u.Path != "" ||
-			(u.Scheme != "https" && !(u.Scheme == "http" && isLoopbackHost(u.Host))) {
-			return nil, fmt.Errorf("invalid browser origin %q: use https://host[:port] (http only on loopback)", origin)
+			(u.Scheme != "https" && !(u.Scheme == "http" && isLoopbackHost(u.Host)) && !isChromeExtensionOrigin(u)) {
+			return nil, fmt.Errorf("invalid browser origin %q: use https://host[:port], loopback http, or chrome-extension://<32-character extension ID>", origin)
 		}
 		sec.origins[origin] = true
 	}
@@ -73,6 +74,18 @@ func (s *Server) WithSecurity(c Security) (*Server, error) {
 	sec.guard = g
 	s.security = sec
 	return s, nil
+}
+
+func isChromeExtensionOrigin(u *url.URL) bool {
+	if u.Scheme != "chrome-extension" || len(u.Host) != 32 {
+		return false
+	}
+	for _, c := range u.Host {
+		if c < 'a' || c > 'p' {
+			return false
+		}
+	}
+	return true
 }
 
 func validAPIToken(token string) bool {
