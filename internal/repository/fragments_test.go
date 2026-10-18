@@ -50,6 +50,64 @@ func TestFragmentSearch(t *testing.T) {
 	}
 }
 
+func TestFragmentSearchFreeText(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "fragments.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	repo := NewFragmentRepository(st.DB)
+	ctx := context.Background()
+	for _, fixture := range []struct{ id, content string }{
+		{"task", `Review CW-20261018-0060 on 2026-10-18: roadmap scope:capture https://example.com/path and say "hello".`},
+		{"other", `An unrelated roadmap fragment about a pipeline.`},
+	} {
+		fragment, err := BuildFragment(domain.PipelineFragment{
+			Source: "fixture-document", SourceType: "chat", SourceID: fixture.id,
+			Title: "Search fixture", Content: fixture.content, CreatedAt: time.Now().UTC(),
+		}, "search-test", time.Now().UTC())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := repo.Upsert(ctx, fragment); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, tc := range []struct {
+		query string
+		want  string
+	}{
+		{"CW-20261018-0060", "task"},
+		{"2026-10-18", "task"},
+		{"scope:capture", "task"},
+		{"https://example.com/path", "task"},
+		{`"hello"`, "task"},
+		{`hello"`, "task"},
+		{"roadmap CW-20261018-0060", "task"},
+		{"roadmap pipeline", "other"},
+		{"roadmap OR nonexistent", ""},
+		{"roadmap NOT pipeline", ""},
+		{"CW-20261018-9999", ""},
+		{" ", ""},
+		{`"`, ""},
+		{"--- : () *", ""},
+	} {
+		t.Run(tc.query, func(t *testing.T) {
+			results, err := repo.Search(ctx, tc.query, 5)
+			if err != nil {
+				t.Fatalf("search %q: %v", tc.query, err)
+			}
+			if tc.want == "" {
+				if len(results) != 0 {
+					t.Fatalf("expected no matches, got %d", len(results))
+				}
+			} else if len(results) != 1 || results[0].Fragment.SourceID != tc.want {
+				t.Fatalf("expected only source %q, got %+v", tc.want, results)
+			}
+		})
+	}
+}
+
 func TestBuildFragmentRejectsEmptyMaterialWithOpaqueSourceID(t *testing.T) {
 	_, err := BuildFragment(domain.PipelineFragment{
 		Source: "legacy", SourceType: "unknown", SourceID: "opaque-item-id",

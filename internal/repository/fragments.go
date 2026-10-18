@@ -493,6 +493,16 @@ WHERE id = ?`,
 }
 
 func (r *FragmentRepository) Search(ctx context.Context, query string, limit int) ([]domain.SearchResult, error) {
+	// Search accepts free text, not FTS5 syntax. Quote each whitespace-delimited
+	// term so task IDs, URLs, quotes, and operators cannot alter the MATCH query.
+	terms := strings.Fields(query)
+	if len(terms) == 0 {
+		return []domain.SearchResult{}, nil
+	}
+	for i, term := range terms {
+		terms[i] = `"` + strings.ReplaceAll(term, `"`, `""`) + `"`
+	}
+	match := strings.Join(terms, " ")
 	if limit <= 0 {
 		limit = 10
 	}
@@ -517,7 +527,7 @@ WHERE fragments_fts MATCH ?
   )
 ORDER BY rank
 LIMIT ?`
-	rows, err := r.db.QueryContext(ctx, readQuery, query, limit)
+	rows, err := r.db.QueryContext(ctx, readQuery, match, limit)
 	if err != nil {
 		return nil, fmt.Errorf("fts search: %w", err)
 	}
