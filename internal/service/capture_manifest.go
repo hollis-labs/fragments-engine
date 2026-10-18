@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,6 +12,8 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"github.com/hollis-labs/libs/security/auth"
 
 	capturecontract "github.com/hollis-labs/fragments-engine/contracts/browser-capture-reader/v1"
 	"github.com/hollis-labs/fragments-engine/internal/domain"
@@ -61,6 +64,14 @@ func (s *CaptureService) AcceptManifest(ctx context.Context, raw []byte) (captur
 	envelope, err := capturecontract.DecodeCaptureEnvelope(raw)
 	if err != nil {
 		return capturecontract.CaptureManifestResponse{}, err
+	}
+	// A mesh credential speaks for its verified subject. Human, project and
+	// activity-session correlation in extensions never establishes delegation.
+	if p, ok := meshCapturePrincipal(ctx); ok {
+		if envelope.PrincipalID != p.ID {
+			return capturecontract.CaptureManifestResponse{}, auth.ErrForbidden
+		}
+		envelope.PrincipalID = p.ID
 	}
 	canonicalEnvelope, err := json.Marshal(envelope)
 	if err != nil {
@@ -123,6 +134,9 @@ func (s *CaptureService) AcceptManifest(ctx context.Context, raw []byte) (captur
 	if err != nil {
 		return capturecontract.CaptureManifestResponse{}, invalidCaptureRequest(err)
 	}
+	if p, ok := meshCapturePrincipal(ctx); ok {
+		write.Attempt.AuthenticatedSubject = p.ID
+	}
 	write.Media = media
 	write.AssetBindings = bindings
 	write.Inbox = &repository.CaptureInboxWrite{Reason: "awaiting routing", StagedAt: now}
@@ -130,6 +144,16 @@ func (s *CaptureService) AcceptManifest(ctx context.Context, raw []byte) (captur
 	write.FollowUpKind = "capture_enrichment"
 	write.FollowUpPayloadJSON = string(followUp)
 	write.BuildAcceptanceSnapshot = func(accepted domain.CaptureAcceptance) (string, error) {
+		if _, ok := meshCapturePrincipal(ctx); ok {
+			// Receipt previews must not reveal another capture's private tags.
+			own := make([]domain.AttributedTag, 0, len(accepted.Tags))
+			for _, tag := range accepted.Tags {
+				if tag.CaptureID == envelope.CaptureID {
+					own = append(own, tag)
+				}
+			}
+			accepted.Tags = own
+		}
 		response := projectManifestResponse(envelope, accepted)
 		encoded, err := json.Marshal(response)
 		if err != nil {
@@ -610,6 +634,9 @@ func (s *CaptureService) StoreAssetContent(ctx context.Context, captureID, clien
 	if s == nil || s.captures == nil || s.media == nil {
 		return domain.AssetVariant{}, fmt.Errorf("store capture asset: capture and media services are required")
 	}
+	if err := s.authorizeCapture(ctx, captureID); err != nil {
+		return domain.AssetVariant{}, err
+	}
 	binding, err := s.captures.GetAssetBinding(ctx, captureID, clientVariantID)
 	if err != nil {
 		return domain.AssetVariant{}, err
@@ -629,6 +656,9 @@ func (s *CaptureService) StoreAssetContent(ctx context.Context, captureID, clien
 func (s *CaptureService) Complete(ctx context.Context, captureID string, raw []byte) (capturecontract.CaptureStatus, error) {
 	if s == nil || s.captures == nil {
 		return capturecontract.CaptureStatus{}, fmt.Errorf("complete capture: capture repository is required")
+	}
+	if err := s.authorizeCapture(ctx, captureID); err != nil {
+		return capturecontract.CaptureStatus{}, err
 	}
 	request, err := capturecontract.DecodeCaptureCompletion(raw)
 	if err != nil {
@@ -700,6 +730,9 @@ func (s *CaptureService) Complete(ctx context.Context, captureID string, raw []b
 func (s *CaptureService) GetStatus(ctx context.Context, captureID string) (capturecontract.CaptureStatus, error) {
 	if s == nil || s.captures == nil {
 		return capturecontract.CaptureStatus{}, fmt.Errorf("get capture status: capture repository is required")
+	}
+	if err := s.authorizeCapture(ctx, captureID); err != nil {
+		return capturecontract.CaptureStatus{}, err
 	}
 	state, err := s.captures.GetProtocolState(ctx, captureID)
 	if err != nil {
@@ -852,4 +885,26 @@ func nonzeroInt64Pointer(value int64) *int64 {
 		return nil
 	}
 	return &value
+}
+
+// Only mesh identities have submitter-bound resource access. Legacy local-owner
+// and local CLI/MCP flows retain their existing single-owner behavior.
+func meshCapturePrincipal(ctx context.Context) (auth.Principal, bool) {
+	p, ok := auth.FromContext(ctx)
+	return p, ok && p.Verified && p.Audience == "fragments-engine"
+}
+
+func (s *CaptureService) authorizeCapture(ctx context.Context, captureID string) error {
+	p, ok := meshCapturePrincipal(ctx)
+	if !ok {
+		return nil
+	}
+	a, err := s.captures.GetAttempt(ctx, captureID)
+	if err != nil {
+		return err
+	}
+	if a.AuthenticatedSubject != p.ID {
+		return sql.ErrNoRows
+	}
+	return nil
 }

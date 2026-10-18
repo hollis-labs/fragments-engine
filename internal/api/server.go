@@ -112,8 +112,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/routes/apply-entity", s.handleRouteApplyEntity)
 	mux.HandleFunc("/v1/route-log", s.handleRouteLog)
 	mux.HandleFunc("/v1/intake", s.handleIntake)
-	// Admin-grade endpoints — gated to localhost since the API has no auth
-	// layer and serve-api binds all interfaces. See backlog CW-20260517-0010.
+	// Admin-grade endpoints retain their independent localhost restrictions.
 	mux.HandleFunc("/v1/jobs/ingest", localhostOnly(s.handleJobsIngest))
 	mux.HandleFunc("/v1/workers/status", localhostOnly(s.handleWorkersStatus))
 	mux.HandleFunc("/v1/config", localhostOnly(s.handleConfigGet))
@@ -309,6 +308,9 @@ func (s *Server) ListenAndServe(addr string) error {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	if s.security != nil && s.security.issuer != nil {
+		go s.security.issuer.jwt.Run(ctx)
+	}
 	go app.RunQueueDrainer(ctx, s.cfgPath)
 	go app.RunIngestWorker(ctx, s.cfgPath)
 	go app.RunIngestScheduler(ctx, s.cfgPath)
@@ -2174,9 +2176,8 @@ func defaultFFSDestinationName(sourceType string) (string, error) {
 	}
 }
 
-// localhostOnly wraps a handler so it only serves requests originating from the
-// loopback interface. The API has no auth layer and serve-api binds all
-// interfaces, so admin-grade endpoints are gated to localhost as a stopgap.
+// localhostOnly preserves the independent loopback restriction on selected
+// administrative and Reader endpoints in addition to bearer authorization.
 func localhostOnly(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !isLoopbackRequest(r) {

@@ -448,9 +448,11 @@ unless rotating it intentionally. Never put the token in config YAML, argv or a
 URL. The shared `libs/security/auth` guard and `libs/security/secrets/tokenfile`
 reader enforce this boundary.
 
-When configured, every `/v1` API route requires the token, including localhost
-calls, capture, media, Reader, transcripts and administrative operations. This is
-one owner credential with full API authority, not separate read/write app roles.
+When configured, protected `/v1` API routes require verified bearer authentication,
+including localhost calls. The existing owner credential retains authority over
+all explicitly mapped operations. Optional Tether JWT verification adds scoped
+service access; new or unmapped protected routes fail closed. See the
+[scoped capture auth contract and migration plan](docs/scoped-capture-auth.md).
 The health endpoint, static Sysop shell and `/v1/auth/status` remain public.
 Missing or invalid credentials return 401; an unavailable token file fails closed.
 The file is watched on requests, so rotation takes effect without a restart.

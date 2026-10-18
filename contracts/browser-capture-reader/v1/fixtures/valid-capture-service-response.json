@@ -1,0 +1,144 @@
+{
+  "asset_instructions": [],
+  "capture_attempt_id": "53c17fa4a9e8e09af1b05da953c938e35da5a114028bcfeecf2ebaa72050273d",
+  "capture_id": "basalisk-note-01",
+  "completion": "accepting",
+  "fragment_id": "078c046c0c0e3ac32dc444f69526a6572073c82b4931aa38f1629007bf0c9555",
+  "fragment_revision_id": "9bf6701e36e1cdd65283427a4443177ac7d71350c78bedd657be27d6ea093513",
+  "idempotent_replay": false,
+  "reader_item": {
+    "actions": [],
+    "annotations": [],
+    "article": {
+      "full_content_available": true,
+      "full_content_href": "/v1/reader/items/078c046c0c0e3ac32dc444f69526a6572073c82b4931aa38f1629007bf0c9555/content?revision_id=9bf6701e36e1cdd65283427a4443177ac7d71350c78bedd657be27d6ea093513",
+      "preview_markdown": "Example note body."
+    },
+    "capture_count": 1,
+    "display": {
+      "summary": {
+        "source": "deterministic",
+        "value": "Example note body."
+      },
+      "title": {
+        "source": "source",
+        "value": "Example note"
+      }
+    },
+    "fragment_id": "078c046c0c0e3ac32dc444f69526a6572073c82b4931aa38f1629007bf0c9555",
+    "fragment_revision_id": "9bf6701e36e1cdd65283427a4443177ac7d71350c78bedd657be27d6ea093513",
+    "media": [],
+    "operations": {
+      "acquisition": {
+        "available": 0,
+        "failed": 0,
+        "pending": 0,
+        "reference_only": 0
+      },
+      "enrichment": [
+        {
+          "capability": "title",
+          "observation_id": "b98104973147b60f3ea02f38782154937fa68b2b0a485a300aca03a3e5f19007",
+          "state": "provided"
+        },
+        {
+          "capability": "description",
+          "detail": "typed capture evidence was not provided",
+          "state": "missing"
+        },
+        {
+          "capability": "body",
+          "observation_id": "19c64ef12b13f1a10f520af4cf9596927b72dd7bc793e23d53f16864d8d5c282",
+          "state": "provided"
+        },
+        {
+          "capability": "gallery_manifest",
+          "detail": "typed capture evidence was not provided",
+          "state": "missing"
+        },
+        {
+          "capability": "original_media",
+          "detail": "typed capture evidence was not provided",
+          "state": "missing"
+        },
+        {
+          "capability": "thumbnail_or_poster",
+          "detail": "typed capture evidence was not provided",
+          "state": "missing"
+        },
+        {
+          "capability": "transcript",
+          "detail": "capture has no timed media",
+          "state": "not_applicable"
+        },
+        {
+          "capability": "OCR",
+          "detail": "capture has no visual media",
+          "state": "not_applicable"
+        },
+        {
+          "capability": "vision",
+          "detail": "capture has no visual media",
+          "state": "not_applicable"
+        },
+        {
+          "capability": "summary",
+          "detail": "typed capture evidence was not provided",
+          "state": "missing"
+        },
+        {
+          "capability": "tags",
+          "detail": "typed capture evidence was not provided",
+          "state": "missing"
+        },
+        {
+          "capability": "entities",
+          "detail": "typed capture evidence was not provided",
+          "state": "missing"
+        }
+      ],
+      "materialization": {
+        "references": [],
+        "state": "none"
+      },
+      "routing": {
+        "references": [],
+        "state": "none"
+      },
+      "triage": {
+        "case_ids": [],
+        "unresolved_count": 1
+      }
+    },
+    "reading_state": {
+      "fragment_id": "078c046c0c0e3ac32dc444f69526a6572073c82b4931aa38f1629007bf0c9555",
+      "position": {
+        "kind": "none"
+      },
+      "principal_id": "svc:basalisk",
+      "revision": 0,
+      "state": "unread"
+    },
+    "renderer": "article",
+    "revision": 0,
+    "schema_version": "fe.reader.item.v1",
+    "source": {
+      "canonical_url": "https://basalisk.example/notes/basalisk-note-01",
+      "canonicalizer": {
+        "adapter": "basalisk",
+        "version": "1.0.0"
+      },
+      "provider": "basalisk",
+      "segment_key": "root",
+      "source_item_key": "note:basalisk-note-01",
+      "source_registration_id": "basalisk-notes",
+      "submitted_url": "https://basalisk.example/notes/basalisk-note-01"
+    },
+    "tags": {
+      "attributed": [],
+      "combined": []
+    }
+  },
+  "schema_version": "fe.capture.result.v1",
+  "warnings": []
+}

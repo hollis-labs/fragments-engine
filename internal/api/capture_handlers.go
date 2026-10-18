@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"github.com/hollis-labs/libs/security/auth"
 	"io"
 	"mime"
 	"net/http"
@@ -209,6 +210,8 @@ func writeCaptureError(w http.ResponseWriter, r *http.Request, err error) {
 	var completionConflict *repository.CaptureCompletionReportConflictError
 	var tooLarge *http.MaxBytesError
 	switch {
+	case errors.Is(err, auth.ErrForbidden):
+		writeJSON(w, http.StatusForbidden, map[string]any{"error": map[string]string{"code": "forbidden", "message": "capture principal must match authenticated subject"}})
 	case errors.As(err, &tooLarge):
 		writeCaptureProblem(w, r, http.StatusRequestEntityTooLarge, "payload_too_large", "Payload too large", "")
 	case service.IsDigestMismatch(err):

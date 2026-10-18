@@ -764,11 +764,22 @@ func runServeAPI(args []string) error {
 	configPath := fs.String("config", "fragments.example.yaml", "path to config file")
 	addr := fs.String("addr", "127.0.0.1:8091", "listen address (use loopback behind an HTTPS reverse proxy)")
 	tokenFile := fs.String("token-file", os.Getenv("FRAGMENTS_API_TOKEN_FILE"), "private 0600 API bearer token file")
+	issuerName := fs.String("auth-issuer", os.Getenv("FRAGMENTS_AUTH_ISSUER"), "pinned Tether issuer name (iss)")
+	issuerURL := fs.String("auth-issuer-url", os.Getenv("FRAGMENTS_AUTH_ISSUER_URL"), "Tether issuer base URL")
+	issuerToken := fs.String("auth-issuer-token-file", os.Getenv("FRAGMENTS_AUTH_ISSUER_TOKEN_FILE"), "private dedicated Tether maintain credential file")
+	issuerSocket := fs.String("auth-issuer-socket", os.Getenv("FRAGMENTS_AUTH_ISSUER_SOCKET"), "optional local Tether Unix socket")
+	issuerKey := fs.String("auth-bootstrap-key-file", os.Getenv("FRAGMENTS_AUTH_BOOTSTRAP_KEY_FILE"), "optional issuer public JWKS/PEM bootstrap file")
 	browserOrigins := fs.String("browser-origins", os.Getenv("FRAGMENTS_BROWSER_ORIGINS"), "comma-separated public browser origins behind the HTTPS proxy")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	server, err := api.NewServer(*configPath).WithSecurity(api.Security{TokenFile: config.ExpandHome(*tokenFile), BrowserOrigins: strings.Split(*browserOrigins, ",")})
+	server, err := api.NewServer(*configPath).WithSecurity(api.Security{
+		TokenFile: config.ExpandHome(*tokenFile), BrowserOrigins: strings.Split(*browserOrigins, ","),
+		Issuer: api.IssuerSecurity{
+			Name: *issuerName, URL: *issuerURL, TokenFile: config.ExpandHome(*issuerToken),
+			UnixSocket: config.ExpandHome(*issuerSocket), BootstrapKeyFile: config.ExpandHome(*issuerKey),
+		},
+	})
 	if err != nil {
 		return err
 	}
