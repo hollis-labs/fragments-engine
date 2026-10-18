@@ -14,13 +14,15 @@ import (
 	"github.com/hollis-labs/libs/security/secrets/tokenfile"
 )
 
-// Security configures the single-owner HTTP credential. BrowserOrigins lists
+// Security configures the owner credential and optional scoped mesh issuer.
+// BrowserOrigins lists
 // public HTTPS origins whose Host may be rewritten by the local reverse proxy,
 // or exact Chrome extension origins for explicitly authorized browser clients.
 // It is an origin admission list, not a cross-origin browser API (no CORS).
 type Security struct {
 	TokenFile      string
 	BrowserOrigins []string
+	Issuer         IssuerSecurity
 }
 
 const sessionCookie = "fe_session"
@@ -34,6 +36,7 @@ type browserSession struct {
 type httpSecurity struct {
 	watch    *tokenfile.Watcher
 	guard    *auth.Guard
+	issuer   *issuerVerifier
 	origins  map[string]bool
 	mu       sync.Mutex
 	sessions map[string]browserSession // indexed by hash, never the cookie value
@@ -43,6 +46,9 @@ type httpSecurity struct {
 // unsafe token file is an error; it must never silently disable authentication.
 func (s *Server) WithSecurity(c Security) (*Server, error) {
 	if c.TokenFile == "" {
+		if c.Issuer != (IssuerSecurity{}) {
+			return nil, errors.New("issuer configuration requires the existing owner token file")
+		}
 		return s, nil
 	}
 	sec := &httpSecurity{
@@ -64,9 +70,16 @@ func (s *Server) WithSecurity(c Security) (*Server, error) {
 		}
 		sec.origins[origin] = true
 	}
+	if c.Issuer != (IssuerSecurity{}) {
+		var err error
+		sec.issuer, err = newIssuerVerifier(c.Issuer)
+		if err != nil {
+			return nil, err
+		}
+	}
 	g, err := auth.New(auth.Config{Mode: auth.ModeEnforce, Verifier: sec,
 		OpenPath: func(string) bool { return false },
-		Scopes:   auth.NewScopeTable().Route("*", "*", "fragments-engine.*"),
+		Scopes:   apiScopes(),
 	})
 	if err != nil {
 		return nil, err
@@ -103,12 +116,21 @@ func validAPIToken(token string) bool {
 // Verify adapts the rotating private token file to the shared auth guard.
 func (s *httpSecurity) Verify(ctx context.Context, presented string) (auth.Principal, error) {
 	token, err := s.watch.Token()
+	if err == nil {
+		p, verifyErr := auth.NewAPIKeyVerifier(auth.APIKey{Hash: auth.HashKey(token),
+			ID: "fragments-engine/owner", Scopes: []string{"fragments-engine.*"},
+		}).Verify(ctx, presented)
+		if verifyErr == nil {
+			return p, nil
+		}
+	}
+	if strings.Count(presented, ".") == 2 && s.issuer != nil {
+		return s.issuer.Verify(ctx, presented)
+	}
 	if err != nil {
 		return auth.Principal{}, auth.ErrUnavailable
 	}
-	return auth.NewAPIKeyVerifier(auth.APIKey{Hash: auth.HashKey(token),
-		ID: "fragments-engine/owner", Scopes: []string{"fragments-engine.*"},
-	}).Verify(ctx, presented)
+	return auth.Principal{}, auth.ErrInvalidToken
 }
 
 func (s *Server) validateListen(addr string) error {
@@ -138,6 +160,13 @@ func (s *Server) secureHandler(next http.Handler) http.Handler {
 	var guarded http.Handler
 	if sec != nil {
 		guarded = sec.guard.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/v1/auth/session" || strings.HasPrefix(r.URL.Path, "/v1/transcripts/") {
+				p, _ := auth.FromContext(r.Context())
+				if p.ID != "fragments-engine/owner" || p.Audience != "" {
+					http.Error(w, "owner credential required", http.StatusForbidden)
+					return
+				}
+			}
 			if r.URL.Path == "/v1/auth/session" {
 				sec.handleSession(w, r)
 				return

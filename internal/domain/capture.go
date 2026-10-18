@@ -33,15 +33,18 @@ type CaptureClient struct {
 // CaptureAttempt is one deliberate capture action. SemanticDigest and the
 // accepted outcome fields never change; only Completion and UpdatedAt advance.
 type CaptureAttempt struct {
-	ID                   string            `json:"id"`
-	CaptureID            string            `json:"capture_id"`
-	IdempotencyKey       string            `json:"idempotency_key"`
-	SemanticDigest       string            `json:"semantic_digest"`
-	FragmentID           string            `json:"fragment_id"`
-	FragmentRevisionID   string            `json:"fragment_revision_id"`
-	FragmentOutcome      string            `json:"fragment_outcome"`
-	AcceptedCaptureCount int               `json:"accepted_capture_count"`
-	AcceptanceResultJSON string            `json:"acceptance_result_json"`
+	ID                   string `json:"id"`
+	CaptureID            string `json:"capture_id"`
+	IdempotencyKey       string `json:"idempotency_key"`
+	SemanticDigest       string `json:"semantic_digest"`
+	FragmentID           string `json:"fragment_id"`
+	FragmentRevisionID   string `json:"fragment_revision_id"`
+	FragmentOutcome      string `json:"fragment_outcome"`
+	AcceptedCaptureCount int    `json:"accepted_capture_count"`
+	AcceptanceResultJSON string `json:"acceptance_result_json"`
+	// AuthenticatedSubject is stamped by verified mesh auth, never request JSON.
+	// Empty on historic/local-owner captures; those are not retroactively attested.
+	AuthenticatedSubject string            `json:"authenticated_subject,omitempty"`
 	PrincipalID          string            `json:"principal_id"`
 	ActorID              string            `json:"actor_id"`
 	Client               CaptureClient     `json:"client"`

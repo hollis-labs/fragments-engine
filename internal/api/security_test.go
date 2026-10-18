@@ -94,11 +94,11 @@ func TestSecurityChromeExtensionOriginRequiresExplicitAdmissionAndBearer(t *test
 	protected := s.secureHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	}))
-	for _, method := range []string{"GET", "POST", "PUT"} {
-		if r := securityRequest(protected, method, "/v1/captures", testAPIToken, origin, nil); r.Code != 204 {
+	for method, path := range map[string]string{"GET": "/v1/captures/example", "POST": "/v1/captures", "PUT": "/v1/captures/example/assets/variant/content"} {
+		if r := securityRequest(protected, method, path, testAPIToken, origin, nil); r.Code != 204 {
 			t.Errorf("%s with listed extension and bearer: got %d, want 204", method, r.Code)
 		}
-		if r := securityRequest(protected, method, "/v1/captures", testAPIToken, otherOrigin, nil); r.Code != 403 {
+		if r := securityRequest(protected, method, path, testAPIToken, otherOrigin, nil); r.Code != 403 {
 			t.Errorf("%s with different extension: got %d, want 403", method, r.Code)
 		}
 	}

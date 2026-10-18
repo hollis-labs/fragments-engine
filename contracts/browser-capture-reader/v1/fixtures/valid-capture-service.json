@@ -1,0 +1,41 @@
+{
+  "schema_version": "fe.capture.v1",
+  "capture_id": "basalisk-note-01",
+  "captured_at": "2026-10-18T20:00:00Z",
+  "principal_id": "svc:basalisk",
+  "client": {
+    "kind": "basalisk",
+    "version": "1.0.0"
+  },
+  "source": {
+    "submitted_url": "https://basalisk.example/notes/basalisk-note-01",
+    "canonical_url": "https://basalisk.example/notes/basalisk-note-01",
+    "provider": "basalisk",
+    "source_registration_id": "basalisk-notes",
+    "source_item_key": "note:basalisk-note-01",
+    "segment_key": "root",
+    "canonicalizer": {
+      "adapter": "basalisk",
+      "version": "1.0.0"
+    }
+  },
+  "document": {
+    "title": "Example note",
+    "content": {
+      "format": "markdown",
+      "body": "Example note body."
+    }
+  },
+  "tags": [],
+  "annotations": [],
+  "media": [],
+  "extraction": {
+    "adapter": "basalisk",
+    "adapter_version": "1.0.0",
+    "observed_capabilities": [
+      "title",
+      "body"
+    ],
+    "warnings": []
+  }
+}

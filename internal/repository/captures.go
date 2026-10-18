@@ -115,6 +115,9 @@ func (r *CaptureRepository) Accept(ctx context.Context, write CaptureWrite) (dom
 		return domain.CaptureAcceptance{}, err
 	}
 	if found {
+		if existing.AuthenticatedSubject != write.Attempt.AuthenticatedSubject || existing.PrincipalID != write.Attempt.PrincipalID {
+			return domain.CaptureAcceptance{}, &CaptureConflictError{CaptureID: write.Attempt.CaptureID, Reason: "capture identity is already in use"}
+		}
 		if existing.CaptureID != write.Attempt.CaptureID {
 			return domain.CaptureAcceptance{}, &CaptureConflictError{
 				CaptureID: write.Attempt.CaptureID, IdempotencyKey: write.Attempt.IdempotencyKey,
@@ -523,8 +526,8 @@ INSERT INTO capture_attempts (
   acceptance_result_json, principal_id, actor_id, client_kind, client_version,
   captured_at, submitted_url, page_context_json, extraction_adapter,
   extraction_adapter_version, extraction_json, completion, warnings_json,
-  created_at, updated_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  created_at, updated_at, authenticated_subject
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		attempt.ID, attempt.CaptureID, attempt.IdempotencyKey, attempt.SemanticDigest,
 		attempt.FragmentID, attempt.FragmentRevisionID, attempt.FragmentOutcome,
 		attempt.AcceptedCaptureCount, attempt.AcceptanceResultJSON,
@@ -532,7 +535,7 @@ INSERT INTO capture_attempts (
 		formatTime(attempt.CapturedAt), attempt.SubmittedURL, attempt.PageContextJSON,
 		attempt.ExtractionAdapter.Adapter, attempt.ExtractionAdapter.Version,
 		attempt.ExtractionJSON, string(attempt.Completion), attempt.WarningsJSON,
-		formatTime(attempt.CreatedAt), formatTime(attempt.UpdatedAt),
+		formatTime(attempt.CreatedAt), formatTime(attempt.UpdatedAt), attempt.AuthenticatedSubject,
 	)
 	if err != nil {
 		return fmt.Errorf("insert capture attempt %q: %w", attempt.CaptureID, err)
@@ -640,7 +643,7 @@ const captureAttemptColumns = `
   acceptance_result_json, principal_id, actor_id, client_kind, client_version,
   captured_at, submitted_url, page_context_json, extraction_adapter,
   extraction_adapter_version, extraction_json, completion, warnings_json,
-  created_at, updated_at`
+  created_at, updated_at, authenticated_subject`
 
 func findCaptureAttempt(ctx context.Context, conn *sql.Conn, predicate string, value any) (domain.CaptureAttempt, bool, error) {
 	row := conn.QueryRowContext(ctx, `SELECT `+captureAttemptColumns+` FROM capture_attempts WHERE `+predicate, value)
@@ -666,7 +669,7 @@ func scanCaptureAttempt(scanner rowScanner) (domain.CaptureAttempt, error) {
 		&attempt.Client.Version, &capturedAt, &attempt.SubmittedURL,
 		&attempt.PageContextJSON, &attempt.ExtractionAdapter.Adapter,
 		&attempt.ExtractionAdapter.Version, &attempt.ExtractionJSON,
-		&completion, &attempt.WarningsJSON, &createdAt, &updatedAt,
+		&completion, &attempt.WarningsJSON, &createdAt, &updatedAt, &attempt.AuthenticatedSubject,
 	)
 	if err != nil {
 		return domain.CaptureAttempt{}, err
