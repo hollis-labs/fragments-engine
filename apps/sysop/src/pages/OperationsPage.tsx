@@ -375,8 +375,8 @@ export default function OperationsPage() {
           <div className="p-4">
             <EmptyState
               variant="error"
-              title="Can't reach Fragments Engine on :8091."
-              description={errorMessage ?? 'Start it with `fragments-engine serve-api`.'}
+              title={searchMode ? 'Search failed.' : 'Could not load fragments.'}
+              description={errorMessage ?? 'Please try again.'}
               action={{ label: 'Retry', onClick: () => void refetch() }}
             />
           </div>
