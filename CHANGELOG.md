@@ -8,6 +8,10 @@ This file was backfilled from the git history as a good-faith summary, not an ex
 
 ## [Unreleased]
 
+### Security
+
+- Go toolchain 1.26.10 (`go` directive and CI pin) for GO-2026-6809 (crypto/x509); no behavior change.
+
 ### Added
 
 - **Browser capture v1 and a media-aware Reader.** A published capture/Reader contract (`contracts/browser-capture-reader/v1/`: OpenAPI, types, capabilities and validator), media custody, and Sysop Reader improvements for readability, media and inline controls.
