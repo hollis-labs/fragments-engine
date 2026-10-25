@@ -1,0 +1,16 @@
+name: build
+on:
+  push: { branches: [main] }
+  pull_request:
+  workflow_dispatch:
+permissions: { contents: read }
+jobs:
+  build:
+    uses: hollis-labs/tools/.github/workflows/go-app-build.yml@27c5d904a7dfafbb71dca884b0d31fc0849d39fb   # tools#9 merge commit
+    with:
+      app: fragments-engine
+      main_pkg: ./cmd/fragments-engine
+      node_version: "24"
+      ui_cmd: "npm --prefix apps/sysop ci && npm --prefix apps/sysop run build"   # == make sysop-build; apps/sysop/embed.go embeds dist
+      test_cmd: "go vet ./... && go test -race -timeout 240s ./..."
+      ldflags_var: ""
