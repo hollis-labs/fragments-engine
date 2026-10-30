@@ -18,7 +18,7 @@ import (
 // structure (who, when, which tool, how many tokens), not raw material:
 // thinking text is never kept, tool results are status and size unless the
 // ingest asked for a bounded redacted excerpt, and tool inputs are capped.
-const derivedSchemaVersion = 3
+const derivedSchemaVersion = 4
 
 const (
 	maxToolInputBytes     = 4 << 10
@@ -50,6 +50,7 @@ CREATE TABLE IF NOT EXISTS tx_turns (
 );
 CREATE INDEX IF NOT EXISTS tx_turns_order ON tx_turns (session_pk, seq);
 CREATE INDEX IF NOT EXISTS tx_turns_ts ON tx_turns (ts);
+CREATE VIRTUAL TABLE IF NOT EXISTS tx_turn_search USING fts5(text, session_pk UNINDEXED, seq UNINDEXED);
 CREATE TABLE IF NOT EXISTS tx_tool_calls (
  tool_use_id TEXT NOT NULL, session_pk TEXT NOT NULL, turn_uuid TEXT NOT NULL DEFAULT '', name TEXT NOT NULL,
  input_redacted TEXT NOT NULL DEFAULT '', result_status TEXT NOT NULL DEFAULT 'none', result_bytes INTEGER NOT NULL DEFAULT 0,
@@ -74,7 +75,8 @@ CREATE TABLE IF NOT EXISTS tx_cursors (
 
 var derivedTables = []string{"tx_meta", "tx_sessions", "tx_turns", "tx_tool_calls", "tx_usage", "tx_cursors",
 	"tx_enrichment", "tx_enrichment_spend", "tx_embeddings", "tx_enrichment_search", "tx_enrichment_search_data", "tx_enrichment_search_idx",
-	"tx_enrichment_search_content", "tx_enrichment_search_docsize", "tx_enrichment_search_config"}
+	"tx_enrichment_search_content", "tx_enrichment_search_docsize", "tx_enrichment_search_config",
+	"tx_turn_search", "tx_turn_search_data", "tx_turn_search_idx", "tx_turn_search_content", "tx_turn_search_docsize", "tx_turn_search_config"}
 
 func stamp(t time.Time) string {
 	if t.IsZero() {
@@ -155,7 +157,7 @@ func redactedInput(raw string) string {
 func applyDetail(ctx context.Context, tx *sql.Tx, registration, source, sourceID, segment string, d *domain.TranscriptDetail) (string, error) {
 	pk := sessionPK(registration, source, sourceID, segment)
 	if d.Reset {
-		for _, table := range []string{"tx_turns", "tx_tool_calls", "tx_usage"} {
+		for _, table := range []string{"tx_turns", "tx_tool_calls", "tx_usage", "tx_turn_search"} {
 			if _, err := tx.ExecContext(ctx, `DELETE FROM `+table+` WHERE session_pk = ?`, pk); err != nil {
 				return "", err
 			}
@@ -206,15 +208,22 @@ func applyDetail(ctx context.Context, tx *sql.Tx, registration, source, sourceID
 		if strings.TrimSpace(t.EventUUID) == "" {
 			return "", errors.New("transcript: turn without an event id")
 		}
+		text := Redact(t.Text)
 		res, err := tx.ExecContext(ctx, `INSERT INTO tx_turns (session_pk, seq, event_uuid, parent_uuid, role, ts, request_id, is_sidechain,
  stop_reason, text_redacted, has_thinking, thinking_bytes) VALUES (?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(session_pk, event_uuid) DO NOTHING`,
 			pk, seq+1, Redact(t.EventUUID), Redact(t.ParentUUID), Redact(t.Role), stamp(t.TS), Redact(t.RequestID), boolInt(t.IsSidechain),
-			Redact(t.StopReason), Redact(t.Text), boolInt(t.HasThinking), t.ThinkingBytes)
+			Redact(t.StopReason), text, boolInt(t.HasThinking), t.ThinkingBytes)
 		if err != nil {
 			return "", err
 		}
 		if n, _ := res.RowsAffected(); n > 0 {
 			seq++
+			// The same redacted text is indexed per turn, so a hit can point at its turn.
+			if text != "" {
+				if _, err := tx.ExecContext(ctx, `INSERT INTO tx_turn_search (text, session_pk, seq) VALUES (?,?,?)`, text, pk, seq); err != nil {
+					return "", err
+				}
+			}
 		}
 	}
 	for _, c := range d.Tools {

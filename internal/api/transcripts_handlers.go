@@ -26,6 +26,8 @@ func (s *Server) registerTranscriptRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET "+transcriptsPrefix+"/status", s.transcriptsGuard(s.handleTranscriptStatus))
 	mux.HandleFunc("GET "+transcriptsPrefix+"/sessions", s.transcriptsGuard(s.handleTranscriptSessions))
 	mux.HandleFunc("GET "+transcriptsPrefix+"/sessions/{id}", s.transcriptsGuard(s.handleTranscriptSession))
+	mux.HandleFunc("GET "+transcriptsPrefix+"/sessions/{id}/find", s.transcriptsGuard(s.handleTranscriptFind))
+	mux.HandleFunc("GET "+transcriptsPrefix+"/sessions/{id}/errors", s.transcriptsGuard(s.handleTranscriptErrors))
 	mux.HandleFunc("GET "+transcriptsPrefix+"/facets", s.transcriptsGuard(s.handleTranscriptFacets))
 	mux.HandleFunc("GET "+transcriptsPrefix+"/projects", s.transcriptsGuard(s.handleTranscriptProjects))
 	// Any other method on the prefix must look like an unknown route when the
@@ -144,6 +146,8 @@ func (s *Server) handleTranscriptStatus(w http.ResponseWriter, r *http.Request, 
 		"semantic":  notice == "",
 		"auth":      s.authMode(),
 		"modes":     []string{transcript.ModeText, transcript.ModeSummary, transcript.ModeSemantic, transcript.ModeHybrid},
+		// features lists the optional reads this build serves, so a client can enable them without guessing.
+		"features": []string{"tool_target", "error_excerpt", "turn_hits", "find", "errors"},
 	}
 	if notice != "" {
 		out["semantic_notice"] = notice
@@ -246,6 +250,67 @@ func (s *Server) handleTranscriptSession(w http.ResponseWriter, r *http.Request,
 		return
 	}
 	writeJSON(w, http.StatusOK, d)
+}
+
+const maxFindQuery = 256
+
+func (s *Server) handleTranscriptFind(w http.ResponseWriter, r *http.Request, svc *service.TranscriptBrowseService) {
+	id := r.PathValue("id")
+	if !validSessionID(id) {
+		http.NotFound(w, r)
+		return
+	}
+	q := r.URL.Query()
+	text := strings.TrimSpace(q.Get("q"))
+	if text == "" || len(text) > maxFindQuery {
+		http.Error(w, "q is required and at most 256 characters", http.StatusBadRequest)
+		return
+	}
+	after, limit := -1, 0
+	if v := q.Get("after_offset"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < -1 {
+			http.Error(w, "invalid after_offset", http.StatusBadRequest)
+			return
+		}
+		after = n
+	}
+	if v := q.Get("limit"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 1 {
+			http.Error(w, "invalid limit", http.StatusBadRequest)
+			return
+		}
+		limit = n
+	}
+	res, err := svc.Find(r.Context(), id, text, after, limit)
+	switch {
+	case errors.Is(err, transcript.ErrSessionNotFound):
+		http.NotFound(w, r)
+	case errors.Is(err, transcript.ErrFindTooBroad):
+		http.Error(w, "search too broad; narrow the query", http.StatusServiceUnavailable)
+	case err != nil:
+		http.Error(w, "cannot search session", http.StatusInternalServerError)
+	default:
+		writeJSON(w, http.StatusOK, res)
+	}
+}
+
+func (s *Server) handleTranscriptErrors(w http.ResponseWriter, r *http.Request, svc *service.TranscriptBrowseService) {
+	id := r.PathValue("id")
+	if !validSessionID(id) {
+		http.NotFound(w, r)
+		return
+	}
+	res, err := svc.Errors(r.Context(), id)
+	switch {
+	case errors.Is(err, transcript.ErrSessionNotFound):
+		http.NotFound(w, r)
+	case err != nil:
+		http.Error(w, "cannot read errors", http.StatusInternalServerError)
+	default:
+		writeJSON(w, http.StatusOK, res)
+	}
 }
 
 func (s *Server) handleTranscriptFacets(w http.ResponseWriter, r *http.Request, svc *service.TranscriptBrowseService) {

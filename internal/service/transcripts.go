@@ -74,3 +74,19 @@ func (s *TranscriptBrowseService) Projects(ctx context.Context, q string, limit 
 	}
 	return out, err
 }
+
+func (s *TranscriptBrowseService) Find(ctx context.Context, id, text string, afterOffset, limit int) (transcript.FindResult, error) {
+	r, err := s.store.FindInSession(ctx, id, text, afterOffset, limit)
+	if err == nil {
+		s.audit("find", id, len(r.Matches))
+	}
+	return r, err
+}
+
+func (s *TranscriptBrowseService) Errors(ctx context.Context, id string) (transcript.ErrorList, error) {
+	r, err := s.store.SessionErrors(ctx, id)
+	if err == nil {
+		s.audit("errors", id, len(r.Items))
+	}
+	return r, err
+}

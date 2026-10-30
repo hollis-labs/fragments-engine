@@ -171,6 +171,10 @@ CREATE VIRTUAL TABLE IF NOT EXISTS transcript_search USING fts5(id UNINDEXED, ti
 	if err := backfillTargets(ctx, conn); err != nil {
 		return err
 	}
+	// v3 -> v4: the per-turn search index. Turn text is stored a second time in it; existing turns are indexed here.
+	if err := backfillTurnSearch(ctx, conn); err != nil {
+		return err
+	}
 	if _, err := conn.ExecContext(ctx, `INSERT INTO tx_meta VALUES ('schema_version', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, fmt.Sprint(derivedSchemaVersion)); err != nil {
 		return err
 	}
@@ -270,4 +274,17 @@ func backfillTargets(ctx context.Context, conn *sql.Conn) error {
 		}
 	}
 	return nil
+}
+
+// backfillTurnSearch indexes the existing turns the first time the per-turn index is empty.
+func backfillTurnSearch(ctx context.Context, conn *sql.Conn) error {
+	var n int
+	if err := conn.QueryRowContext(ctx, `SELECT COUNT(*) FROM tx_turn_search`).Scan(&n); err != nil {
+		return err
+	}
+	if n > 0 {
+		return nil
+	}
+	_, err := conn.ExecContext(ctx, `INSERT INTO tx_turn_search (text, session_pk, seq) SELECT text_redacted, session_pk, seq FROM tx_turns WHERE text_redacted <> ''`)
+	return err
 }
