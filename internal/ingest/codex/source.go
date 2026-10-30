@@ -104,7 +104,7 @@ func (Source) Collect(ctx context.Context, cfg config.IngestConfig) ([]domain.Pi
 			domain.NoteSkip(ctx, "size_limit", rel)
 			continue
 		}
-		fragment, class, tail, err := collectSegment(ctx, path, rel, info, maxBytes, rules.ToolResultExcerptBytes)
+		fragment, class, tail, err := collectSegment(ctx, path, rel, info, maxBytes, domain.ExcerptCapture(max(0, rules.ToolResultExcerptBytes), max(0, rules.ToolResultExcerptOnErrorBytes)))
 		if err != nil {
 			if cerr := ctx.Err(); cerr != nil {
 				return nil, cerr
@@ -133,6 +133,7 @@ func (Source) Collect(ctx context.Context, cfg config.IngestConfig) ([]domain.Pi
 		// A thread can have multiple physical rollout files (fork/revert histories).
 		// Keep each file distinct without treating its metadata as authority.
 		fragment.SourceIdentity.SegmentKey = "rollout/" + filepath.ToSlash(rel)
+		fragment.Detail.ApplyExcerptPolicy(max(0, rules.ToolResultExcerptBytes), max(0, rules.ToolResultExcerptOnErrorBytes))
 		out = append(out, fragment)
 	}
 	return out, nil

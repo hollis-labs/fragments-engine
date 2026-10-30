@@ -92,7 +92,13 @@ and none of it reaches shared recall, routing or destinations.
 - **Tool calls** keep name, redacted input (capped at 4 KiB; over the cap only
   the top-level keys and size), start/end time, and the result's status and byte
   size. A redacted result excerpt is off by default; set
-  `rules.tool_result_excerpt_bytes` (at most 2048) to keep one.
+  `rules.tool_result_excerpt_bytes` (at most 2048) to keep one, or
+  `rules.tool_result_excerpt_on_error_bytes` (at most 2048) to keep one for
+  failed results only. The transcript API shows each call's `target` (what it
+  acted on: a path, the start of a command, a URL host or a search pattern, at
+  most 200 bytes, derived from the redacted input; existing sessions gain it on
+  upgrade) and, for a failed call, its `error_excerpt`. An excerpt setting
+  applies to segments ingested after it is set.
 - **Usage** is tokens only (input, output, cache read, cache creation), one row
   per request id. A response split over several lines repeats its usage, so rows
   merge by maximum rather than summing lines. Prices and task or workstream

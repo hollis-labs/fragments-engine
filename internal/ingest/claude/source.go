@@ -55,6 +55,13 @@ func (Source) Collect(ctx context.Context, cfg config.IngestConfig) ([]domain.Pi
 	if excerpt > maxExcerptBytes {
 		excerpt = maxExcerptBytes
 	}
+	onError := rules.ToolResultExcerptOnErrorBytes
+	if onError < 0 {
+		onError = 0
+	}
+	if onError > maxExcerptBytes {
+		onError = maxExcerptBytes
+	}
 
 	out := make([]domain.PipelineFragment, 0, len(paths))
 	for _, path := range paths {
@@ -74,7 +81,7 @@ func (Source) Collect(ctx context.Context, cfg config.IngestConfig) ([]domain.Pi
 			domain.NoteSkip(ctx, "size_limit", relPath)
 			continue
 		}
-		fragment, skip, err := collectSegment(ctx, root, path, relPath, info, excerpt)
+		fragment, skip, err := collectSegment(ctx, root, path, relPath, info, domain.ExcerptCapture(excerpt, onError))
 		if err != nil {
 			if cerr := ctx.Err(); cerr != nil {
 				return nil, cerr
@@ -93,6 +100,7 @@ func (Source) Collect(ctx context.Context, cfg config.IngestConfig) ([]domain.Pi
 			domain.NoteSkip(ctx, skip, relPath)
 			continue
 		}
+		fragment.Detail.ApplyExcerptPolicy(excerpt, onError)
 		out = append(out, fragment)
 	}
 	return out, nil

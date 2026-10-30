@@ -590,6 +590,11 @@ type ToolCallMeta struct {
 	ResultBytes int    `json:"result_bytes"`
 	StartedAt   string `json:"started_at,omitempty"`
 	EndedAt     string `json:"ended_at,omitempty"`
+	// Target is what the call acted on (path, command start, URL host, pattern), at most 200 bytes.
+	Target string `json:"target,omitempty"`
+	// ErrorExcerpt is the redacted start of a failed call's result, present only for status "error" and only when
+	// the source kept one (tool_result_excerpt_on_error_bytes).
+	ErrorExcerpt string `json:"error_excerpt,omitempty"`
 }
 
 type UsageView struct {
@@ -700,7 +705,7 @@ func (s *Store) SessionDetail(ctx context.Context, id string, turnOffset, turnLi
 }
 
 func (s *Store) callsByTurn(ctx context.Context, id string) (map[string][]ToolCallMeta, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT turn_uuid, name, result_status, result_bytes, started_at, ended_at FROM tx_tool_calls WHERE session_pk = ? ORDER BY started_at, tool_use_id`, id)
+	rows, err := s.db.QueryContext(ctx, `SELECT turn_uuid, name, result_status, result_bytes, started_at, ended_at, target_redacted, CASE WHEN result_status = 'error' THEN result_excerpt_redacted ELSE '' END FROM tx_tool_calls WHERE session_pk = ? ORDER BY started_at, tool_use_id`, id)
 	if err != nil {
 		return nil, errors.New("transcript: cannot read tool calls")
 	}
@@ -709,7 +714,7 @@ func (s *Store) callsByTurn(ctx context.Context, id string) (map[string][]ToolCa
 	for rows.Next() {
 		var turn string
 		var c ToolCallMeta
-		if err := rows.Scan(&turn, &c.Name, &c.Status, &c.ResultBytes, &c.StartedAt, &c.EndedAt); err != nil {
+		if err := rows.Scan(&turn, &c.Name, &c.Status, &c.ResultBytes, &c.StartedAt, &c.EndedAt, &c.Target, &c.ErrorExcerpt); err != nil {
 			return nil, errors.New("transcript: cannot read tool calls")
 		}
 		out[turn] = append(out[turn], c)
@@ -719,7 +724,7 @@ func (s *Store) callsByTurn(ctx context.Context, id string) (map[string][]ToolCa
 
 // unattachedCalls lists tool rows that match none of the session's turns.
 func (s *Store) unattachedCalls(ctx context.Context, id string) []ToolCallMeta {
-	rows, err := s.db.QueryContext(ctx, `SELECT name, result_status, result_bytes, started_at, ended_at FROM tx_tool_calls
+	rows, err := s.db.QueryContext(ctx, `SELECT name, result_status, result_bytes, started_at, ended_at, target_redacted, CASE WHEN result_status = 'error' THEN result_excerpt_redacted ELSE '' END FROM tx_tool_calls
  WHERE session_pk = ? AND turn_uuid NOT IN (SELECT event_uuid FROM tx_turns WHERE session_pk = ?) ORDER BY started_at, tool_use_id LIMIT ?`, id, id, maxTreeNodes)
 	if err != nil {
 		return nil
@@ -728,7 +733,7 @@ func (s *Store) unattachedCalls(ctx context.Context, id string) []ToolCallMeta {
 	var out []ToolCallMeta
 	for rows.Next() {
 		var c ToolCallMeta
-		if rows.Scan(&c.Name, &c.Status, &c.ResultBytes, &c.StartedAt, &c.EndedAt) == nil {
+		if rows.Scan(&c.Name, &c.Status, &c.ResultBytes, &c.StartedAt, &c.EndedAt, &c.Target, &c.ErrorExcerpt) == nil {
 			out = append(out, c)
 		}
 	}
