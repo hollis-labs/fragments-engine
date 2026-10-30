@@ -158,6 +158,19 @@ CREATE VIRTUAL TABLE IF NOT EXISTS transcript_search USING fts5(id UNINDEXED, ti
 			return err
 		}
 	}
+	// v2 -> v3: the tool call's target. It is derived from the stored redacted input, so existing rows gain it here.
+	var hasTarget int
+	if err := conn.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info('tx_tool_calls') WHERE name = 'target_redacted'`).Scan(&hasTarget); err != nil {
+		return err
+	}
+	if hasTarget == 0 {
+		if _, err := conn.ExecContext(ctx, `ALTER TABLE tx_tool_calls ADD COLUMN target_redacted TEXT NOT NULL DEFAULT ''`); err != nil {
+			return err
+		}
+	}
+	if err := backfillTargets(ctx, conn); err != nil {
+		return err
+	}
 	if _, err := conn.ExecContext(ctx, `INSERT INTO tx_meta VALUES ('schema_version', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, fmt.Sprint(derivedSchemaVersion)); err != nil {
 		return err
 	}
@@ -230,4 +243,31 @@ func SetLockWaits(busy, deadline time.Duration) (restore func()) {
 	prevBusy, prevDeadline := busyTimeoutMS, writeDeadline
 	busyTimeoutMS, writeDeadline = int(busy/time.Millisecond), deadline
 	return func() { busyTimeoutMS, writeDeadline = prevBusy, prevDeadline }
+}
+
+// backfillTargets fills target_redacted for rows that have an input but no target. It is idempotent.
+func backfillTargets(ctx context.Context, conn *sql.Conn) error {
+	rows, err := conn.QueryContext(ctx, `SELECT session_pk, tool_use_id, name, input_redacted FROM tx_tool_calls WHERE target_redacted = '' AND input_redacted <> ''`)
+	if err != nil {
+		return err
+	}
+	type row struct{ pk, id, target string }
+	var todo []row
+	for rows.Next() {
+		var pk, id, name, input string
+		if err := rows.Scan(&pk, &id, &name, &input); err != nil {
+			rows.Close()
+			return err
+		}
+		if t := toolTarget(name, input); t != "" {
+			todo = append(todo, row{pk, id, Redact(t)})
+		}
+	}
+	rows.Close()
+	for _, r := range todo {
+		if _, err := conn.ExecContext(ctx, `UPDATE tx_tool_calls SET target_redacted = ? WHERE session_pk = ? AND tool_use_id = ?`, r.target, r.pk, r.id); err != nil {
+			return err
+		}
+	}
+	return nil
 }

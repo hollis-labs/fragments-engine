@@ -256,6 +256,9 @@ type ClaudeCodeRules struct {
 	// this many bytes (hard cap 2048). Zero, the default, keeps only the result's
 	// status and size.
 	ToolResultExcerptBytes int `json:"tool_result_excerpt_bytes" yaml:"tool_result_excerpt_bytes"`
+	// ToolResultExcerptOnErrorBytes keeps a redacted excerpt of failed tool results only, up to this many bytes
+	// (hard cap 2048). It applies when ToolResultExcerptBytes is smaller. Zero, the default, keeps none.
+	ToolResultExcerptOnErrorBytes int `json:"tool_result_excerpt_on_error_bytes" yaml:"tool_result_excerpt_on_error_bytes"`
 }
 
 type CodexSessionRules struct {
@@ -264,6 +267,9 @@ type CodexSessionRules struct {
 	// this many bytes (hard cap 2048). Zero, the default, keeps only the result's
 	// status and size.
 	ToolResultExcerptBytes int `json:"tool_result_excerpt_bytes" yaml:"tool_result_excerpt_bytes"`
+	// ToolResultExcerptOnErrorBytes keeps a redacted excerpt of failed tool results only, up to this many bytes
+	// (hard cap 2048). It applies when ToolResultExcerptBytes is smaller. Zero, the default, keeps none.
+	ToolResultExcerptOnErrorBytes int `json:"tool_result_excerpt_on_error_bytes" yaml:"tool_result_excerpt_on_error_bytes"`
 }
 
 type AntigravityRules struct {
@@ -272,6 +278,9 @@ type AntigravityRules struct {
 	// this many bytes (hard cap 2048). Zero, the default, keeps only the result's
 	// status and size.
 	ToolResultExcerptBytes int `json:"tool_result_excerpt_bytes" yaml:"tool_result_excerpt_bytes"`
+	// ToolResultExcerptOnErrorBytes keeps a redacted excerpt of failed tool results only, up to this many bytes
+	// (hard cap 2048). It applies when ToolResultExcerptBytes is smaller. Zero, the default, keeps none.
+	ToolResultExcerptOnErrorBytes int `json:"tool_result_excerpt_on_error_bytes" yaml:"tool_result_excerpt_on_error_bytes"`
 	// IncludeLogChunks re-enables brain/<id>/.system_generated/logs/chunks/**.
 	// Those files are byte-for-byte pieces of logs/transcript.jsonl and
 	// logs/transcript_full.jsonl, which are imported whole, so by default they are

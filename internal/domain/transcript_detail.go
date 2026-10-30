@@ -130,3 +130,31 @@ func LookupCursor(ctx context.Context, path string) (TranscriptCursor, bool) {
 	}
 	return lookup(path)
 }
+
+// ApplyExcerptPolicy sets how much of each tool result is kept: all bytes for any result, onError more for failed
+// ones. The sources capture up to the larger of the two; this trims what the policy does not allow.
+func (d *TranscriptDetail) ApplyExcerptPolicy(all, onError int) {
+	if d == nil {
+		return
+	}
+	for i := range d.Tools {
+		c := &d.Tools[i]
+		limit := all
+		if c.IsError && onError > limit {
+			limit = onError
+		}
+		if limit <= 0 {
+			c.ResultExcerpt, c.MaxExcerpt = "", 0
+			continue
+		}
+		c.MaxExcerpt = limit
+	}
+}
+
+// ExcerptCapture is the capture limit a source should use for a policy.
+func ExcerptCapture(all, onError int) int {
+	if onError > all {
+		return onError
+	}
+	return all
+}

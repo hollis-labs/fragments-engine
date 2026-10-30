@@ -43,6 +43,13 @@ func (Source) Collect(ctx context.Context, cfg config.IngestConfig) ([]domain.Pi
 	if excerpt > maxExcerpt {
 		excerpt = maxExcerpt
 	}
+	onError := rules.ToolResultExcerptOnErrorBytes
+	if onError < 0 {
+		onError = 0
+	}
+	if onError > maxExcerpt {
+		onError = maxExcerpt
+	}
 	if strings.TrimSpace(cfg.Source.Root) == "" {
 		return nil, errors.New("Antigravity source root is required")
 	}
@@ -89,7 +96,7 @@ func (Source) Collect(ctx context.Context, cfg config.IngestConfig) ([]domain.Pi
 				skip     string
 			)
 			if section == "conversations" {
-				captured, skip, err = captureConversation(ctx, filepath.Join(root, "brain"), path, relPath, before, maxBytes, excerpt)
+				captured, skip, err = captureConversation(ctx, filepath.Join(root, "brain"), path, relPath, before, maxBytes, domain.ExcerptCapture(excerpt, onError))
 			} else {
 				content, trimmed, err = brain(ctx, path, maxBytes)
 			}
@@ -117,6 +124,7 @@ func (Source) Collect(ctx context.Context, cfg config.IngestConfig) ([]domain.Pi
 					domain.NoteSkip(ctx, skip, relPath)
 					continue
 				}
+				captured.Detail.ApplyExcerptPolicy(excerpt, onError)
 				out = append(out, captured)
 				continue
 			}

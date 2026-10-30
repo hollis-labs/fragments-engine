@@ -18,7 +18,7 @@ import (
 // structure (who, when, which tool, how many tokens), not raw material:
 // thinking text is never kept, tool results are status and size unless the
 // ingest asked for a bounded redacted excerpt, and tool inputs are capped.
-const derivedSchemaVersion = 2
+const derivedSchemaVersion = 3
 
 const (
 	maxToolInputBytes     = 4 << 10
@@ -54,6 +54,7 @@ CREATE TABLE IF NOT EXISTS tx_tool_calls (
  tool_use_id TEXT NOT NULL, session_pk TEXT NOT NULL, turn_uuid TEXT NOT NULL DEFAULT '', name TEXT NOT NULL,
  input_redacted TEXT NOT NULL DEFAULT '', result_status TEXT NOT NULL DEFAULT 'none', result_bytes INTEGER NOT NULL DEFAULT 0,
  result_excerpt_redacted TEXT NOT NULL DEFAULT '', started_at TEXT NOT NULL DEFAULT '', ended_at TEXT NOT NULL DEFAULT '',
+ target_redacted TEXT NOT NULL DEFAULT '',
  PRIMARY KEY (session_pk, tool_use_id)
 );
 CREATE INDEX IF NOT EXISTS tx_tool_calls_name ON tx_tool_calls (name, started_at);
@@ -224,6 +225,7 @@ func applyDetail(ctx context.Context, tx *sql.Tx, registration, source, sourceID
 				status = "error"
 			}
 		}
+		input := redactedInput(c.InputJSON)
 		excerpt := ""
 		if c.MaxExcerpt > 0 && c.ResultExcerpt != "" {
 			limit := c.MaxExcerpt
@@ -234,18 +236,19 @@ func applyDetail(ctx context.Context, tx *sql.Tx, registration, source, sourceID
 		}
 		// A call and its result can arrive in different batches; merge, never lose.
 		if _, err := tx.ExecContext(ctx, `INSERT INTO tx_tool_calls (tool_use_id, session_pk, turn_uuid, name, input_redacted, result_status,
- result_bytes, result_excerpt_redacted, started_at, ended_at) VALUES (?,?,?,?,?,?,?,?,?,?)
+ result_bytes, result_excerpt_redacted, started_at, ended_at, target_redacted) VALUES (?,?,?,?,?,?,?,?,?,?,?)
  ON CONFLICT(session_pk, tool_use_id) DO UPDATE SET
   turn_uuid = CASE WHEN excluded.turn_uuid <> '' THEN excluded.turn_uuid ELSE tx_tool_calls.turn_uuid END,
   name = CASE WHEN excluded.name <> '' THEN excluded.name ELSE tx_tool_calls.name END,
   input_redacted = CASE WHEN excluded.input_redacted <> '' THEN excluded.input_redacted ELSE tx_tool_calls.input_redacted END,
+  target_redacted = CASE WHEN excluded.target_redacted <> '' THEN excluded.target_redacted ELSE tx_tool_calls.target_redacted END,
   started_at = CASE WHEN excluded.started_at <> '' THEN excluded.started_at ELSE tx_tool_calls.started_at END,
   result_status = CASE WHEN excluded.result_status <> 'none' THEN excluded.result_status ELSE tx_tool_calls.result_status END,
   result_bytes = CASE WHEN excluded.result_status <> 'none' THEN excluded.result_bytes ELSE tx_tool_calls.result_bytes END,
   result_excerpt_redacted = CASE WHEN excluded.result_status <> 'none' THEN excluded.result_excerpt_redacted ELSE tx_tool_calls.result_excerpt_redacted END,
   ended_at = CASE WHEN excluded.ended_at <> '' THEN excluded.ended_at ELSE tx_tool_calls.ended_at END`,
-			Redact(c.ToolUseID), pk, Redact(c.TurnUUID), Redact(c.Name), redactedInput(c.InputJSON), status, c.ResultSize, excerpt,
-			stamp(c.StartedAt), stamp(c.EndedAt)); err != nil {
+			Redact(c.ToolUseID), pk, Redact(c.TurnUUID), Redact(c.Name), input, status, c.ResultSize, excerpt,
+			stamp(c.StartedAt), stamp(c.EndedAt), Redact(toolTarget(c.Name, input))); err != nil {
 			return "", err
 		}
 	}
