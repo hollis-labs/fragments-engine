@@ -356,6 +356,9 @@ material_json=excluded.material_json, title=excluded.title, content=excluded.con
 			}
 		}
 	}
+	if err := stampIngest(ctx, tx, pk); err != nil {
+		return "", errors.New("transcript: cannot record ingest time")
+	}
 	if err := tx.Commit(); err != nil {
 		return "", errors.New("transcript: cannot commit private record")
 	}

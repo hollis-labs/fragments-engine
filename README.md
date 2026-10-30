@@ -108,6 +108,14 @@ and none of it reaches shared recall, routing or destinations.
   of one session containing the text, and `GET
   /v1/transcripts/sessions/{id}/errors` lists its failed tool calls. Both stay
   owner-only, loopback-only and audited like the other transcript reads.
+- **Freshness and stats.** `GET /v1/transcripts/status` carries `ingest
+  {state, last_ingest_at, sources[{tool, last_ingest_at}]}`, stamped whenever a
+  segment is accepted (`state` is `never` until then). `GET
+  /v1/transcripts/stats` takes the session-list filters (`since`, `until`,
+  `tool`, `model`, `kind`, `project`, `has_error`, `tag`) and returns
+  `{totals, by_day, by_tool, by_model, by_project}` over the whole database:
+  sessions, turns, tokens, tool calls and errors (at most 400 days and 20
+  projects).
 - **Usage** is tokens only (input, output, cache read, cache creation), one row
   per request id. A response split over several lines repeats its usage, so rows
   merge by maximum rather than summing lines. Prices and task or workstream

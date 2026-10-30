@@ -109,3 +109,34 @@ func TestTurnIndexSurvivesReuploadAndBackfills(t *testing.T) {
 		t.Fatalf("backfill %d want %d", after, before)
 	}
 }
+
+func TestIngestFreshnessAndStats(t *testing.T) {
+	st := openStore(t)
+	ctx := context.Background()
+	if ing, err := st.Ingest(ctx); err != nil || ing.State != "never" || ing.LastIngestAt != "" || len(ing.Sources) != 0 {
+		t.Fatalf("%+v %v", ing, err)
+	}
+	st, _ = turnSearchStore(t)
+	ing, err := st.Ingest(ctx)
+	if err != nil || ing.State != "ok" || ing.LastIngestAt == "" || len(ing.Sources) != 1 || ing.Sources[0].LastIngestAt != ing.LastIngestAt {
+		t.Fatalf("%+v %v", ing, err)
+	}
+	stats, err := st.Stats(ctx, SessionFilter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.Totals.Sessions != 1 || stats.Totals.Turns != 6 || stats.Totals.ToolCalls != 2 || stats.Totals.Errors != 1 || stats.Totals.Tokens == 0 {
+		t.Fatalf("totals %+v", stats.Totals)
+	}
+	if len(stats.ByDay) != 1 || stats.ByDay[0].Key != "2026-10-10" || len(stats.ByTool) != 1 || stats.ByTool[0].Sessions != 1 || len(stats.ByModel) != 1 || len(stats.ByProject) != 1 {
+		t.Fatalf("groups %+v", stats)
+	}
+	none, err := st.Stats(ctx, SessionFilter{Tool: "nope"})
+	if err != nil || none.Totals.Sessions != 0 || len(none.ByDay) != 0 {
+		t.Fatalf("%+v %v", none, err)
+	}
+	yes := true
+	if hit, _ := st.Stats(ctx, SessionFilter{HasError: &yes}); hit.Totals.Sessions != 1 {
+		t.Fatalf("%+v", hit.Totals)
+	}
+}

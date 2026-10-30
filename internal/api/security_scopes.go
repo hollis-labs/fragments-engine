@@ -26,7 +26,7 @@ func apiScopes() *auth.ScopeTable {
 		"/v1/auth/session", "/v1/ingests", "/v1/ingests/get", "/v1/ingests/runs", "/v1/ingests/schedules",
 		"/v1/queue/status", "/v1/queue/destinations", "/v1/queue/events", "/v1/queue/pending", "/v1/queue/failed",
 		"/v1/destinations", "/v1/destinations/status", "/v1/routes", "/v1/route-log", "/v1/jobs/ingest", "/v1/workers/status", "/v1/config",
-		"/v1/transcripts/status", "/v1/transcripts/sessions", "/v1/transcripts/sessions/{id}", "/v1/transcripts/sessions/{id}/find", "/v1/transcripts/sessions/{id}/errors", "/v1/transcripts/facets", "/v1/transcripts/projects",
+		"/v1/transcripts/status", "/v1/transcripts/sessions", "/v1/transcripts/sessions/{id}", "/v1/transcripts/sessions/{id}/find", "/v1/transcripts/sessions/{id}/errors", "/v1/transcripts/stats", "/v1/transcripts/facets", "/v1/transcripts/projects",
 	} {
 		t.Route("GET", path, "fragments-engine.admin")
 	}

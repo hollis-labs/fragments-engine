@@ -28,6 +28,7 @@ func (s *Server) registerTranscriptRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET "+transcriptsPrefix+"/sessions/{id}", s.transcriptsGuard(s.handleTranscriptSession))
 	mux.HandleFunc("GET "+transcriptsPrefix+"/sessions/{id}/find", s.transcriptsGuard(s.handleTranscriptFind))
 	mux.HandleFunc("GET "+transcriptsPrefix+"/sessions/{id}/errors", s.transcriptsGuard(s.handleTranscriptErrors))
+	mux.HandleFunc("GET "+transcriptsPrefix+"/stats", s.transcriptsGuard(s.handleTranscriptStats))
 	mux.HandleFunc("GET "+transcriptsPrefix+"/facets", s.transcriptsGuard(s.handleTranscriptFacets))
 	mux.HandleFunc("GET "+transcriptsPrefix+"/projects", s.transcriptsGuard(s.handleTranscriptProjects))
 	// Any other method on the prefix must look like an unknown route when the
@@ -147,10 +148,15 @@ func (s *Server) handleTranscriptStatus(w http.ResponseWriter, r *http.Request, 
 		"auth":      s.authMode(),
 		"modes":     []string{transcript.ModeText, transcript.ModeSummary, transcript.ModeSemantic, transcript.ModeHybrid},
 		// features lists the optional reads this build serves, so a client can enable them without guessing.
-		"features": []string{"tool_target", "error_excerpt", "turn_hits", "find", "errors"},
+		"features": []string{"tool_target", "error_excerpt", "turn_hits", "find", "errors", "stats", "ingest"},
 	}
 	if notice != "" {
 		out["semantic_notice"] = notice
+	}
+	if svc.Available() {
+		if ing, err := svc.Ingest(r.Context()); err == nil {
+			out["ingest"] = ing
+		}
 	}
 	writeJSON(w, http.StatusOK, out)
 }
@@ -250,6 +256,15 @@ func (s *Server) handleTranscriptSession(w http.ResponseWriter, r *http.Request,
 		return
 	}
 	writeJSON(w, http.StatusOK, d)
+}
+
+func (s *Server) handleTranscriptStats(w http.ResponseWriter, r *http.Request, svc *service.TranscriptBrowseService) {
+	st, err := svc.Stats(r.Context(), transcriptFilter(r))
+	if err != nil {
+		http.Error(w, "cannot compute stats", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, st)
 }
 
 const maxFindQuery = 256

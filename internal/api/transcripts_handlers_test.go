@@ -69,8 +69,14 @@ func TestTranscriptFindAndErrorsRoutes(t *testing.T) {
 			t.Errorf("remote peer on %s: %d", p, r.Code)
 		}
 	}
+	if r := transcriptGet(handler, "/v1/transcripts/stats?tool=x", "127.0.0.1:1234", "127.0.0.1:8091"); r.Code != http.StatusOK || !strings.Contains(r.Body.String(), `"totals"`) {
+		t.Errorf("stats: %d %s", r.Code, r.Body.String())
+	}
+	if r := transcriptGet(handler, "/v1/transcripts/stats", "203.0.113.9:1234", "127.0.0.1:8091"); r.Code != http.StatusForbidden {
+		t.Errorf("stats remote peer: %d", r.Code)
+	}
 	status := transcriptGet(handler, "/v1/transcripts/status", "127.0.0.1:1234", "127.0.0.1:8091").Body.String()
-	if !strings.Contains(status, `"find"`) || !strings.Contains(status, `"turn_hits"`) {
+	if !strings.Contains(status, `"find"`) || !strings.Contains(status, `"turn_hits"`) || !strings.Contains(status, `"ingest"`) || !strings.Contains(status, `"never"`) {
 		t.Errorf("status lacks features: %s", status)
 	}
 }
