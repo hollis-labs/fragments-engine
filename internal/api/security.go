@@ -25,6 +25,9 @@ type Security struct {
 	Issuer         IssuerSecurity
 }
 
+// AuthApp names the posture env var: HOLLIS_AUTH_FRAGMENTS_ENGINE.
+const AuthApp = "fragments-engine"
+
 const sessionCookie = "fe_session"
 const sessionLifetime = 8 * time.Hour
 
@@ -36,6 +39,7 @@ type browserSession struct {
 type httpSecurity struct {
 	watch    *tokenfile.Watcher
 	guard    *auth.Guard
+	mode     auth.Mode
 	issuer   *issuerVerifier
 	origins  map[string]bool
 	mu       sync.Mutex
@@ -77,7 +81,13 @@ func (s *Server) WithSecurity(c Security) (*Server, error) {
 			return nil, err
 		}
 	}
-	g, err := auth.New(auth.Config{Mode: auth.ModeEnforce, Verifier: sec,
+	// Posture dial: HOLLIS_AUTH_FRAGMENTS_ENGINE, then HOLLIS_AUTH; unset keeps enforce.
+	mode, err := auth.ModeFromEnv(AuthApp, auth.ModeEnforce)
+	if err != nil {
+		return nil, err
+	}
+	sec.mode = mode
+	g, err := auth.New(auth.Config{Mode: mode, Verifier: sec,
 		OpenPath: func(string) bool { return false },
 		Scopes:   apiScopes(),
 	})
@@ -134,6 +144,9 @@ func (s *httpSecurity) Verify(ctx context.Context, presented string) (auth.Princ
 }
 
 func (s *Server) validateListen(addr string) error {
+	if s.security != nil && s.security.mode != auth.ModeEnforce && !isLoopbackAddr(addr) {
+		return fmt.Errorf("auth mode %q is only honoured on a loopback listener; %q is not loopback (use enforce)", s.security.mode, addr)
+	}
 	if s.security == nil && !isLoopbackAddr(addr) {
 		return errors.New("non-loopback API listener requires --token-file or FRAGMENTS_API_TOKEN_FILE")
 	}
