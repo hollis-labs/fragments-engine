@@ -99,6 +99,15 @@ and none of it reaches shared recall, routing or destinations.
   most 200 bytes, derived from the redacted input; existing sessions gain it on
   upgrade) and, for a failed call, its `error_excerpt`. An excerpt setting
   applies to segments ingested after it is set.
+- **Per-turn search.** Turn text is also kept in a per-turn full-text index
+  (`tx_turn_search`), so the transcript text is stored twice; it is filled at
+  ingest and, for existing sessions, when the derived schema upgrades. A text
+  search result names its best-matching turn (`turn_offset`, `turn_seq`) and a
+  `highlight` of the matched spans as rune ranges. `GET
+  /v1/transcripts/sessions/{id}/find?q=&after_offset=&limit=` lists the turns
+  of one session containing the text, and `GET
+  /v1/transcripts/sessions/{id}/errors` lists its failed tool calls. Both stay
+  owner-only, loopback-only and audited like the other transcript reads.
 - **Usage** is tokens only (input, output, cache read, cache creation), one row
   per request id. A response split over several lines repeats its usage, so rows
   merge by maximum rather than summing lines. Prices and task or workstream

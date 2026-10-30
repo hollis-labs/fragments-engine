@@ -45,6 +45,36 @@ var transcriptPaths = []string{
 	"/v1/transcripts/sessions/" + strings.Repeat("a", 64),
 }
 
+func TestTranscriptFindAndErrorsRoutes(t *testing.T) {
+	handler := NewServer(writeTranscriptAPIConfig(t, true)).Handler()
+	id := strings.Repeat("a", 64)
+	local := func(path string) int {
+		return transcriptGet(handler, path, "127.0.0.1:1234", "127.0.0.1:8091").Code
+	}
+	for path, want := range map[string]int{
+		"/v1/transcripts/sessions/" + id + "/find?q=x":                 http.StatusNotFound,
+		"/v1/transcripts/sessions/" + id + "/errors":                   http.StatusNotFound,
+		"/v1/transcripts/sessions/bad/find?q=x":                        http.StatusNotFound,
+		"/v1/transcripts/sessions/bad/errors":                          http.StatusNotFound,
+		"/v1/transcripts/sessions/" + id + "/find":                     http.StatusBadRequest,
+		"/v1/transcripts/sessions/" + id + "/find?q=x&limit=0":         http.StatusBadRequest,
+		"/v1/transcripts/sessions/" + id + "/find?q=x&after_offset=-5": http.StatusBadRequest,
+	} {
+		if got := local(path); got != want {
+			t.Errorf("%s: %d want %d", path, got, want)
+		}
+	}
+	for _, p := range []string{"/find?q=x", "/errors"} {
+		if r := transcriptGet(handler, "/v1/transcripts/sessions/"+id+p, "203.0.113.9:1234", "127.0.0.1:8091"); r.Code != http.StatusForbidden {
+			t.Errorf("remote peer on %s: %d", p, r.Code)
+		}
+	}
+	status := transcriptGet(handler, "/v1/transcripts/status", "127.0.0.1:1234", "127.0.0.1:8091").Body.String()
+	if !strings.Contains(status, `"find"`) || !strings.Contains(status, `"turn_hits"`) {
+		t.Errorf("status lacks features: %s", status)
+	}
+}
+
 func TestTranscriptRoutes404WhenDisabled(t *testing.T) {
 	handler := NewServer(writeTranscriptAPIConfig(t, false)).Handler()
 	for _, p := range transcriptPaths {

@@ -73,6 +73,11 @@ type SessionSummary struct {
 	ToolCalls int    `json:"tool_calls"`
 	Errors    int    `json:"errors"`
 	Snippet   string `json:"snippet,omitempty"`
+	// TurnOffset and TurnSeq locate the best-matching turn of a text search; Highlight is that turn's snippet
+	// with the matched spans as rune ranges, so a reader never has to parse the bracketed snippet.
+	TurnOffset *int       `json:"turn_offset,omitempty"`
+	TurnSeq    *int       `json:"turn_seq,omitempty"`
+	Highlight  *Highlight `json:"highlight,omitempty"`
 	// Score is cosine similarity (semantic) or the fused rank score (hybrid).
 	Score float64 `json:"score,omitempty"`
 	// Match says which field matched a summary, semantic or hybrid search.
@@ -437,6 +442,18 @@ func (s *Store) SearchSessions(ctx context.Context, text string, f SessionFilter
 		}
 		page.Items[i].Snippet = clip(snip, maxSnippetBytes)
 		page.Items[i].Match = &Match{Field: "transcript", Excerpt: page.Items[i].Snippet}
+	}
+	ids := make([]string, len(page.Items))
+	for i := range page.Items {
+		ids[i] = page.Items[i].ID
+	}
+	if hits := s.bestTurns(budget, match, ids); len(hits) > 0 {
+		for i := range page.Items {
+			if h, ok := hits[page.Items[i].ID]; ok {
+				seq, off, hl := h.seq, h.offset, h.highlight
+				page.Items[i].TurnSeq, page.Items[i].TurnOffset, page.Items[i].Highlight = &seq, &off, &hl
+			}
+		}
 	}
 	page.Mode = ModeText
 	s.fillTitles(ctx, page.Items)
