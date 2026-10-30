@@ -90,3 +90,16 @@ func (s *TranscriptBrowseService) Errors(ctx context.Context, id string) (transc
 	}
 	return r, err
 }
+
+func (s *TranscriptBrowseService) Stats(ctx context.Context, f transcript.SessionFilter) (transcript.Stats, error) {
+	r, err := s.store.Stats(ctx, f)
+	if err == nil {
+		s.audit("stats", "", r.Totals.Sessions)
+	}
+	return r, err
+}
+
+// Ingest reports transcript freshness; it is part of /status and is not audited as a content read.
+func (s *TranscriptBrowseService) Ingest(ctx context.Context) (transcript.IngestStatus, error) {
+	return s.store.Ingest(ctx)
+}
