@@ -167,7 +167,7 @@
             "name": "renderer",
             "in": "query",
             "required": false,
-            "description": "Any-of. Repeat the parameter or comma-separate values.",
+            "description": "Any-of. Repeat the parameter (the contract form). The server also accepts comma-separated values in one parameter.",
             "style": "form",
             "explode": true,
             "schema": {"type": "array", "items": {"type": "string", "enum": ["article", "image", "gallery", "video", "audio", "document", "text"]}}
@@ -199,14 +199,14 @@
             "name": "since",
             "in": "query",
             "required": false,
-            "description": "Inclusive lower bound on capture time (the item's list sort time).",
+            "description": "Inclusive lower bound, nanosecond precision, on the item's list sort time: last capture time, or the staged time for scope=inbox.",
             "schema": {"type": "string", "format": "date-time"}
           },
           {
             "name": "until",
             "in": "query",
             "required": false,
-            "description": "Inclusive upper bound on capture time (the item's list sort time).",
+            "description": "Inclusive upper bound, nanosecond precision, on the item's list sort time: last capture time, or the staged time for scope=inbox.",
             "schema": {"type": "string", "format": "date-time"}
           },
           {

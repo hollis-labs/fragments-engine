@@ -19,11 +19,11 @@ with `scope`. Items always stay newest first, 50 per page.
 
 | Parameter | Meaning |
 |---|---|
-| `renderer` | Any-of `article`, `image`, `gallery`, `video`, `audio`, `document`, `text`. Repeat or comma-separate. |
+| `renderer` | Any-of `article`, `image`, `gallery`, `video`, `audio`, `document`, `text`. Repeat the parameter; comma-separated values in one parameter are also accepted. |
 | `tag` | Repeatable; every tag must be on the item (case-insensitive, combined tags). |
 | `state` | `unread`, `in_progress` or `read` for the requesting principal. No recorded state counts as `unread`. |
 | `provider` | Source provider, case-insensitive exact match. |
-| `since`, `until` | RFC 3339, inclusive, on the item's capture (list sort) time. |
+| `since`, `until` | RFC 3339, inclusive, compared at nanosecond precision against the item's list sort time: its last capture time, or for `scope=inbox` the time it was staged in the inbox. |
 | `q` | Keyword text over title and content, using the same FTS index and term quoting as `GET /v1/search`. |
 | `later`, `starred`, `archived` | `true` or `false`, on the requesting principal's flag (below). Without `archived`, archived items are left out of `scope=inbox` and `scope=library`, but not `scope=all`. `archived=true` returns only archived items. |
 
@@ -33,7 +33,7 @@ fingerprint of the filters it was issued for; presenting it with different
 filters is a 400. With no filters the response and cursors are unchanged.
 
 `renderer` and `tag` are derived during projection, so those filters are
-applied after the SQL filters over a bounded scan (5000 rows per request). If
+applied after the SQL filters over a bounded scan (5000 rows per request, read in chunks that grow from 100 to 800 rows). If
 the budget runs out before a page fills, the page is short but carries a
 cursor; keep following `next_cursor` until it is absent.
 
