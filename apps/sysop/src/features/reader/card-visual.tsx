@@ -5,6 +5,7 @@ import { cn } from '@hollis-labs/sysop-ui'
 import { readerControlClass, stopReaderNavigation } from './interaction'
 import {
   availableVariantHref,
+  featuredArticleImage,
   imageVariants,
   mediaState,
   orderedMedia,
@@ -54,6 +55,21 @@ function unavailableState(media: ReaderMediaItem[]): ResourceState {
 function selectCardVisual(item: ReaderRenderableItem): CardVisual | undefined {
   const media = orderedMedia(item.media)
   const title = item.display.title.value.trim() || 'Captured item'
+
+  if (item.renderer === 'article') {
+    const featured = featuredArticleImage(item)
+    if (!featured) return undefined
+    const variants = imageVariants(featured)
+    const href = variants.preview && availableVariantHref(variants.preview)
+    const largeHref = variants.large && availableVariantHref(variants.large)
+    return {
+      href,
+      largeHref,
+      alt: visualAlt(featured, `${title} featured image`),
+      label: 'Featured image',
+      state: href ? 'available' : unavailableState([featured]),
+    }
+  }
 
   if (item.renderer === 'image') {
     const candidate = media.find((entry) => entry.kind === 'image')

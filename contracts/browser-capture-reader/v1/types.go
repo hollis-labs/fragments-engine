@@ -299,6 +299,12 @@ type ReaderDisplay struct {
 	Byline      *ResolvedText `json:"byline,omitempty"`
 	PublishedAt *time.Time    `json:"published_at,omitempty"`
 	Summary     ResolvedText  `json:"summary"`
+	// FeaturedMediaID is the media asset ID of the hero image, else the first
+	// image by position. Absent when the item has no renderable image.
+	FeaturedMediaID string `json:"featured_media_id,omitempty"`
+	// ImageCount is the number of renderable images (primary, hero, gallery
+	// item or inline roles).
+	ImageCount int `json:"image_count"`
 }
 
 type ReaderArticle struct {

@@ -1,11 +1,12 @@
 import type { ReactNode } from 'react'
 
+import { ArticleFeaturedImage } from './article-featured'
 import { ArticleRenderer } from './article-renderer'
 import { ReaderCardVisual } from './card-visual'
 import { AudioRenderer, DocumentRenderer, TextRenderer, UnknownRenderer } from './fallback-renderer'
 import { GalleryRenderer } from './gallery-renderer'
 import { ImageRenderer } from './image-renderer'
-import { isReaderVisualRenderer } from './media'
+import { featuredArticleImage, isReaderVisualRenderer } from './media'
 import type { ReaderRendererProps } from './types'
 import { VideoRenderer } from './video-renderer'
 
@@ -32,13 +33,23 @@ function MediaArticleDetail({
 }
 
 export function ReaderContentRenderer(props: ReaderRendererProps) {
-  if (props.presentation === 'card' && isReaderVisualRenderer(props.item.renderer)) {
+  if (
+    props.presentation === 'card' &&
+    (isReaderVisualRenderer(props.item.renderer) || featuredArticleImage(props.item))
+  ) {
     return <ReaderCardVisual item={props.item} className={props.className} />
   }
 
   switch (props.item.renderer) {
     case 'article':
-      return <ArticleRenderer {...props} />
+      return props.presentation === 'detail' ? (
+        <>
+          <ArticleFeaturedImage item={props.item} className="mx-auto mb-5 max-w-[78ch]" />
+          <ArticleRenderer {...props} />
+        </>
+      ) : (
+        <ArticleRenderer {...props} />
+      )
     case 'image':
       return <MediaArticleDetail props={props}><ImageRenderer {...props} /></MediaArticleDetail>
     case 'gallery':

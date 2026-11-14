@@ -5,8 +5,11 @@ export { AudioRenderer, DocumentRenderer, TextRenderer, UnknownRenderer } from '
 export { ReaderCardVisual } from './card-visual'
 export { GalleryRenderer } from './gallery-renderer'
 export { ImageRenderer } from './image-renderer'
+export { ArticleFeaturedImage } from './article-featured'
 export {
+  articleImages,
   availableVariantHref,
+  featuredArticleImage,
   imageVariants,
   isReaderVisualRenderer,
   mediaState,

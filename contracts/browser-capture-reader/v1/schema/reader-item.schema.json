@@ -61,6 +61,15 @@
         },
         "summary": {
           "$ref": "#/$defs/ResolvedText"
+        },
+        "featured_media_id": {
+          "$ref": "common.schema.json#/$defs/Identifier",
+          "description": "media_asset_id of the hero image, else the first renderable image by position. Absent when there is none."
+        },
+        "image_count": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Number of renderable images (roles primary, hero, gallery_item, inline)."
         }
       }
     },

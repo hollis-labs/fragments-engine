@@ -33,6 +33,10 @@ export interface ReaderDisplay {
   byline?: ReaderResolvedText
   published_at?: string
   summary: ReaderResolvedText
+  /** media_asset_id of the hero image, else the first renderable image. */
+  featured_media_id?: string
+  /** Number of renderable images (roles primary, hero, gallery_item, inline). */
+  image_count?: number
 }
 
 export interface ReaderArticleContent {
