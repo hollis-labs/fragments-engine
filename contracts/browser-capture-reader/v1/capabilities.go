@@ -32,7 +32,8 @@ func DefaultCapabilities(serverVersion string) CapabilityDiscovery {
 		},
 		Reader: ReaderCapabilities{
 			SchemaVersions: []string{ReaderItemVersion, ReaderListVersion, ReaderCommandVersion, ReaderContextVersion, ConversationRefVersion,
-				ReaderCollectionVersion, ReaderCollectionListVersion, ReaderCollectionItemsVersion},
+				ReaderCollectionVersion, ReaderCollectionListVersion, ReaderCollectionItemsVersion,
+				ReaderChangesVersion},
 			Scopes:        []string{"inbox", "library", "all"},
 			Renderers:     []string{"article", "image", "gallery", "video", "audio", "document", "text", "unknown"},
 			PlaybackKinds: []string{"provider_embed", "blob_stream", "external_stream"},

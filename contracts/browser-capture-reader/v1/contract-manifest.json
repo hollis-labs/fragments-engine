@@ -18,6 +18,7 @@
     "reader_collection_update": "schema/reader-collection-update.schema.json",
     "reader_collection_add_item": "schema/reader-collection-add-item.schema.json",
     "reader_collection_order": "schema/reader-collection-order.schema.json",
+    "reader_changes": "schema/reader-changes.schema.json",
     "conversation_ref": "schema/conversation-ref.schema.json",
     "playback": "schema/playback.schema.json",
     "reading_state": "schema/reading-state.schema.json",

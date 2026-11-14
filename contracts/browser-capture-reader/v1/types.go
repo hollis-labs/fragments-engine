@@ -18,8 +18,10 @@ const (
 	ReaderCollectionVersion      = "fe.reader.collection.v1"
 	ReaderCollectionListVersion  = "fe.reader.collection-list.v1"
 	ReaderCollectionItemsVersion = "fe.reader.collection-items.v1"
-	ConversationRefVersion       = "fe.reader.conversation-ref.v1"
-	CapabilitiesVersion          = "fe.capabilities.v1"
+	// Change feed version (docs/reader-change-feed.md).
+	ReaderChangesVersion   = "fe.reader.changes.v1"
+	ConversationRefVersion = "fe.reader.conversation-ref.v1"
+	CapabilitiesVersion    = "fe.capabilities.v1"
 )
 
 type ProviderExtensions map[string]map[string]any
@@ -441,6 +443,26 @@ type ReaderCollectionItems struct {
 	Collection    ReaderCollection `json:"collection"`
 	Items         []ReaderItem     `json:"items"`
 	NextCursor    string           `json:"next_cursor,omitempty"`
+}
+
+// ReaderChange is one Reader item that changed. ChangeSeq is the sequence
+// number of its latest change; Kinds names what changed since the client was
+// last caught up; Item is the item as it is now.
+type ReaderChange struct {
+	FragmentID string     `json:"fragment_id"`
+	ChangeSeq  int64      `json:"change_seq"`
+	Kinds      []string   `json:"kinds"`
+	Item       ReaderItem `json:"item"`
+}
+
+// ReaderChangeList is one page of the change feed in sequence order.
+// NextCursor is always present; CaughtUp reports that the page reached the
+// end of the feed as it was when the page was read.
+type ReaderChangeList struct {
+	SchemaVersion string         `json:"schema_version"`
+	Items         []ReaderChange `json:"items"`
+	NextCursor    string         `json:"next_cursor"`
+	CaughtUp      bool           `json:"caught_up"`
 }
 
 type ReaderCollectionCreate struct {

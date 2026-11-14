@@ -343,6 +343,50 @@
         }
       }
     },
+    "/v1/reader/changes": {
+      "get": {
+        "operationId": "listReaderChanges",
+        "summary": "List Reader items created or changed since a cursor, in change order",
+        "parameters": [
+          {
+            "name": "after",
+            "in": "query",
+            "required": false,
+            "description": "Opaque cursor from an earlier response's next_cursor. Omitted or empty starts from the beginning of the feed. A cursor belongs to the principal it was issued to.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "Page size.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200,
+              "default": 50
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One page of the change feed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "./schema/reader-changes.schema.json"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
     "/v1/reader/collections": {
       "get": {
         "operationId": "listReaderCollections",

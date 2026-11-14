@@ -71,6 +71,9 @@ type ReaderBase struct {
 	// CollectionPosition is set only by ListCollection: the item's position in
 	// the collection being listed.
 	CollectionPosition int
+	// ChangeSeq is set only by ListChanges: the sequence number of the
+	// fragment's latest change visible to the requesting principal.
+	ChangeSeq int64
 }
 
 type ReaderCoverage struct {
@@ -114,6 +117,11 @@ type ReaderSnapshot struct {
 	// Collections holds, per fragment, the requesting principal's collections
 	// that contain it, ordered by name.
 	Collections map[string][]domain.ReaderCollectionRef
+	// ChangeKinds and ChangeSequence are set only by ListChanges. ChangeKinds
+	// holds, per fragment, the kinds of change newer than the request's base
+	// sequence. ChangeSequence is the feed's sequence as read before the page.
+	ChangeKinds    map[string][]string
+	ChangeSequence int64
 }
 
 // List returns a complete projection snapshot in exactly seven SELECT
@@ -149,7 +157,7 @@ func (r *ReaderRepository) List(ctx context.Context, request ReaderPageRequest) 
 	if err != nil {
 		return ReaderSnapshot{}, fmt.Errorf("list reader bases: %w", err)
 	}
-	bases, err := scanReaderBases(rows, false)
+	bases, err := scanReaderBases(rows, nil)
 	if err != nil {
 		return ReaderSnapshot{}, err
 	}
@@ -176,7 +184,7 @@ func (r *ReaderRepository) ListCollection(ctx context.Context, principalID, coll
 	if err != nil {
 		return ReaderSnapshot{}, fmt.Errorf("list reader collection bases: %w", err)
 	}
-	bases, err := scanReaderBases(rows, true)
+	bases, err := scanReaderBases(rows, func(base *ReaderBase) any { return &base.CollectionPosition })
 	if err != nil {
 		return ReaderSnapshot{}, err
 	}
@@ -203,7 +211,7 @@ func (r *ReaderRepository) Get(ctx context.Context, fragmentID, revisionID, prin
 	if err != nil {
 		return ReaderSnapshot{}, fmt.Errorf("get reader base: %w", err)
 	}
-	bases, err := scanReaderBases(rows, false)
+	bases, err := scanReaderBases(rows, nil)
 	if err != nil {
 		return ReaderSnapshot{}, err
 	}
@@ -387,9 +395,9 @@ LEFT JOIN curated_notes cn ON cn.fragment_id = f.id
 ORDER BY candidates.position, f.id
 LIMIT ?`
 
-// scanReaderBases scans the shared base columns; withPosition also scans the
-// trailing collection position that readerCollectionBaseSQL selects.
-func scanReaderBases(rows *sql.Rows, withPosition bool) ([]ReaderBase, error) {
+// scanReaderBases scans the shared base columns. A query that selects one
+// more trailing column passes extra, which names where it goes.
+func scanReaderBases(rows *sql.Rows, extra func(*ReaderBase) any) ([]ReaderBase, error) {
 	defer rows.Close()
 	bases := make([]ReaderBase, 0)
 	for rows.Next() {
@@ -422,8 +430,8 @@ func scanReaderBases(rows *sql.Rows, withPosition bool) ([]ReaderBase, error) {
 			&readingLater, &readingArchived, &readingStarred,
 			&noteBody, &noteRevision, &noteActor, &noteUpdated,
 		}
-		if withPosition {
-			dest = append(dest, &base.CollectionPosition)
+		if extra != nil {
+			dest = append(dest, extra(&base))
 		}
 		if err := rows.Scan(dest...); err != nil {
 			return nil, fmt.Errorf("scan reader base: %w", err)

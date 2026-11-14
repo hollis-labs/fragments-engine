@@ -40,6 +40,7 @@ func TestValidFixtures(t *testing.T) {
 		{"valid-reader-collection.json", SchemaReaderCollection},
 		{"valid-reader-collection-list.json", SchemaReaderCollectionList},
 		{"valid-reader-collection-order.json", SchemaReaderCollectionOrder},
+		{"valid-reader-changes.json", SchemaReaderChanges},
 	}
 	for _, test := range tests {
 		t.Run(test.file, func(t *testing.T) {
@@ -66,6 +67,7 @@ func TestInvalidFixturesProveStrictnessAndDiscriminators(t *testing.T) {
 		{"invalid-reader-context-messages.json", SchemaReaderContext},
 		{"invalid-reader-collection-order-duplicate.json", SchemaReaderCollectionOrder},
 		{"invalid-reader-collection-update-empty.json", SchemaReaderCollectionUpdate},
+		{"invalid-reader-changes-missing-cursor.json", SchemaReaderChanges},
 	}
 	for _, test := range tests {
 		t.Run(test.file, func(t *testing.T) {
@@ -317,6 +319,7 @@ func TestOpenAPI31ReferencesPublishedSchemas(t *testing.T) {
 		"/v1/reader/items/{fragmentId}/commands",
 		"/v1/reader/items/{fragmentId}/context",
 		"/v1/reader/items/{fragmentId}/conversations",
+		"/v1/reader/changes",
 		"/v1/reader/collections",
 		"/v1/reader/collections/{collectionId}",
 		"/v1/reader/collections/{collectionId}/items",
