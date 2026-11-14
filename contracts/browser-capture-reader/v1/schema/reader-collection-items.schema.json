@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.hollis-labs.dev/fragments-engine/browser-capture-reader/v1/reader-collection-items.schema.json",
+  "title": "ReaderCollectionItems",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "collection",
+    "items"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "fe.reader.collection-items.v1"
+    },
+    "collection": {
+      "$ref": "reader-collection.schema.json"
+    },
+    "items": {
+      "description": "Members in position order.",
+      "type": "array",
+      "items": {
+        "$ref": "reader-item.schema.json"
+      }
+    },
+    "next_cursor": {
+      "type": "string",
+      "minLength": 1
+    }
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.hollis-labs.dev/fragments-engine/browser-capture-reader/v1/reader-collection-order.schema.json",
+  "title": "ReaderCollectionOrder",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "expected_revision",
+    "fragment_ids"
+  ],
+  "properties": {
+    "expected_revision": {
+      "description": "The collection revision the client last read.",
+      "type": "integer",
+      "minimum": 0
+    },
+    "fragment_ids": {
+      "description": "Exactly the current members, each once, in the new order.",
+      "type": "array",
+      "items": {
+        "$ref": "common.schema.json#/$defs/Identifier"
+      },
+      "maxItems": 5000,
+      "uniqueItems": true
+    }
+  }
+}

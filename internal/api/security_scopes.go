@@ -14,14 +14,20 @@ func apiScopes() *auth.ScopeTable {
 		"/v1/capabilities", "/v1/search", "/v1/fragments", "/v1/fragments/browse", "/v1/fragments/get", "/v1/fragments/related", "/v1/fragments/attachment",
 		"/v1/entities", "/v1/entities/fragments", "/v1/recall/status", "/v1/inbox", "/v1/inbox/entities", "/v1/inbox/entity-items",
 		"/v1/reader/items", "/v1/reader/items/{id}", "/v1/reader/items/{id}/content", "/v1/media/variants/{id}/content",
+		"/v1/reader/collections", "/v1/reader/collections/{id}", "/v1/reader/collections/{id}/items",
 	} {
 		t.Route("GET", path, "fragments-engine.read")
 	}
 	for _, path := range []string{
 		"/v1/intake", "/v1/fragments/update", "/v1/fragments/materialize-ffs", "/v1/fragments/reanalyze-attachments", "/v1/reader/items/{id}/commands",
+		"/v1/reader/collections", "/v1/reader/collections/{id}/items",
 	} {
 		t.Route("POST", path, "fragments-engine.write")
 	}
+	t.Route("PATCH", "/v1/reader/collections/{id}", "fragments-engine.write")
+	t.Route("DELETE", "/v1/reader/collections/{id}", "fragments-engine.write")
+	t.Route("DELETE", "/v1/reader/collections/{id}/items/{fragment}", "fragments-engine.write")
+	t.Route("PUT", "/v1/reader/collections/{id}/order", "fragments-engine.write")
 	for _, path := range []string{
 		"/v1/auth/session", "/v1/ingests", "/v1/ingests/get", "/v1/ingests/runs", "/v1/ingests/schedules",
 		"/v1/queue/status", "/v1/queue/destinations", "/v1/queue/events", "/v1/queue/pending", "/v1/queue/failed",

@@ -566,6 +566,7 @@ func projectReaderItem(base repository.ReaderBase, snapshot repository.ReaderSna
 			Revision: base.CuratedNote.Revision, UpdatedAt: base.CuratedNote.UpdatedAt}
 	}
 	item.Playback = readerYouTubePlayback(renderer, base.Source)
+	item.Collections = projectReaderCollectionRefs(snapshot.Collections[base.FragmentID])
 	if err := validateReaderContract(capturecontract.SchemaReaderItem, item); err != nil {
 		return capturecontract.ReaderItem{}, fmt.Errorf("project reader item %q: %w", base.FragmentID, err)
 	}

@@ -27,6 +27,11 @@ and still requires both submitted and canonical URLs.
   `fe.reader.command.v1`
 - Revision-pinned chat seam: `fe.reader.context.v1` and
   `fe.reader.conversation-ref.v1`
+- Collections: `fe.reader.collection.v1`, `fe.reader.collection-list.v1` and
+  `fe.reader.collection-items.v1`, plus four unversioned request bodies
+  (`reader-collection-create`, `-update`, `-add-item` and `-order`). The
+  Reader item's optional `collections` field is the additive v1 field that
+  goes with them. Routes and rules: `docs/reader-collections.md`.
 - Capability discovery: `fe.capabilities.v1`
 
 Additive optional fields may be added within v1. Removing a field, changing a
@@ -37,7 +42,9 @@ upload, capture lookup, and client completion are ready at `/v1/captures` and
 its capture-scoped subresources. Capability discovery reports
 `capture_manifest`, `asset_upload`, `capture_completion`, `reader_query`, and
 `reader_commands` as `true`. Revision-pinned Reader context and conversation
-references remain contract seams and are reported as `false`. Discovery also
+references remain contract seams and are reported as `false`. Collections have
+no operation flag (the capabilities schema is closed); a server that supports
+them lists the collection versions in `reader.schema_versions`. Discovery also
 advertises the 2 MiB manifest and 256 MiB asset limits; completion JSON is
 limited to 1 MiB.
 

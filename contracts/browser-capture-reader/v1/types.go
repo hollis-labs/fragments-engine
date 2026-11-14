@@ -14,8 +14,12 @@ const (
 	ReaderListVersion        = "fe.reader.list.v1"
 	ReaderCommandVersion     = "fe.reader.command.v1"
 	ReaderContextVersion     = "fe.reader.context.v1"
-	ConversationRefVersion   = "fe.reader.conversation-ref.v1"
-	CapabilitiesVersion      = "fe.capabilities.v1"
+	// Collection versions (docs/reader-collections.md).
+	ReaderCollectionVersion      = "fe.reader.collection.v1"
+	ReaderCollectionListVersion  = "fe.reader.collection-list.v1"
+	ReaderCollectionItemsVersion = "fe.reader.collection-items.v1"
+	ConversationRefVersion       = "fe.reader.conversation-ref.v1"
+	CapabilitiesVersion          = "fe.capabilities.v1"
 )
 
 type ProviderExtensions map[string]map[string]any
@@ -399,6 +403,68 @@ type ReaderItem struct {
 	ReadingState       ReadingState         `json:"reading_state"`
 	Operations         OperationalSummaries `json:"operations"`
 	Actions            []CommandCapability  `json:"actions"`
+	// Collections lists the requesting principal's collections that contain
+	// this fragment, ordered by name. It is omitted when there are none.
+	Collections []ReaderCollectionRef `json:"collections,omitempty"`
+}
+
+// ReaderCollectionRef names one collection a Reader item is in.
+type ReaderCollectionRef struct {
+	CollectionID string `json:"collection_id"`
+	Name         string `json:"name"`
+	Kind         string `json:"kind"`
+}
+
+// ReaderCollection is a principal-owned, ordered set of fragments. Kind is a
+// display hint; Revision is the value mutations carry as expected_revision.
+type ReaderCollection struct {
+	SchemaVersion string    `json:"schema_version"`
+	CollectionID  string    `json:"collection_id"`
+	Name          string    `json:"name"`
+	Description   string    `json:"description"`
+	Kind          string    `json:"kind"`
+	ItemCount     int       `json:"item_count"`
+	Revision      int       `json:"revision"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
+}
+
+type ReaderCollectionList struct {
+	SchemaVersion string             `json:"schema_version"`
+	Collections   []ReaderCollection `json:"collections"`
+}
+
+// ReaderCollectionItems is one page of a collection's members in position
+// order, with the collection as it was when the page was read.
+type ReaderCollectionItems struct {
+	SchemaVersion string           `json:"schema_version"`
+	Collection    ReaderCollection `json:"collection"`
+	Items         []ReaderItem     `json:"items"`
+	NextCursor    string           `json:"next_cursor,omitempty"`
+}
+
+type ReaderCollectionCreate struct {
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	Kind        string `json:"kind,omitempty"`
+}
+
+type ReaderCollectionUpdate struct {
+	ExpectedRevision int     `json:"expected_revision"`
+	Name             *string `json:"name,omitempty"`
+	Description      *string `json:"description,omitempty"`
+	Kind             *string `json:"kind,omitempty"`
+}
+
+type ReaderCollectionAddItem struct {
+	ExpectedRevision int    `json:"expected_revision"`
+	FragmentID       string `json:"fragment_id"`
+	Position         *int   `json:"position,omitempty"`
+}
+
+type ReaderCollectionOrder struct {
+	ExpectedRevision int      `json:"expected_revision"`
+	FragmentIDs      []string `json:"fragment_ids"`
 }
 
 type ReaderItemList struct {
