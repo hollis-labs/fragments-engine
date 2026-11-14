@@ -48,29 +48,30 @@ export function ArticleFeaturedImage({
   const count = item.display.image_count ?? images.length
   const src = imageSrc(featured)
 
-  if (!src) {
-    const state = mediaState(featured)
-    return (
-      <ResourceStatePanel
-        className={cn('min-h-24 w-full', className)}
-        state={state === 'available' ? 'unavailable' : state}
-        compact
-        label="Featured image"
-      />
-    )
-  }
+  const featuredState = mediaState(featured)
 
   return (
     <figure
       className={cn('relative min-w-0 overflow-hidden rounded-sm border border-border bg-panel-2', className)}
       data-reader-featured-image
     >
-      <img
-        src={src}
-        alt={imageAlt(featured, `${title} featured image`)}
-        loading="lazy"
-        className="max-h-[64vh] w-full object-cover"
-      />
+      {src ? (
+        <img
+          src={src}
+          alt={imageAlt(featured, `${title} featured image`)}
+          loading="lazy"
+          className="max-h-[64vh] w-full object-cover"
+        />
+      ) : (
+        // The gallery control below stays available so the item's other
+        // images remain reachable when the featured one is not.
+        <ResourceStatePanel
+          className="min-h-24 w-full"
+          state={featuredState === 'available' ? 'unavailable' : featuredState}
+          compact
+          label="Featured image"
+        />
+      )}
       {count > 1 && (
         <>
           <button

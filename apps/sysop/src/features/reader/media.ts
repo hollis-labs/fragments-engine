@@ -16,11 +16,15 @@ export function isReaderVisualRenderer(renderer: string): boolean {
 
 const IMAGE_ROLES = new Set(['primary', 'gallery_item', 'hero', 'inline'])
 
-/** The item's renderable images in position order. */
+/** The item's distinct renderable images in position order. */
 export function articleImages(media: ReaderMediaItem[]): ReaderMediaItem[] {
-  return orderedMedia(media).filter(
-    (entry) => entry.kind === 'image' && IMAGE_ROLES.has(entry.attachment.role),
-  )
+  const seen = new Set<string>()
+  return orderedMedia(media).filter((entry) => {
+    if (entry.kind !== 'image' || !IMAGE_ROLES.has(entry.attachment.role)) return false
+    if (seen.has(entry.media_asset_id)) return false
+    seen.add(entry.media_asset_id)
+    return true
+  })
 }
 
 /** The featured image of an article item, when the server named one. */
