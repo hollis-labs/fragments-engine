@@ -22,35 +22,49 @@ const schemaBaseURL = "https://schemas.hollis-labs.dev/fragments-engine/browser-
 type SchemaName string
 
 const (
-	SchemaCaptureEnvelope   SchemaName = "capture-envelope"
-	SchemaCaptureResponse   SchemaName = "capture-response"
-	SchemaCaptureCompletion SchemaName = "capture-completion"
-	SchemaCaptureStatus     SchemaName = "capture-status"
-	SchemaPlayback          SchemaName = "playback"
-	SchemaReadingState      SchemaName = "reading-state"
-	SchemaReaderItem        SchemaName = "reader-item"
-	SchemaReaderList        SchemaName = "reader-list"
-	SchemaReaderCommand     SchemaName = "reader-command"
-	SchemaReaderContext     SchemaName = "reader-context"
-	SchemaConversationRef   SchemaName = "conversation-ref"
-	SchemaAPIProblem        SchemaName = "error"
-	SchemaCapabilities      SchemaName = "capabilities"
+	SchemaCaptureEnvelope         SchemaName = "capture-envelope"
+	SchemaCaptureResponse         SchemaName = "capture-response"
+	SchemaCaptureCompletion       SchemaName = "capture-completion"
+	SchemaCaptureStatus           SchemaName = "capture-status"
+	SchemaPlayback                SchemaName = "playback"
+	SchemaReadingState            SchemaName = "reading-state"
+	SchemaReaderItem              SchemaName = "reader-item"
+	SchemaReaderList              SchemaName = "reader-list"
+	SchemaReaderCommand           SchemaName = "reader-command"
+	SchemaReaderContext           SchemaName = "reader-context"
+	SchemaReaderCollection        SchemaName = "reader-collection"
+	SchemaReaderCollectionList    SchemaName = "reader-collection-list"
+	SchemaReaderCollectionItems   SchemaName = "reader-collection-items"
+	SchemaReaderCollectionCreate  SchemaName = "reader-collection-create"
+	SchemaReaderCollectionUpdate  SchemaName = "reader-collection-update"
+	SchemaReaderCollectionAddItem SchemaName = "reader-collection-add-item"
+	SchemaReaderCollectionOrder   SchemaName = "reader-collection-order"
+	SchemaConversationRef         SchemaName = "conversation-ref"
+	SchemaAPIProblem              SchemaName = "error"
+	SchemaCapabilities            SchemaName = "capabilities"
 )
 
 var schemaFiles = map[SchemaName]string{
-	SchemaCaptureEnvelope:   "capture-envelope.schema.json",
-	SchemaCaptureResponse:   "capture-response.schema.json",
-	SchemaCaptureCompletion: "capture-completion.schema.json",
-	SchemaCaptureStatus:     "capture-status.schema.json",
-	SchemaPlayback:          "playback.schema.json",
-	SchemaReadingState:      "reading-state.schema.json",
-	SchemaReaderItem:        "reader-item.schema.json",
-	SchemaReaderList:        "reader-list.schema.json",
-	SchemaReaderCommand:     "reader-command.schema.json",
-	SchemaReaderContext:     "reader-context.schema.json",
-	SchemaConversationRef:   "conversation-ref.schema.json",
-	SchemaAPIProblem:        "error.schema.json",
-	SchemaCapabilities:      "capabilities.schema.json",
+	SchemaCaptureEnvelope:         "capture-envelope.schema.json",
+	SchemaCaptureResponse:         "capture-response.schema.json",
+	SchemaCaptureCompletion:       "capture-completion.schema.json",
+	SchemaCaptureStatus:           "capture-status.schema.json",
+	SchemaPlayback:                "playback.schema.json",
+	SchemaReadingState:            "reading-state.schema.json",
+	SchemaReaderItem:              "reader-item.schema.json",
+	SchemaReaderList:              "reader-list.schema.json",
+	SchemaReaderCommand:           "reader-command.schema.json",
+	SchemaReaderContext:           "reader-context.schema.json",
+	SchemaReaderCollection:        "reader-collection.schema.json",
+	SchemaReaderCollectionList:    "reader-collection-list.schema.json",
+	SchemaReaderCollectionItems:   "reader-collection-items.schema.json",
+	SchemaReaderCollectionCreate:  "reader-collection-create.schema.json",
+	SchemaReaderCollectionUpdate:  "reader-collection-update.schema.json",
+	SchemaReaderCollectionAddItem: "reader-collection-add-item.schema.json",
+	SchemaReaderCollectionOrder:   "reader-collection-order.schema.json",
+	SchemaConversationRef:         "conversation-ref.schema.json",
+	SchemaAPIProblem:              "error.schema.json",
+	SchemaCapabilities:            "capabilities.schema.json",
 }
 
 //go:embed contract-manifest.json openapi.json schema/*.schema.json fixtures/*.json
@@ -224,6 +238,41 @@ func DecodeReaderCommand(raw []byte) (ReaderCommand, error) {
 	var value ReaderCommand
 	if err := validateAndDecode(SchemaReaderCommand, raw, &value); err != nil {
 		return ReaderCommand{}, err
+	}
+	return value, nil
+}
+
+// DecodeReaderCollectionCreate, DecodeReaderCollectionUpdate,
+// DecodeReaderCollectionAddItem and DecodeReaderCollectionOrder validate a
+// collection request body before binding it.
+func DecodeReaderCollectionCreate(raw []byte) (ReaderCollectionCreate, error) {
+	var value ReaderCollectionCreate
+	if err := validateAndDecode(SchemaReaderCollectionCreate, raw, &value); err != nil {
+		return ReaderCollectionCreate{}, err
+	}
+	return value, nil
+}
+
+func DecodeReaderCollectionUpdate(raw []byte) (ReaderCollectionUpdate, error) {
+	var value ReaderCollectionUpdate
+	if err := validateAndDecode(SchemaReaderCollectionUpdate, raw, &value); err != nil {
+		return ReaderCollectionUpdate{}, err
+	}
+	return value, nil
+}
+
+func DecodeReaderCollectionAddItem(raw []byte) (ReaderCollectionAddItem, error) {
+	var value ReaderCollectionAddItem
+	if err := validateAndDecode(SchemaReaderCollectionAddItem, raw, &value); err != nil {
+		return ReaderCollectionAddItem{}, err
+	}
+	return value, nil
+}
+
+func DecodeReaderCollectionOrder(raw []byte) (ReaderCollectionOrder, error) {
+	var value ReaderCollectionOrder
+	if err := validateAndDecode(SchemaReaderCollectionOrder, raw, &value); err != nil {
+		return ReaderCollectionOrder{}, err
 	}
 	return value, nil
 }

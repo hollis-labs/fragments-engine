@@ -37,6 +37,9 @@ func TestValidFixtures(t *testing.T) {
 		{"valid-conversation-ref.json", SchemaConversationRef},
 		{"valid-api-problem.json", SchemaAPIProblem},
 		{"valid-capabilities.json", SchemaCapabilities},
+		{"valid-reader-collection.json", SchemaReaderCollection},
+		{"valid-reader-collection-list.json", SchemaReaderCollectionList},
+		{"valid-reader-collection-order.json", SchemaReaderCollectionOrder},
 	}
 	for _, test := range tests {
 		t.Run(test.file, func(t *testing.T) {
@@ -61,6 +64,8 @@ func TestInvalidFixturesProveStrictnessAndDiscriminators(t *testing.T) {
 		{"invalid-reading-position-discriminator.json", SchemaReadingState},
 		{"invalid-api-problem-missing-errors.json", SchemaAPIProblem},
 		{"invalid-reader-context-messages.json", SchemaReaderContext},
+		{"invalid-reader-collection-order-duplicate.json", SchemaReaderCollectionOrder},
+		{"invalid-reader-collection-update-empty.json", SchemaReaderCollectionUpdate},
 	}
 	for _, test := range tests {
 		t.Run(test.file, func(t *testing.T) {
@@ -312,6 +317,11 @@ func TestOpenAPI31ReferencesPublishedSchemas(t *testing.T) {
 		"/v1/reader/items/{fragmentId}/commands",
 		"/v1/reader/items/{fragmentId}/context",
 		"/v1/reader/items/{fragmentId}/conversations",
+		"/v1/reader/collections",
+		"/v1/reader/collections/{collectionId}",
+		"/v1/reader/collections/{collectionId}/items",
+		"/v1/reader/collections/{collectionId}/items/{fragmentId}",
+		"/v1/reader/collections/{collectionId}/order",
 	} {
 		if _, exists := paths[required]; !exists {
 			t.Errorf("OpenAPI path %q is missing", required)

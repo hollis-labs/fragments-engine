@@ -1,0 +1,16 @@
+{
+  "schema_version": "fe.reader.collection-list.v1",
+  "collections": [
+    {
+      "schema_version": "fe.reader.collection.v1",
+      "collection_id": "rc-4f1d2c9a7b3e5d6f8a0b1c2d3e4f5a6b",
+      "name": "Watch later",
+      "description": "Talks to get through this month.",
+      "kind": "playlist",
+      "item_count": 3,
+      "revision": 5,
+      "created_at": "2026-11-14T09:00:00Z",
+      "updated_at": "2026-11-14T10:30:00.5Z"
+    }
+  ]
+}

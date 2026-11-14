@@ -31,10 +31,11 @@ func DefaultCapabilities(serverVersion string) CapabilityDiscovery {
 			TransferPreferences: []string{"browser_preferred", "server_preferred", "reference_only"},
 		},
 		Reader: ReaderCapabilities{
-			SchemaVersions: []string{ReaderItemVersion, ReaderListVersion, ReaderCommandVersion, ReaderContextVersion, ConversationRefVersion},
-			Scopes:         []string{"inbox", "library", "all"},
-			Renderers:      []string{"article", "image", "gallery", "video", "audio", "document", "text", "unknown"},
-			PlaybackKinds:  []string{"provider_embed", "blob_stream", "external_stream"},
+			SchemaVersions: []string{ReaderItemVersion, ReaderListVersion, ReaderCommandVersion, ReaderContextVersion, ConversationRefVersion,
+				ReaderCollectionVersion, ReaderCollectionListVersion, ReaderCollectionItemsVersion},
+			Scopes:        []string{"inbox", "library", "all"},
+			Renderers:     []string{"article", "image", "gallery", "video", "audio", "document", "text", "unknown"},
+			PlaybackKinds: []string{"provider_embed", "blob_stream", "external_stream"},
 			Commands: []string{
 				"add_tag",
 				"remove_tag",

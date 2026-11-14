@@ -31,7 +31,7 @@ func (q *countingReaderQueryer) QueryRowContext(ctx context.Context, query strin
 	return q.db.QueryRowContext(ctx, query, args...)
 }
 
-func TestReaderRepositoryUsesSixQueriesIndependentOfPageCardinality(t *testing.T) {
+func TestReaderRepositoryUsesSevenQueriesIndependentOfPageCardinality(t *testing.T) {
 	st, captureService := openReaderRepositoryFixture(t)
 	accepted := make([]capturecontract.CaptureManifestResponse, 3)
 	for index := range accepted {
@@ -44,8 +44,8 @@ func TestReaderRepositoryUsesSixQueriesIndependentOfPageCardinality(t *testing.T
 	if err != nil {
 		t.Fatalf("one-item page: %v", err)
 	}
-	if len(one.Bases) != 1 || counting.queries != 6 {
-		t.Fatalf("one-item page bases=%d queries=%d, want 1 and 6", len(one.Bases), counting.queries)
+	if len(one.Bases) != 1 || counting.queries != 7 {
+		t.Fatalf("one-item page bases=%d queries=%d, want 1 and 7", len(one.Bases), counting.queries)
 	}
 
 	counting.queries = 0
@@ -53,8 +53,8 @@ func TestReaderRepositoryUsesSixQueriesIndependentOfPageCardinality(t *testing.T
 	if err != nil {
 		t.Fatalf("multi-item page: %v", err)
 	}
-	if len(many.Bases) != 3 || counting.queries != 6 {
-		t.Fatalf("multi-item page bases=%d queries=%d, want 3 and 6", len(many.Bases), counting.queries)
+	if len(many.Bases) != 3 || counting.queries != 7 {
+		t.Fatalf("multi-item page bases=%d queries=%d, want 3 and 7", len(many.Bases), counting.queries)
 	}
 	for _, base := range many.Bases {
 		if len(many.Coverage[base.FragmentRevision.ID]) != 12 || len(many.Media[base.FragmentRevision.ID]) != 1 {
@@ -80,8 +80,8 @@ func TestReaderRepositoryUsesSixQueriesIndependentOfPageCardinality(t *testing.T
 	if err != nil {
 		t.Fatalf("detail: %v", err)
 	}
-	if len(detail.Bases) != 1 || counting.queries != 6 {
-		t.Fatalf("detail bases=%d queries=%d, want 1 and 6", len(detail.Bases), counting.queries)
+	if len(detail.Bases) != 1 || counting.queries != 7 {
+		t.Fatalf("detail bases=%d queries=%d, want 1 and 7", len(detail.Bases), counting.queries)
 	}
 
 	counting.queries = 0
@@ -89,8 +89,8 @@ func TestReaderRepositoryUsesSixQueriesIndependentOfPageCardinality(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(inbox.Bases) != 3 || counting.queries != 6 {
-		t.Fatalf("inbox page bases=%d queries=%d, want 3 and 6", len(inbox.Bases), counting.queries)
+	if len(inbox.Bases) != 3 || counting.queries != 7 {
+		t.Fatalf("inbox page bases=%d queries=%d, want 3 and 7", len(inbox.Bases), counting.queries)
 	}
 }
 

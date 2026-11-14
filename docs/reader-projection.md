@@ -52,9 +52,10 @@ the inbox, and archiving is not deletion.
 
 ## Scope semantics
 
-Fragments Engine does not yet persist the library disposition or collection
-semantics reserved for follow-up work. Reader v1 therefore uses the narrowest
-meaning supported by current persistence:
+Fragments Engine does not yet persist a library disposition. Reader v1
+therefore uses the narrowest meaning supported by current persistence
+(collections are a separate, explicit grouping; see
+[`reader-collections.md`](./reader-collections.md)):
 
 - `inbox` contains canonical fragments with a current `inbox` row.
 - `library` contains every canonical, persistently visible fragment.
@@ -71,7 +72,7 @@ capture time, falling back to ingest time.
 
 ## Batched read model
 
-A list page (including an empty page) and a detail request each execute exactly six SELECT
+A list page (including an empty page) and a detail request each execute exactly seven SELECT
 statements, regardless of item count:
 
 1. canonical fragment, selected revision, source identity, inbox marker,
@@ -80,9 +81,10 @@ statements, regardless of item count:
 3. ordered attachment references, logical media, and all physical variants;
 4. attributed fragment tags plus typed revision tag observations;
 5. capture annotations;
-6. routing and materialization log facts.
+6. routing and materialization log facts;
+7. the requesting principal's collections that contain each fragment.
 
-The five dependent reads use page-wide `IN` batches. Repository tests count
+The six dependent reads use page-wide `IN` batches. Repository tests count
 queries for one-item and multi-item pages to prevent per-item repository calls.
 Detail resolution performs alias canonicalization and requested-revision
 ownership in the first SQL statement; a revision owned by another fragment is
@@ -163,7 +165,7 @@ only one observation. `tags.combined` is unaffected.
 External route and materialize effects retain durable receipts and surface
 uncertain outcomes instead of risking an automatic duplicate effect.
 
-The six-query read budget remains intact: principal reading state and the
+The seven-query read budget remains intact: principal reading state and the
 aggregate revision are joined into the base query, while tag overlays are
 folded into the existing batched tag read. Generated media links use the
 fragment-and-revision-authorized resource route described in

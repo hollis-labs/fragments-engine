@@ -1,0 +1,82 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.hollis-labs.dev/fragments-engine/browser-capture-reader/v1/reader-collection.schema.json",
+  "title": "ReaderCollection",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "collection_id",
+    "name",
+    "description",
+    "kind",
+    "item_count",
+    "revision",
+    "created_at",
+    "updated_at"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "fe.reader.collection.v1"
+    },
+    "collection_id": {
+      "$ref": "common.schema.json#/$defs/Identifier"
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200,
+      "pattern": "\\S"
+    },
+    "description": {
+      "type": "string",
+      "maxLength": 2000
+    },
+    "kind": {
+      "description": "Display hint. playlist, reading_list and research are well known; collection is the default.",
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]{0,31}$"
+    },
+    "item_count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "revision": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "created_at": {
+      "$ref": "common.schema.json#/$defs/Timestamp"
+    },
+    "updated_at": {
+      "$ref": "common.schema.json#/$defs/Timestamp"
+    }
+  },
+  "$defs": {
+    "Ref": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "collection_id",
+        "name",
+        "kind"
+      ],
+      "properties": {
+        "collection_id": {
+          "$ref": "common.schema.json#/$defs/Identifier"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "pattern": "\\S"
+        },
+        "kind": {
+          "description": "Display hint. playlist, reading_list and research are well known; collection is the default.",
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]{0,31}$"
+        }
+      }
+    }
+  }
+}

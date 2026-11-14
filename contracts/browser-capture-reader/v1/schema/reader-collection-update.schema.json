@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.hollis-labs.dev/fragments-engine/browser-capture-reader/v1/reader-collection-update.schema.json",
+  "title": "ReaderCollectionUpdate",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "expected_revision"
+  ],
+  "minProperties": 2,
+  "properties": {
+    "expected_revision": {
+      "description": "The collection revision the client last read.",
+      "type": "integer",
+      "minimum": 0
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200,
+      "pattern": "\\S"
+    },
+    "description": {
+      "type": "string",
+      "maxLength": 2000
+    },
+    "kind": {
+      "description": "Display hint. playlist, reading_list and research are well known; collection is the default.",
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]{0,31}$"
+    }
+  }
+}

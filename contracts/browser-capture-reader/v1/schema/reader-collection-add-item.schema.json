@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.hollis-labs.dev/fragments-engine/browser-capture-reader/v1/reader-collection-add-item.schema.json",
+  "title": "ReaderCollectionAddItem",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "expected_revision",
+    "fragment_id"
+  ],
+  "properties": {
+    "expected_revision": {
+      "description": "The collection revision the client last read.",
+      "type": "integer",
+      "minimum": 0
+    },
+    "fragment_id": {
+      "$ref": "common.schema.json#/$defs/Identifier"
+    },
+    "position": {
+      "description": "Zero-based index; omitted, or at or past the end, appends.",
+      "type": "integer",
+      "minimum": 0
+    }
+  }
+}

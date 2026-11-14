@@ -135,7 +135,9 @@ The action menu is projected per item from this closed registry:
 `set_archived`, and `set_starred`. Commands require the
 projected aggregate revision and stable command/idempotency IDs. A conflict
 returns the current item so the UI can preserve a draft and reconcile. Triage
-decisions, inbox disposition, and folders/collections are not Reader v1 actions.
+decisions and inbox disposition are not Reader v1 actions. Collections
+(playlists, reading lists) have their own routes rather than commands; see
+[`reader-collections.md`](./reader-collections.md).
 
 Reader routes and commands are HTTP/Sysop surfaces over `App.Reader`,
 `App.ReaderResources`, and `App.ReaderCommands`. Existing route and materialize
@@ -193,8 +195,8 @@ ID through lookup, binding transfer, completion, and Reader projection.
 
 ## Deliberate non-goals
 
-The v1 baseline does not implement inbox disposition or persistent
-folder/collection semantics, automatic YouTube video download, FE-owned agent
+The v1 baseline does not implement inbox disposition, folders or nested
+collections, automatic YouTube video download, FE-owned agent
 messages/session lifecycle, arbitrary provider HTML, or remote media proxying.
 The published Reader context and conversation-reference schemas reserve a
 future revision-pinned handoff to an external session owner; their runtime

@@ -342,6 +342,333 @@
           "409": {"$ref": "#/components/responses/Problem"}
         }
       }
+    },
+    "/v1/reader/collections": {
+      "get": {
+        "operationId": "listReaderCollections",
+        "summary": "List the requesting principal's collections, ordered by name, with item counts",
+        "responses": {
+          "200": {
+            "description": "Collections",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "./schema/reader-collection-list.schema.json"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "createReaderCollection",
+        "summary": "Create a named, ordered collection of fragments",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "./schema/reader-collection-create.schema.json"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Collection created at revision 1",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "./schema/reader-collection.schema.json"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "409": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "413": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/v1/reader/collections/{collectionId}": {
+      "get": {
+        "operationId": "getReaderCollection",
+        "summary": "Get one collection",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CollectionID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Collection",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "./schema/reader-collection.schema.json"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "patch": {
+        "operationId": "updateReaderCollection",
+        "summary": "Rename, describe or change the kind hint of a collection",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CollectionID"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "./schema/reader-collection-update.schema.json"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated collection",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "./schema/reader-collection.schema.json"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "409": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "413": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteReaderCollection",
+        "summary": "Delete a collection and its membership; fragments are never deleted",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CollectionID"
+          },
+          {
+            "name": "expected_revision",
+            "in": "query",
+            "required": true,
+            "description": "The collection revision the client last read; anything but the current revision is a 409.",
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Collection deleted"
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "409": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/v1/reader/collections/{collectionId}/items": {
+      "get": {
+        "operationId": "listReaderCollectionItems",
+        "summary": "List a collection's members as Reader items in position order",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CollectionID"
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "description": "Opaque cursor bound to this collection.",
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The collection and one page of its members",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "./schema/reader-collection-items.schema.json"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "post": {
+        "operationId": "addReaderCollectionItem",
+        "summary": "Add a fragment to a collection, at the end unless a position is given",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CollectionID"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "./schema/reader-collection-add-item.schema.json"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Collection after the add; unchanged if the fragment was already a member",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "./schema/reader-collection.schema.json"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "409": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "413": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/v1/reader/collections/{collectionId}/items/{fragmentId}": {
+      "delete": {
+        "operationId": "removeReaderCollectionItem",
+        "summary": "Remove a fragment from a collection",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CollectionID"
+          },
+          {
+            "$ref": "#/components/parameters/FragmentID"
+          },
+          {
+            "name": "expected_revision",
+            "in": "query",
+            "required": true,
+            "description": "The collection revision the client last read; anything but the current revision is a 409.",
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Collection after the removal; unchanged if the fragment was not a member",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "./schema/reader-collection.schema.json"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "409": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/v1/reader/collections/{collectionId}/order": {
+      "put": {
+        "operationId": "reorderReaderCollection",
+        "summary": "Replace a collection's order with the given complete list of its members",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CollectionID"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "./schema/reader-collection-order.schema.json"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Collection after the reorder",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "./schema/reader-collection.schema.json"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "409": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "413": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
     }
   },
   "components": {
@@ -354,6 +681,12 @@
       },
       "FragmentID": {
         "name": "fragmentId",
+        "in": "path",
+        "required": true,
+        "schema": {"type": "string", "minLength": 1}
+      },
+      "CollectionID": {
+        "name": "collectionId",
         "in": "path",
         "required": true,
         "schema": {"type": "string", "minLength": 1}

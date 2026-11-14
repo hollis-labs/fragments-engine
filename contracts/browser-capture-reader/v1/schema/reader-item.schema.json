@@ -190,6 +190,14 @@
       "items": {
         "$ref": "#/$defs/CommandCapability"
       }
+    },
+    "collections": {
+      "description": "The requesting principal's collections that contain this fragment, ordered by name. Omitted when there are none.",
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "reader-collection.schema.json#/$defs/Ref"
+      }
     }
   },
   "$defs": {

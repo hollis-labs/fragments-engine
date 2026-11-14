@@ -45,24 +45,25 @@ const (
 func (a *App) Transcripts() *transcript.Store { return a.transcripts }
 
 type App struct {
-	store            *store.Store
-	transcripts      *transcript.Store
-	recall           recall.Indexer
-	Fragments        *service.FragmentService
-	Inbox            *service.InboxService
-	Routing          *service.RoutingService
-	Queue            *service.DeliveryQueueService
-	IngestQueue      queue.Queue
-	IngestSchedules  *service.IngestScheduleService
-	InboxReviewer    *service.InboxReviewerService
-	Jobs             *service.JobsService
-	Captures         *service.CaptureService
-	Enrichment       *service.EnrichmentService
-	AssetAcquisition *service.AssetAcquisitionService
-	ProviderMedia    *service.ProviderMediaCompletion
-	Reader           *service.ReaderService
-	ReaderResources  *service.ReaderResourceService
-	ReaderCommands   *service.ReaderCommandService
+	store             *store.Store
+	transcripts       *transcript.Store
+	recall            recall.Indexer
+	Fragments         *service.FragmentService
+	Inbox             *service.InboxService
+	Routing           *service.RoutingService
+	Queue             *service.DeliveryQueueService
+	IngestQueue       queue.Queue
+	IngestSchedules   *service.IngestScheduleService
+	InboxReviewer     *service.InboxReviewerService
+	Jobs              *service.JobsService
+	Captures          *service.CaptureService
+	Enrichment        *service.EnrichmentService
+	AssetAcquisition  *service.AssetAcquisitionService
+	ProviderMedia     *service.ProviderMediaCompletion
+	Reader            *service.ReaderService
+	ReaderResources   *service.ReaderResourceService
+	ReaderCommands    *service.ReaderCommandService
+	ReaderCollections *service.ReaderCollectionService
 }
 
 func Open(ctx context.Context, cfg config.Config) (*App, error) {
@@ -160,7 +161,8 @@ func Open(ctx context.Context, cfg config.Config) (*App, error) {
 	fragmentService.SetLegacyCaptureService(legacyCapture)
 	scheduleRepo := repository.NewIngestScheduleRepository(st.DB)
 	assetAcquisition := service.NewAssetAcquisitionService(mediaRepo)
-	readerService := service.NewReaderService(repository.NewReaderRepository(st.DB))
+	readerRepo := repository.NewReaderRepository(st.DB)
+	readerService := service.NewReaderService(readerRepo)
 	return &App{
 		store:           st,
 		transcripts:     transcriptStore,
@@ -197,6 +199,9 @@ func Open(ctx context.Context, cfg config.Config) (*App, error) {
 		),
 		ReaderCommands: service.NewReaderCommandService(
 			repository.NewReaderCommandRepository(st.DB), assetAcquisition, routingSvc, readerService,
+		),
+		ReaderCollections: service.NewReaderCollectionService(
+			repository.NewReaderCollectionRepository(st.DB), readerRepo,
 		),
 	}, nil
 }

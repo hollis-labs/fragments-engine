@@ -68,6 +68,9 @@ type ReaderBase struct {
 	AggregateRevision int
 	ReadingState      *domain.ReadingState
 	CuratedNote       *domain.CuratedNote
+	// CollectionPosition is set only by ListCollection: the item's position in
+	// the collection being listed.
+	CollectionPosition int
 }
 
 type ReaderCoverage struct {
@@ -108,10 +111,13 @@ type ReaderSnapshot struct {
 	Tags        map[string][]ReaderTagFact
 	Annotations map[string][]domain.CaptureAnnotation
 	Effects     map[string][]ReaderEffect
+	// Collections holds, per fragment, the requesting principal's collections
+	// that contain it, ordered by name.
+	Collections map[string][]domain.ReaderCollectionRef
 }
 
-// List returns a complete projection snapshot in exactly six SELECT
-// statements for every page: one base-page read followed by five
+// List returns a complete projection snapshot in exactly seven SELECT
+// statements for every page: one base-page read followed by six
 // set-based reads. The statement count does not vary with item cardinality.
 func (r *ReaderRepository) List(ctx context.Context, request ReaderPageRequest) (ReaderSnapshot, error) {
 	if r == nil || r.db == nil {
@@ -143,7 +149,34 @@ func (r *ReaderRepository) List(ctx context.Context, request ReaderPageRequest) 
 	if err != nil {
 		return ReaderSnapshot{}, fmt.Errorf("list reader bases: %w", err)
 	}
-	bases, err := scanReaderBases(rows)
+	bases, err := scanReaderBases(rows, false)
+	if err != nil {
+		return ReaderSnapshot{}, err
+	}
+	return r.loadBatches(ctx, bases, principalID)
+}
+
+// ListCollection returns one page of a collection's members in position
+// order, after the given position (-1 starts at the beginning). A collection
+// the principal does not own yields an empty page; the caller checks
+// ownership. It uses the same batch readers and query budget as List.
+func (r *ReaderRepository) ListCollection(ctx context.Context, principalID, collectionID string, afterPosition, limit int) (ReaderSnapshot, error) {
+	if r == nil || r.db == nil {
+		return ReaderSnapshot{}, fmt.Errorf("reader repository is unavailable")
+	}
+	principalID, collectionID = strings.TrimSpace(principalID), strings.TrimSpace(collectionID)
+	if principalID == "" || collectionID == "" {
+		return ReaderSnapshot{}, fmt.Errorf("reader principal and collection IDs are required")
+	}
+	if limit <= 0 {
+		return ReaderSnapshot{}, fmt.Errorf("reader page limit must be positive")
+	}
+	rows, err := r.db.QueryContext(ctx, readerCollectionBaseSQL,
+		principalID, collectionID, afterPosition, principalID, principalID, limit)
+	if err != nil {
+		return ReaderSnapshot{}, fmt.Errorf("list reader collection bases: %w", err)
+	}
+	bases, err := scanReaderBases(rows, true)
 	if err != nil {
 		return ReaderSnapshot{}, err
 	}
@@ -152,7 +185,7 @@ func (r *ReaderRepository) List(ctx context.Context, request ReaderPageRequest) 
 
 // Get resolves a historical alias to its canonical fragment in the base query
 // and requires an explicitly requested revision to belong to that canonical
-// fragment. It uses the same five batch readers as List.
+// fragment. It uses the same six batch readers as List.
 func (r *ReaderRepository) Get(ctx context.Context, fragmentID, revisionID, principalID string) (ReaderSnapshot, error) {
 	if r == nil || r.db == nil {
 		return ReaderSnapshot{}, fmt.Errorf("reader repository is unavailable")
@@ -170,7 +203,7 @@ func (r *ReaderRepository) Get(ctx context.Context, fragmentID, revisionID, prin
 	if err != nil {
 		return ReaderSnapshot{}, fmt.Errorf("get reader base: %w", err)
 	}
-	bases, err := scanReaderBases(rows)
+	bases, err := scanReaderBases(rows, false)
 	if err != nil {
 		return ReaderSnapshot{}, err
 	}
@@ -325,7 +358,38 @@ LEFT JOIN reading_states rs
   ON rs.fragment_id = f.id AND rs.principal_id = ?
 LEFT JOIN curated_notes cn ON cn.fragment_id = f.id`
 
-func scanReaderBases(rows *sql.Rows) ([]ReaderBase, error) {
+// readerCollectionBaseSQL lists a collection's members in position order. It
+// joins the collection on its owner so another principal's collection yields
+// no rows, and appends the member position to the shared base columns.
+const readerCollectionBaseSQL = `
+WITH ` + readerCaptureAggregate + `,
+candidates AS (
+  SELECT f.id AS fragment_id, COALESCE(ca.last_captured_at, f.ingested_at) AS sort_at,
+    m.position AS position
+  FROM reader_collection_items m
+  JOIN reader_collections c ON c.id = m.collection_id AND c.principal_id = ?
+  JOIN fragments f ON f.id = m.fragment_id
+  LEFT JOIN capture_aggregate ca ON ca.fragment_id = f.id
+  WHERE m.collection_id = ? AND m.position > ?
+)
+SELECT ` + readerBaseColumns + `, candidates.position
+FROM candidates
+JOIN fragments f ON f.id = candidates.fragment_id
+JOIN fragment_source_identities si ON si.fragment_id = f.id
+JOIN fragment_revisions r ON r.id = f.current_revision_id AND r.fragment_id = f.id
+LEFT JOIN inbox i ON i.fragment_id = f.id
+LEFT JOIN capture_aggregate ca ON ca.fragment_id = f.id
+LEFT JOIN reader_command_aggregates rca
+  ON rca.fragment_id = f.id AND rca.principal_id = ?
+LEFT JOIN reading_states rs
+  ON rs.fragment_id = f.id AND rs.principal_id = ?
+LEFT JOIN curated_notes cn ON cn.fragment_id = f.id
+ORDER BY candidates.position, f.id
+LIMIT ?`
+
+// scanReaderBases scans the shared base columns; withPosition also scans the
+// trailing collection position that readerCollectionBaseSQL selects.
+func scanReaderBases(rows *sql.Rows, withPosition bool) ([]ReaderBase, error) {
 	defer rows.Close()
 	bases := make([]ReaderBase, 0)
 	for rows.Next() {
@@ -337,7 +401,7 @@ func scanReaderBases(rows *sql.Rows) ([]ReaderBase, error) {
 		var readingUpdated, readingLater, readingArchived, readingStarred sql.NullString
 		var noteBody, noteActor, noteUpdated sql.NullString
 		var noteRevision sql.NullInt64
-		if err := rows.Scan(
+		dest := []any{
 			&base.FragmentID, &base.FragmentStatus,
 			&base.FragmentRevision.ID, &base.FragmentRevision.Ordinal,
 			&base.FragmentRevision.MaterialDigest, &base.FragmentRevision.ContentDigest,
@@ -357,7 +421,11 @@ func scanReaderBases(rows *sql.Rows) ([]ReaderBase, error) {
 			&readingLastOpened, &readingCompleted, &readingRevision, &readingUpdated,
 			&readingLater, &readingArchived, &readingStarred,
 			&noteBody, &noteRevision, &noteActor, &noteUpdated,
-		); err != nil {
+		}
+		if withPosition {
+			dest = append(dest, &base.CollectionPosition)
+		}
+		if err := rows.Scan(dest...); err != nil {
 			return nil, fmt.Errorf("scan reader base: %w", err)
 		}
 		base.FragmentRevision.FragmentID = base.FragmentID
@@ -410,7 +478,7 @@ func (r *ReaderRepository) loadBatches(ctx context.Context, bases []ReaderBase, 
 	snapshot := ReaderSnapshot{
 		Bases: bases, Coverage: map[string][]ReaderCoverage{}, Media: map[string][]domain.MediaManifestItem{},
 		Tags: map[string][]ReaderTagFact{}, Annotations: map[string][]domain.CaptureAnnotation{},
-		Effects: map[string][]ReaderEffect{},
+		Effects: map[string][]ReaderEffect{}, Collections: map[string][]domain.ReaderCollectionRef{},
 	}
 	fragmentIDs, revisionIDs := make([]string, 0, len(bases)), make([]string, 0, len(bases))
 	for _, base := range bases {
@@ -418,7 +486,7 @@ func (r *ReaderRepository) loadBatches(ctx context.Context, bases []ReaderBase, 
 		revisionIDs = append(revisionIDs, base.FragmentRevision.ID)
 	}
 	// Empty identifiers cannot own persisted rows. They let an empty page keep
-	// the same five batch statement shapes and query budget as a populated page.
+	// the same six batch statement shapes and query budget as a populated page.
 	if len(bases) == 0 {
 		fragmentIDs, revisionIDs = []string{""}, []string{""}
 	}
@@ -436,6 +504,9 @@ func (r *ReaderRepository) loadBatches(ctx context.Context, bases []ReaderBase, 
 		return ReaderSnapshot{}, err
 	}
 	if snapshot.Effects, err = r.loadEffects(ctx, fragmentIDs, principalID); err != nil {
+		return ReaderSnapshot{}, err
+	}
+	if snapshot.Collections, err = r.loadCollections(ctx, fragmentIDs, principalID); err != nil {
 		return ReaderSnapshot{}, err
 	}
 	return snapshot, nil
@@ -714,6 +785,33 @@ ORDER BY fragment_id, created_at, source_order, stable_id`
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate reader effects: %w", err)
+	}
+	return out, nil
+}
+
+func (r *ReaderRepository) loadCollections(ctx context.Context, fragmentIDs []string, principalID string) (map[string][]domain.ReaderCollectionRef, error) {
+	query := `SELECT m.fragment_id, c.id, c.name, c.kind
+FROM reader_collection_items m
+JOIN reader_collections c ON c.id = m.collection_id
+WHERE c.principal_id = ? AND m.fragment_id IN (` + queryPlaceholders(len(fragmentIDs)) + `)
+ORDER BY m.fragment_id, c.name_key, c.id`
+	args := append([]any{principalID}, stringsToAny(fragmentIDs)...)
+	rows, err := r.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("load reader collections: %w", err)
+	}
+	defer rows.Close()
+	out := make(map[string][]domain.ReaderCollectionRef, len(fragmentIDs))
+	for rows.Next() {
+		var fragmentID string
+		var item domain.ReaderCollectionRef
+		if err := rows.Scan(&fragmentID, &item.ID, &item.Name, &item.Kind); err != nil {
+			return nil, fmt.Errorf("scan reader collection: %w", err)
+		}
+		out[fragmentID] = append(out[fragmentID], item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate reader collections: %w", err)
 	}
 	return out, nil
 }
