@@ -210,6 +210,27 @@
             "schema": {"type": "string", "format": "date-time"}
           },
           {
+            "name": "later",
+            "in": "query",
+            "required": false,
+            "description": "Filter on the requesting principal's later flag.",
+            "schema": {"type": "string", "enum": ["true", "false"]}
+          },
+          {
+            "name": "starred",
+            "in": "query",
+            "required": false,
+            "description": "Filter on the requesting principal's starred flag.",
+            "schema": {"type": "string", "enum": ["true", "false"]}
+          },
+          {
+            "name": "archived",
+            "in": "query",
+            "required": false,
+            "description": "Filter on the requesting principal's archived flag. When omitted, archived items are left out of scope=inbox and scope=library (scope=all keeps them); archived=true returns only archived items.",
+            "schema": {"type": "string", "enum": ["true", "false"]}
+          },
+          {
             "name": "q",
             "in": "query",
             "required": false,

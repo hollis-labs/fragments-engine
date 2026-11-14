@@ -13,9 +13,51 @@
     {"$ref": "#/$defs/MarkUnread"},
     {"$ref": "#/$defs/RequestAssetAcquisition"},
     {"$ref": "#/$defs/Route"},
-    {"$ref": "#/$defs/Materialize"}
+    {"$ref": "#/$defs/Materialize"},
+    {"$ref": "#/$defs/SetLater"},
+    {"$ref": "#/$defs/SetArchived"},
+    {"$ref": "#/$defs/SetStarred"}
   ],
   "$defs": {
+    "SetLater": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "command", "command_id", "idempotency_key", "expected_revision", "value"],
+      "properties": {
+        "schema_version": {"const": "fe.reader.command.v1"},
+        "command": {"const": "set_later"},
+        "command_id": {"$ref": "common.schema.json#/$defs/Identifier"},
+        "idempotency_key": {"$ref": "common.schema.json#/$defs/Identifier"},
+        "expected_revision": {"type": "integer", "minimum": 0},
+        "value": {"type": "boolean"}
+      }
+    },
+    "SetArchived": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "command", "command_id", "idempotency_key", "expected_revision", "value"],
+      "properties": {
+        "schema_version": {"const": "fe.reader.command.v1"},
+        "command": {"const": "set_archived"},
+        "command_id": {"$ref": "common.schema.json#/$defs/Identifier"},
+        "idempotency_key": {"$ref": "common.schema.json#/$defs/Identifier"},
+        "expected_revision": {"type": "integer", "minimum": 0},
+        "value": {"type": "boolean"}
+      }
+    },
+    "SetStarred": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "command", "command_id", "idempotency_key", "expected_revision", "value"],
+      "properties": {
+        "schema_version": {"const": "fe.reader.command.v1"},
+        "command": {"const": "set_starred"},
+        "command_id": {"$ref": "common.schema.json#/$defs/Identifier"},
+        "idempotency_key": {"$ref": "common.schema.json#/$defs/Identifier"},
+        "expected_revision": {"type": "integer", "minimum": 0},
+        "value": {"type": "boolean"}
+      }
+    },
     "AddTag": {
       "type": "object",
       "additionalProperties": false,

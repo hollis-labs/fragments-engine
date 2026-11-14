@@ -24,7 +24,7 @@ func (s *Server) handleReaderItems(w http.ResponseWriter, r *http.Request) {
 		writeCaptureProblem(w, r, http.StatusBadRequest, "validation_failed", "Invalid Reader query", "scope is required once and cursor may appear at most once")
 		return
 	}
-	for _, name := range []string{"state", "provider", "since", "until", "q"} {
+	for _, name := range []string{"state", "provider", "since", "until", "q", "later", "archived", "starred"} {
 		if len(query[name]) > 1 {
 			writeCaptureProblem(w, r, http.StatusBadRequest, "validation_failed", "Invalid Reader query", name+" may appear at most once")
 			return
@@ -39,7 +39,8 @@ func (s *Server) handleReaderItems(w http.ResponseWriter, r *http.Request) {
 		Scope: query.Get("scope"), Cursor: query.Get("cursor"), PrincipalID: readerAPIPrincipal,
 		Renderers: query["renderer"], Tags: query["tag"], State: query.Get("state"),
 		Provider: query.Get("provider"), Since: query.Get("since"), Until: query.Get("until"),
-		Query: query.Get("q"),
+		Query: query.Get("q"), Later: query.Get("later"), Archived: query.Get("archived"),
+		Starred: query.Get("starred"),
 	})
 	if err != nil {
 		writeReaderError(w, r, err)

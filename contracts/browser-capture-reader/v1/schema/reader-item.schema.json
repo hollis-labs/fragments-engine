@@ -206,7 +206,10 @@
         "mark_unread",
         "request_asset_acquisition",
         "route",
-        "materialize"
+        "materialize",
+        "set_later",
+        "set_archived",
+        "set_starred"
       ]
     },
     "CommandCapability": {
