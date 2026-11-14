@@ -464,6 +464,7 @@ export interface ReaderItem {
       value: string
       source: 'user' | 'provider' | 'deterministic' | 'model'
       observation_id?: string
+      observation_ids?: string[]
     }>
   }
   annotations: Array<{

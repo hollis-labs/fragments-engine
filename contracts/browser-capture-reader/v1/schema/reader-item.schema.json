@@ -126,7 +126,14 @@
             "properties": {
               "value": {"type": "string", "minLength": 1},
               "source": {"type": "string", "enum": ["user", "provider", "deterministic", "model"]},
-              "observation_id": {"$ref": "common.schema.json#/$defs/Identifier"}
+              "observation_id": {"$ref": "common.schema.json#/$defs/Identifier"},
+              "observation_ids": {
+                "type": "array",
+                "minItems": 2,
+                "uniqueItems": true,
+                "items": {"$ref": "common.schema.json#/$defs/Identifier"},
+                "description": "Every observation of this tag from this source, present only when there are several. observation_id is one of them."
+              }
             }
           }
         }

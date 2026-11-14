@@ -764,11 +764,21 @@ func readerRenderableRole(role string) bool {
 }
 
 func projectReaderTags(fragmentID, revisionID string, facts []repository.ReaderTagFact) ([]string, []capturecontract.AttributedTag) {
-	attributed := make([]capturecontract.AttributedTag, 0)
+	// One attributed entry per tag and source. Several observations of the same
+	// tag from the same source (for example the capture's own tag row and the
+	// enrichment record of the same tags) collapse into it: observation_id keeps
+	// the tag-observation row's id when there is one, else the first, and
+	// observation_ids lists them all once there are several.
+	type attributedEntry struct {
+		tag       capturecontract.AttributedTag
+		preferred bool
+		ids       []string
+	}
+	entries := make([]*attributedEntry, 0)
+	entryIndex := map[string]*attributedEntry{}
 	combinedOrder := make([]string, 0)
 	combinedValues := map[string]string{}
-	attributionSeen := map[string]struct{}{}
-	appendTag := func(value string, source domain.AttributionSource, observationID string) {
+	appendTag := func(value string, source domain.AttributionSource, observationID string, preferred bool) {
 		value = strings.TrimSpace(value)
 		if value == "" || !source.ValidTagSource() {
 			return
@@ -778,13 +788,27 @@ func projectReaderTags(fragmentID, revisionID string, facts []repository.ReaderT
 			combinedOrder = append(combinedOrder, normalized)
 		}
 		combinedValues[normalized] = value
-		key := normalized + "\x00" + string(source) + "\x00" + observationID
-		if _, ok := attributionSeen[key]; ok {
+		key := normalized + "\x00" + string(source)
+		entry, ok := entryIndex[key]
+		if !ok {
+			entry = &attributedEntry{tag: capturecontract.AttributedTag{Value: value, Source: string(source),
+				ObservationID: observationID}, preferred: preferred}
+			entryIndex[key] = entry
+			entries = append(entries, entry)
+		} else if preferred && !entry.preferred {
+			entry.tag.ObservationID, entry.preferred = observationID, true
+		} else if entry.tag.ObservationID == "" {
+			entry.tag.ObservationID = observationID
+		}
+		if observationID == "" {
 			return
 		}
-		attributionSeen[key] = struct{}{}
-		attributed = append(attributed, capturecontract.AttributedTag{Value: value,
-			Source: string(source), ObservationID: observationID})
+		for _, id := range entry.ids {
+			if id == observationID {
+				return
+			}
+		}
+		entry.ids = append(entry.ids, observationID)
 	}
 	for _, fact := range facts {
 		if fact.FragmentID != fragmentID || (fact.FragmentRevisionID != "" && fact.FragmentRevisionID != revisionID) {
@@ -796,12 +820,12 @@ func projectReaderTags(fragmentID, revisionID string, facts []repository.ReaderT
 			case "suppress":
 				delete(combinedValues, normalized)
 			case "add":
-				appendTag(fact.Value, domain.AttributionUser, fact.ObservationID)
+				appendTag(fact.Value, domain.AttributionUser, fact.ObservationID, true)
 			}
 			continue
 		}
 		if fact.ValueJSON == "" {
-			appendTag(fact.Value, fact.Source, fact.ObservationID)
+			appendTag(fact.Value, fact.Source, fact.ObservationID, true)
 			continue
 		}
 		if provider.ValidateCapabilityValue(domain.CapabilityTags, []byte(fact.ValueJSON)) != nil {
@@ -812,8 +836,15 @@ func projectReaderTags(fragmentID, revisionID string, facts []repository.ReaderT
 			continue
 		}
 		for _, value := range values.Values {
-			appendTag(value, fact.Source, fact.ObservationID)
+			appendTag(value, fact.Source, fact.ObservationID, false)
 		}
+	}
+	attributed := make([]capturecontract.AttributedTag, 0, len(entries))
+	for _, entry := range entries {
+		if len(entry.ids) > 1 {
+			entry.tag.ObservationIDs = entry.ids
+		}
+		attributed = append(attributed, entry.tag)
 	}
 	combined := make([]string, 0, len(combinedValues))
 	emitted := map[string]struct{}{}

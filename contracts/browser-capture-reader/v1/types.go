@@ -311,6 +311,9 @@ type AttributedTag struct {
 	Value         string `json:"value"`
 	Source        string `json:"source"`
 	ObservationID string `json:"observation_id,omitempty"`
+	// ObservationIDs lists every observation of this tag from this source
+	// when there are several; ObservationID is the primary one among them.
+	ObservationIDs []string `json:"observation_ids,omitempty"`
 }
 
 type ReaderTags struct {

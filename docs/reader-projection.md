@@ -144,6 +144,12 @@ registry contains `add_tag`, `remove_tag`, `append_capture_note`,
 `set_archived`, and `set_starred`. Every mutation carries
 the expected aggregate revision plus stable command and idempotency identities.
 Principal tag overlays do not erase attributed source/provider/user facts.
+`tags.attributed` has one entry per tag and source. When several observations
+of the same tag come from the same source, such as a capture's tag row and the
+enrichment record of the same tags, they collapse into one entry whose
+`observation_id` is the tag-observation row's id (else the first) and whose
+`observation_ids` lists all of them. `observation_ids` is omitted when there is
+only one observation. `tags.combined` is unaffected.
 External route and materialize effects retain durable receipts and surface
 uncertain outcomes instead of risking an automatic duplicate effect.
 
