@@ -91,15 +91,6 @@ func TestReaderCommandHTTPProblemsAndBodyLimit(t *testing.T) {
 	}
 }
 
-func TestReaderCommandRouteIsRegisteredAndRestrictedToLoopback(t *testing.T) {
-	req := httptest.NewRequest(http.MethodPost, "/v1/reader/items/fragment/commands", nil)
-	response := httptest.NewRecorder()
-	NewServer("unused").Handler().ServeHTTP(response, req)
-	if response.Code != http.StatusForbidden {
-		t.Fatalf("remote command route status=%d", response.Code)
-	}
-}
-
 func TestReaderCommandRegisteredRouteReturnsAuthoritativeProjection(t *testing.T) {
 	server := NewServer(writeCaptureAPIConfig(t)).Handler()
 	created := serveCaptureRequest(t, server, http.MethodPost, "/v1/captures", "application/json",

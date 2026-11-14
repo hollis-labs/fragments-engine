@@ -29,6 +29,29 @@ There is no default grant. Unknown protected routes fail closed, including for
 the owner key. Scope implication is limited to shared auth's exact matching,
 `fragments-engine.*`, or `*`; admin does not imply capture/read/write.
 
+## Reader and media routes over the mesh
+
+The Reader and media-content routes are not loopback-restricted. A client on
+another machine reaches them with a bearer credential carrying the matching
+scope, and that scope is the only gate:
+
+| Route | Scope |
+| --- | --- |
+| `GET /v1/reader/items`, `GET /v1/reader/items/{id}`, `GET /v1/reader/items/{id}/content`, `GET /v1/media/variants/{id}/content` | `fragments-engine.read` |
+| `POST /v1/reader/items/{id}/commands` | `fragments-engine.write` |
+
+No token is 401. A token without the scope (capture-only, admin-only, or, for
+commands, read-only) is 403, since `admin` implies nothing else. Media content
+still requires `fragment_id` and `revision_id` and the variant must belong to
+that fragment revision, otherwise 404. The Reader API acts as the single
+`local-user` Reader principal whatever the token subject, so a `read` or `write`
+grant covers the whole library. A server without a token file still refuses a
+non-loopback listen address, so the unauthenticated path remains loopback-only.
+`GET /v1/config`, `POST /v1/config/update`, `GET /v1/workers/status` and
+`GET /v1/jobs/ingest` keep their independent loopback check even for a valid
+admin credential. `HEAD` has no scope-table entry and is refused for every
+credential, owner key included.
+
 Browser sessions and transcript reads additionally require the actual local
 owner credential, or a browser cookie derived from it. Even an admin JWT whose
 subject resembles the owner cannot use these surfaces. Existing transcript

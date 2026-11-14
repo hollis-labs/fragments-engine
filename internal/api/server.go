@@ -50,11 +50,15 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/capabilities", s.handleCapabilities)
 	mux.HandleFunc("/v1/captures", s.handleCaptureManifest)
 	mux.HandleFunc("/v1/captures/", s.handleCaptureResource)
-	mux.HandleFunc("/v1/reader/items", localhostOnly(s.handleReaderItems))
-	mux.HandleFunc("/v1/reader/items/", localhostOnly(s.handleReaderItem))
-	mux.HandleFunc("GET /v1/reader/items/{fragmentId}/content", localhostOnly(s.handleReaderArticleContent))
-	mux.HandleFunc("POST /v1/reader/items/{fragmentId}/commands", localhostOnly(s.handleReaderCommand))
-	mux.HandleFunc("GET /v1/media/variants/{variantId}/content", localhostOnly(s.handleReaderMediaContent))
+	// Reader and media routes are reachable from any peer: the bearer scope
+	// (read for GET/HEAD, write for commands; see security_scopes.go) is the
+	// gate. A server with no token file cannot listen off loopback
+	// (validateListen), so the open path stays loopback-only.
+	mux.HandleFunc("/v1/reader/items", s.handleReaderItems)
+	mux.HandleFunc("/v1/reader/items/", s.handleReaderItem)
+	mux.HandleFunc("GET /v1/reader/items/{fragmentId}/content", s.handleReaderArticleContent)
+	mux.HandleFunc("POST /v1/reader/items/{fragmentId}/commands", s.handleReaderCommand)
+	mux.HandleFunc("GET /v1/media/variants/{variantId}/content", s.handleReaderMediaContent)
 	mux.Handle(sysopBasePath+"/", newSysopSPAHandler())
 	s.registerTranscriptRoutes(mux)
 	mux.HandleFunc("/v1/ingests", s.handleListIngests)
@@ -2177,7 +2181,7 @@ func defaultFFSDestinationName(sourceType string) (string, error) {
 }
 
 // localhostOnly preserves the independent loopback restriction on selected
-// administrative and Reader endpoints in addition to bearer authorization.
+// administrative endpoints in addition to bearer authorization.
 func localhostOnly(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !isLoopbackRequest(r) {
