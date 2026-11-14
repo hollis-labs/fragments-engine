@@ -96,7 +96,7 @@ func (s *ReaderCommandService) Execute(ctx context.Context, principalID, fragmen
 	var persisted repository.ReaderCommandResult
 	switch command.Command {
 	case "add_tag", "remove_tag", "append_capture_note", "update_curated_note",
-		"set_reading_progress", "mark_read", "mark_unread":
+		"set_reading_progress", "mark_read", "mark_unread", "set_later", "set_archived", "set_starred":
 		persisted, err = s.repository.ApplyLocal(ctx, write)
 	case "request_asset_acquisition":
 		persisted, err = s.executeAssetAcquisition(ctx, write, command)
@@ -269,6 +269,12 @@ func normalizeReaderCommand(principalID, canonicalID string, command capturecont
 		}
 		payload["position"] = write.Position
 	case "mark_read", "mark_unread":
+	case "set_later", "set_archived", "set_starred":
+		if command.Value == nil {
+			return repository.ReaderCommandWrite{}, invalidReaderCommandf("%s requires a boolean value", command.Command)
+		}
+		write.Value = *command.Value
+		payload["value"] = write.Value
 	case "request_asset_acquisition":
 		write.TargetID = strings.TrimSpace(command.MediaAssetID)
 		if write.TargetID == "" || !domain.AssetVariantKind(command.VariantKind).Valid() {

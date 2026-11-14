@@ -55,8 +55,13 @@ type ReadingState struct {
 	Position    ReadingPosition `json:"position"`
 	LastOpened  *time.Time      `json:"last_opened_at,omitempty"`
 	CompletedAt *time.Time      `json:"completed_at,omitempty"`
-	Revision    int             `json:"revision"`
-	UpdatedAt   time.Time       `json:"updated_at"`
+	// LaterAt, ArchivedAt and StarredAt are when each independent flag was
+	// set; nil means the flag is clear.
+	LaterAt    *time.Time `json:"later_at,omitempty"`
+	ArchivedAt *time.Time `json:"archived_at,omitempty"`
+	StarredAt  *time.Time `json:"starred_at,omitempty"`
+	Revision   int        `json:"revision"`
+	UpdatedAt  time.Time  `json:"updated_at"`
 }
 
 type ReaderCommandState string

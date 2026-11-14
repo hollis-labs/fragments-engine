@@ -131,7 +131,8 @@ move an item into or out of the inbox.
 The action menu is projected per item from this closed registry:
 `add_tag`, `remove_tag`, `append_capture_note`, `update_curated_note`,
 `set_reading_progress`, `mark_read`, `mark_unread`,
-`request_asset_acquisition`, `route`, and `materialize`. Commands require the
+`request_asset_acquisition`, `route`, `materialize`, `set_later`,
+`set_archived`, and `set_starred`. Commands require the
 projected aggregate revision and stable command/idempotency IDs. A conflict
 returns the current item so the UI can preserve a draft and reconcile. Triage
 decisions, inbox disposition, and folders/collections are not Reader v1 actions.

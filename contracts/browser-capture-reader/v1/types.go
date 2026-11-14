@@ -235,7 +235,15 @@ type ReadingState struct {
 	Position     ReadingPosition `json:"position"`
 	LastOpenedAt *time.Time      `json:"last_opened_at,omitempty"`
 	CompletedAt  *time.Time      `json:"completed_at,omitempty"`
-	Revision     int             `json:"revision"`
+	// Later, Archived and Starred are independent per-principal flags; each
+	// is omitted while clear and carries the time it was set.
+	Later      bool       `json:"later,omitempty"`
+	LaterAt    *time.Time `json:"later_at,omitempty"`
+	Archived   bool       `json:"archived,omitempty"`
+	ArchivedAt *time.Time `json:"archived_at,omitempty"`
+	Starred    bool       `json:"starred,omitempty"`
+	StarredAt  *time.Time `json:"starred_at,omitempty"`
+	Revision   int        `json:"revision"`
 }
 
 type AttachmentRef struct {
@@ -468,6 +476,7 @@ type ReaderCommand struct {
 	RequestedCustody     string             `json:"requested_custody,omitempty"`
 	RouteID              string             `json:"route_id,omitempty"`
 	DestinationID        string             `json:"destination_id,omitempty"`
+	Value                *bool              `json:"value,omitempty"`
 }
 
 type FieldViolation struct {

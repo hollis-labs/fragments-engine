@@ -47,6 +47,11 @@ type ReaderListFilter struct {
 	State    string
 	Since    *time.Time
 	Until    *time.Time
+	// Later, Archived and Starred filter on the principal's flags. Archived
+	// nil excludes archived items from inbox and library but not from all.
+	Later    *bool
+	Archived *bool
+	Starred  *bool
 	// Match is an already-quoted FTS5 MATCH expression.
 	Match string
 }
@@ -129,7 +134,7 @@ func (r *ReaderRepository) List(ctx context.Context, request ReaderPageRequest) 
 	if principalID == "" {
 		return ReaderSnapshot{}, fmt.Errorf("reader principal ID is required")
 	}
-	query, filterArgs := readerListQuery(request.Filter)
+	query, filterArgs := readerListQuery(request.Scope, request.Filter)
 	args := []any{request.Scope, request.Scope, principalID, principalID,
 		cursorAt, cursorAt, cursorAt, cursorID}
 	args = append(args, filterArgs...)
@@ -190,7 +195,7 @@ const readerBaseColumns = `
   CASE WHEN ca.fragment_id IS NULL THEN 0 ELSE 1 END,
   COALESCE(rca.revision, 0),
   rs.state, rs.position_json, rs.last_opened_at, rs.completed_at,
-  rs.revision, rs.updated_at,
+  rs.revision, rs.updated_at, rs.later_at, rs.archived_at, rs.starred_at,
   cn.body_markdown, cn.revision, cn.actor_id, cn.updated_at`
 
 const readerCaptureAggregate = `
@@ -234,7 +239,7 @@ LIMIT ?`
 
 // readerListQuery appends the optional filter predicates. With an empty filter
 // the statement is the original one apart from redundant parentheses.
-func readerListQuery(filter ReaderListFilter) (string, []any) {
+func readerListQuery(scope string, filter ReaderListFilter) (string, []any) {
 	var clauses strings.Builder
 	var args []any
 	if filter.Provider != "" {
@@ -252,6 +257,23 @@ func readerListQuery(filter ReaderListFilter) (string, []any) {
 	if filter.Until != nil {
 		clauses.WriteString("\n  AND candidates.sort_at <= ?")
 		args = append(args, formatTime(*filter.Until))
+	}
+	flagClause := func(column string, want *bool) {
+		if want == nil {
+			return
+		}
+		if *want {
+			clauses.WriteString("\n  AND rs." + column + " IS NOT NULL")
+		} else {
+			clauses.WriteString("\n  AND rs." + column + " IS NULL")
+		}
+	}
+	flagClause("later_at", filter.Later)
+	flagClause("starred_at", filter.Starred)
+	if filter.Archived != nil {
+		flagClause("archived_at", filter.Archived)
+	} else if scope != "all" {
+		clauses.WriteString("\n  AND rs.archived_at IS NULL")
 	}
 	if filter.Match != "" {
 		clauses.WriteString("\n  AND f.id IN (SELECT fragment_id FROM fragments_fts WHERE fragments_fts MATCH ?)")
@@ -296,7 +318,7 @@ func scanReaderBases(rows *sql.Rows) ([]ReaderBase, error) {
 		var inInbox, hasCaptureAttempt int
 		var readingStatus, readingPosition, readingLastOpened, readingCompleted sql.NullString
 		var readingRevision sql.NullInt64
-		var readingUpdated sql.NullString
+		var readingUpdated, readingLater, readingArchived, readingStarred sql.NullString
 		var noteBody, noteActor, noteUpdated sql.NullString
 		var noteRevision sql.NullInt64
 		if err := rows.Scan(
@@ -317,6 +339,7 @@ func scanReaderBases(rows *sql.Rows) ([]ReaderBase, error) {
 			&sortAt, &inInbox, &base.CaptureCount, &hasCaptureAttempt,
 			&base.AggregateRevision, &readingStatus, &readingPosition,
 			&readingLastOpened, &readingCompleted, &readingRevision, &readingUpdated,
+			&readingLater, &readingArchived, &readingStarred,
 			&noteBody, &noteRevision, &noteActor, &noteUpdated,
 		); err != nil {
 			return nil, fmt.Errorf("scan reader base: %w", err)
@@ -342,6 +365,15 @@ func scanReaderBases(rows *sql.Rows) ([]ReaderBase, error) {
 			if readingCompleted.Valid {
 				value := parseTime(readingCompleted.String)
 				state.CompletedAt = &value
+			}
+			for _, flag := range []struct {
+				raw sql.NullString
+				dst **time.Time
+			}{{readingLater, &state.LaterAt}, {readingArchived, &state.ArchivedAt}, {readingStarred, &state.StarredAt}} {
+				if flag.raw.Valid {
+					value := parseTime(flag.raw.String)
+					*flag.dst = &value
+				}
 			}
 			base.ReadingState = &state
 		}

@@ -51,6 +51,11 @@ type ReaderListRequest struct {
 	Since     string
 	Until     string
 	Query     string
+	// Later, Archived and Starred are "true" or "false" when filtering on a
+	// flag. Without Archived, archived items are left out of inbox and library.
+	Later    string
+	Archived string
+	Starred  string
 }
 
 // readerFilterScanChunk is how many candidate rows a filtered page reads per
@@ -152,6 +157,25 @@ func parseReaderListFilter(request ReaderListRequest) (readerListFilter, error) 
 		}
 		out.repoFilter.Match = strings.Join(terms, " ")
 	}
+	for _, flag := range []struct {
+		field, raw string
+		dst        **bool
+	}{{"later", request.Later, &out.repoFilter.Later}, {"archived", request.Archived, &out.repoFilter.Archived},
+		{"starred", request.Starred, &out.repoFilter.Starred}} {
+		if flag.raw == "" {
+			continue
+		}
+		switch strings.ToLower(strings.TrimSpace(flag.raw)) {
+		case "true":
+			value := true
+			*flag.dst = &value
+		case "false":
+			value := false
+			*flag.dst = &value
+		default:
+			return out, &ReaderRequestError{Field: flag.field, Reason: "must be true or false"}
+		}
+	}
 	var parts []string
 	add := func(key, value string) {
 		if value != "" {
@@ -169,6 +193,14 @@ func parseReaderListFilter(request ReaderListRequest) (readerListFilter, error) 
 		add("until", out.repoFilter.Until.Format(time.RFC3339Nano))
 	}
 	add("q", out.repoFilter.Match)
+	for _, flag := range []struct {
+		key  string
+		want *bool
+	}{{"later", out.repoFilter.Later}, {"archived", out.repoFilter.Archived}, {"starred", out.repoFilter.Starred}} {
+		if flag.want != nil {
+			add(flag.key, fmt.Sprint(*flag.want))
+		}
+	}
 	if len(parts) > 0 {
 		sum := sha256.Sum256([]byte(strings.Join(parts, "\x1e")))
 		out.fingerprint = hex.EncodeToString(sum[:8])
@@ -551,7 +583,10 @@ func projectReadingState(state domain.ReadingState, principalID, fragmentID stri
 		},
 		LastOpenedAt: state.LastOpened,
 		CompletedAt:  state.CompletedAt,
-		Revision:     state.Revision,
+		Later:        state.LaterAt != nil, LaterAt: state.LaterAt,
+		Archived: state.ArchivedAt != nil, ArchivedAt: state.ArchivedAt,
+		Starred: state.StarredAt != nil, StarredAt: state.StarredAt,
+		Revision: state.Revision,
 	}
 }
 
@@ -572,6 +607,9 @@ func readerCommandCapabilities(readingStatus string, hasCapture bool, media []ca
 		{"request_asset_acquisition", "RequestAssetAcquisition", len(media) > 0},
 		{"route", "Route", true},
 		{"materialize", "Materialize", true},
+		{"set_later", "SetLater", true},
+		{"set_archived", "SetArchived", true},
+		{"set_starred", "SetStarred", true},
 	}
 	out := make([]capturecontract.CommandCapability, 0, len(definitions))
 	for _, definition := range definitions {

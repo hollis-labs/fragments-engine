@@ -43,6 +43,7 @@ type ReaderCommandWrite struct {
 	BodyMarkdown       string
 	Position           domain.ReadingPosition
 	TargetID           string
+	Value              bool
 	CreatedAt          time.Time
 }
 
@@ -138,7 +139,7 @@ func (r *ReaderCommandRepository) ApplyLocal(ctx context.Context, write ReaderCo
 		result.Changed, err = appendReaderCaptureNoteOn(ctx, conn, write)
 	case "update_curated_note":
 		result.Changed, err = updateReaderCuratedNoteOn(ctx, conn, write)
-	case "set_reading_progress", "mark_read", "mark_unread":
+	case "set_reading_progress", "mark_read", "mark_unread", "set_later", "set_archived", "set_starred":
 		result.ReadingState, result.Changed, err = applyReadingStateOn(ctx, conn, write)
 		result.HasReadingState = true
 	default:
@@ -725,11 +726,18 @@ func applyReadingStateOn(ctx context.Context, q readerWriteContext, write Reader
 		next.State = domain.ReadingUnread
 		next.Position = domain.ReadingPosition{Kind: domain.ReadingPositionNone}
 		next.CompletedAt = nil
+	case "set_later":
+		next.LaterAt = flagTime(write.Value, current.LaterAt, write.CreatedAt)
+	case "set_archived":
+		next.ArchivedAt = flagTime(write.Value, current.ArchivedAt, write.CreatedAt)
+	case "set_starred":
+		next.StarredAt = flagTime(write.Value, current.StarredAt, write.CreatedAt)
 	}
 	if found && readingStateSemanticallyEqual(current, next) {
 		return current, false, nil
 	}
-	if !found && next.State == domain.ReadingUnread && next.Position.Kind == domain.ReadingPositionNone {
+	if !found && next.State == domain.ReadingUnread && next.Position.Kind == domain.ReadingPositionNone &&
+		next.LaterAt == nil && next.ArchivedAt == nil && next.StarredAt == nil {
 		return current, false, nil
 	}
 	next.Revision = current.Revision + 1
@@ -741,18 +749,22 @@ func applyReadingStateOn(ctx context.Context, q readerWriteContext, write Reader
 	_, err = q.ExecContext(ctx, `
 INSERT INTO reading_states (
   principal_id, fragment_id, state, position_kind, position_json,
-  last_opened_at, completed_at, revision, updated_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  last_opened_at, completed_at, later_at, archived_at, starred_at, revision, updated_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(principal_id, fragment_id) DO UPDATE SET
   state = excluded.state,
   position_kind = excluded.position_kind,
   position_json = excluded.position_json,
   last_opened_at = excluded.last_opened_at,
   completed_at = excluded.completed_at,
+  later_at = excluded.later_at,
+  archived_at = excluded.archived_at,
+  starred_at = excluded.starred_at,
   revision = excluded.revision,
   updated_at = excluded.updated_at`, next.PrincipalID, next.FragmentID,
 		string(next.State), string(next.Position.Kind), string(positionJSON),
-		nullableTime(next.LastOpened), nullableTime(next.CompletedAt), next.Revision,
+		nullableTime(next.LastOpened), nullableTime(next.CompletedAt),
+		nullableTime(next.LaterAt), nullableTime(next.ArchivedAt), nullableTime(next.StarredAt), next.Revision,
 		formatTime(next.UpdatedAt))
 	if err != nil {
 		return domain.ReadingState{}, false, fmt.Errorf("persist reading state: %w", err)
@@ -764,12 +776,13 @@ func getReadingStateOn(ctx context.Context, q queryRowContext, principalID, frag
 	item := domain.ReadingState{PrincipalID: principalID, FragmentID: fragmentID,
 		State: domain.ReadingUnread, Position: domain.ReadingPosition{Kind: domain.ReadingPositionNone}}
 	var state, kind, positionJSON, updatedAt string
-	var openedAt, completedAt sql.NullString
+	var openedAt, completedAt, laterAt, archivedAt, starredAt sql.NullString
 	err := q.QueryRowContext(ctx, `
 SELECT state, position_kind, position_json, last_opened_at, completed_at,
-       revision, updated_at
+       later_at, archived_at, starred_at, revision, updated_at
 FROM reading_states WHERE principal_id = ? AND fragment_id = ?`, principalID, fragmentID).Scan(
-		&state, &kind, &positionJSON, &openedAt, &completedAt, &item.Revision, &updatedAt)
+		&state, &kind, &positionJSON, &openedAt, &completedAt,
+		&laterAt, &archivedAt, &starredAt, &item.Revision, &updatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return item, false, nil
 	}
@@ -786,6 +799,14 @@ FROM reading_states WHERE principal_id = ? AND fragment_id = ?`, principalID, fr
 	}
 	if completedAt.Valid {
 		item.CompletedAt = timePtr(parseTime(completedAt.String))
+	}
+	for _, flag := range []struct {
+		raw sql.NullString
+		dst **time.Time
+	}{{laterAt, &item.LaterAt}, {archivedAt, &item.ArchivedAt}, {starredAt, &item.StarredAt}} {
+		if flag.raw.Valid {
+			*flag.dst = timePtr(parseTime(flag.raw.String))
+		}
 	}
 	item.UpdatedAt = parseTime(updatedAt)
 	return item, true, nil
@@ -919,10 +940,27 @@ func readingStateSemanticallyEqual(a, b domain.ReadingState) bool {
 	if a.State != b.State || !readingPositionEqual(a.Position, b.Position) {
 		return false
 	}
+	if (a.LaterAt == nil) != (b.LaterAt == nil) || (a.ArchivedAt == nil) != (b.ArchivedAt == nil) ||
+		(a.StarredAt == nil) != (b.StarredAt == nil) {
+		return false
+	}
 	if (a.CompletedAt == nil) != (b.CompletedAt == nil) {
 		return false
 	}
 	return a.CompletedAt == nil || a.CompletedAt.Equal(*b.CompletedAt)
+}
+
+// flagTime returns the new flag timestamp: the existing one when the flag is
+// already set (setting twice keeps the original time), now when it becomes set,
+// and nil when cleared.
+func flagTime(value bool, current *time.Time, now time.Time) *time.Time {
+	if !value {
+		return nil
+	}
+	if current != nil {
+		return current
+	}
+	return timePtr(now.UTC())
 }
 
 func readingPositionEqual(a, b domain.ReadingPosition) bool {

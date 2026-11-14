@@ -25,6 +25,27 @@
     "completed_at": {
       "$ref": "common.schema.json#/$defs/Timestamp"
     },
+    "later": {
+      "type": "boolean",
+      "description": "Per-principal flag; omitted while clear."
+    },
+    "later_at": {
+      "$ref": "common.schema.json#/$defs/Timestamp"
+    },
+    "archived": {
+      "type": "boolean",
+      "description": "Per-principal flag; omitted while clear."
+    },
+    "archived_at": {
+      "$ref": "common.schema.json#/$defs/Timestamp"
+    },
+    "starred": {
+      "type": "boolean",
+      "description": "Per-principal flag; omitted while clear."
+    },
+    "starred_at": {
+      "$ref": "common.schema.json#/$defs/Timestamp"
+    },
     "revision": {
       "type": "integer",
       "minimum": 0

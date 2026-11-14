@@ -25,6 +25,7 @@ with `scope`. Items always stay newest first, 50 per page.
 | `provider` | Source provider, case-insensitive exact match. |
 | `since`, `until` | RFC 3339, inclusive, on the item's capture (list sort) time. |
 | `q` | Keyword text over title and content, using the same FTS index and term quoting as `GET /v1/search`. |
+| `later`, `starred`, `archived` | `true` or `false`, on the requesting principal's flag (below). Without `archived`, archived items are left out of `scope=inbox` and `scope=library`, but not `scope=all`. `archived=true` returns only archived items. |
 
 An unknown `renderer` or `state`, a malformed timestamp, `since` after `until`,
 or a repeated single-valued parameter is a 400. The cursor carries a
@@ -35,6 +36,19 @@ filters is a 400. With no filters the response and cursors are unchanged.
 applied after the SQL filters over a bounded scan (5000 rows per request). If
 the budget runs out before a page fills, the page is short but carries a
 cursor; keep following `next_cursor` until it is absent.
+
+## Later, archived and starred
+
+Three independent per-principal flags live on the reading state:
+`later`, `archived` and `starred`. In `reading_state` each appears as a boolean
+plus `<flag>_at`, the time it was set, and both are omitted while the flag is
+clear. They are changed with `set_later`, `set_archived` and `set_starred`,
+each carrying `{"value": true|false}` plus the usual command and idempotency
+identities. Like `mark_read`, they carry the reading state's `revision` as
+`expected_revision` (a stale one is a 409 with the current item) and every
+flag change advances it. Setting a flag that already has the requested value is
+a no-op and keeps the original time. The flags never move an item into or out of
+the inbox, and archiving is not deletion.
 
 ## Scope semantics
 
@@ -126,7 +140,8 @@ the immutable source revision ordinal; immutable content remains identified by
 The projection advertises only commands that apply to the item. The closed v1
 registry contains `add_tag`, `remove_tag`, `append_capture_note`,
 `update_curated_note`, `set_reading_progress`, `mark_read`, `mark_unread`,
-`request_asset_acquisition`, `route`, and `materialize`. Every mutation carries
+`request_asset_acquisition`, `route`, `materialize`, `set_later`,
+`set_archived`, and `set_starred`. Every mutation carries
 the expected aggregate revision plus stable command and idempotency identities.
 Principal tag overlays do not erase attributed source/provider/user facts.
 External route and materialize effects retain durable receipts and surface

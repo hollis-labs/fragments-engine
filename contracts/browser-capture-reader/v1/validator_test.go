@@ -225,6 +225,9 @@ func TestEverySemanticCommandVariant(t *testing.T) {
 		{"request_asset_acquisition", map[string]any{"media_asset_id": "asset-1", "variant_kind": "original", "requested_custody": "mirror"}},
 		{"route", map[string]any{"route_id": "route-1"}},
 		{"materialize", map[string]any{"destination_id": "destination-1"}},
+		{"set_later", map[string]any{"value": true}},
+		{"set_archived", map[string]any{"value": false}},
+		{"set_starred", map[string]any{"value": true}},
 	}
 	for _, test := range tests {
 		t.Run(test.command, func(t *testing.T) {
