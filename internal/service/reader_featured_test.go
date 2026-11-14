@@ -88,3 +88,18 @@ func TestReaderFeaturedImageFallsBackToFirstByPositionAndIgnoresAuxiliary(t *tes
 		t.Fatalf("featured=%q count=%d, want early and 2", id, count)
 	}
 }
+
+func TestReaderFeaturedImageCountsAnAssetOnce(t *testing.T) {
+	media := []capturecontract.ReaderMediaItem{
+		featuredMedia("same", "image", "inline", 0),
+		featuredMedia("same", "image", "hero", 1),
+		featuredMedia("other", "image", "inline", 2),
+	}
+	id, count := readerFeaturedImage(media)
+	if id != "same" || count != 2 {
+		t.Fatalf("featured=%q count=%d, want same and 2 (one asset attached twice is one image)", id, count)
+	}
+	if id, count := readerFeaturedImage(media[:2]); id != "same" || count != 1 {
+		t.Fatalf("one asset twice: featured=%q count=%d, want same and 1", id, count)
+	}
+}

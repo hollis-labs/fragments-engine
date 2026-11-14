@@ -734,14 +734,25 @@ func readerPrimaryIsVideo(media []capturecontract.ReaderMediaItem) bool {
 }
 
 // readerFeaturedImage returns the featured image's media asset ID and the
-// number of renderable images. The featured image is the hero if there is
-// one, else the first renderable image by position.
+// number of distinct renderable images. The featured image is the hero if
+// there is one, else the first renderable image by position.
 func readerFeaturedImage(media []capturecontract.ReaderMediaItem) (string, int) {
 	featured, hero, count := "", "", 0
 	firstPosition := 0
+	seen := map[string]bool{}
 	for _, item := range media {
 		if item.Kind != "image" || !readerRenderableRole(item.Attachment.Role) {
 			continue
+		}
+		// The same asset attached twice (say as hero and inline) is one image.
+		if item.MediaAssetID != "" {
+			if seen[item.MediaAssetID] {
+				if item.Attachment.Role == "hero" && hero == "" {
+					hero = item.MediaAssetID
+				}
+				continue
+			}
+			seen[item.MediaAssetID] = true
 		}
 		count++
 		if item.Attachment.Role == "hero" && hero == "" {

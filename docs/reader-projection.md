@@ -113,11 +113,12 @@ attachment keeps its own renderer). The gallery rule below therefore applies to
 items without a body. `display.featured_media_id` names the media asset of the
 featured image (the `hero` image, else the first renderable image by position,
 absent when there is none) and `display.image_count` counts the renderable
-images (roles primary, hero, gallery_item, inline), so a client can show the
+distinct images (roles primary, hero, gallery_item, inline), counting an asset
+once however many times it is attached, so a client can show the
 featured image with a gallery affordance when the count is above one.
-More than one renderable visual attachment (image or video) forms an ordered
-gallery, including mixed-media carousels. A single video then wins over a
-single image, followed by audio, document, article, text, or unknown.
+Among items with no body and no primary video, more than one renderable visual
+attachment (image or video) forms an ordered gallery, including mixed-media
+carousels. A single video then wins over a single image, followed by audio, document, article, text, or unknown.
 Acquisition state never changes the discriminator: a failed
 image/gallery/video remains that renderer so the failure can be shown. Timed
 text, poster, transcript, and other auxiliary attachments cannot turn a video
