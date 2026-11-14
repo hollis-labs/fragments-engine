@@ -3,7 +3,7 @@ import { BookOpen, RefreshCw } from 'lucide-react'
 import { Button, EmptyState, ListPageLayout, PageHeader, Skeleton } from '@hollis-labs/sysop-ui'
 import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import { ReaderCard } from '@/components/reader/ReaderCard'
-import { isReaderVisualRenderer, ReaderCardVisual } from '@/features/reader'
+import { featuredArticleImage, isReaderVisualRenderer, ReaderCardVisual } from '@/features/reader'
 import { useApi } from '@/hooks/useApi'
 import { isReaderScope, READER_SCOPES, readerScopeLabel } from '@/lib/reader'
 import type { ReaderItem, ReaderScope } from '@/lib/types'
@@ -191,7 +191,9 @@ export default function ReaderPage() {
                 )
               }
               mediaSlot={
-                isReaderVisualRenderer(item.renderer) ? <ReaderCardVisual item={item} /> : undefined
+                isReaderVisualRenderer(item.renderer) || featuredArticleImage(item) ? (
+                  <ReaderCardVisual item={item} />
+                ) : undefined
               }
             />
           ))}

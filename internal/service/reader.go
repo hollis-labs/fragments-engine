@@ -525,6 +525,7 @@ func projectReaderItem(base repository.ReaderBase, snapshot repository.ReaderSna
 	}
 	media, acquisition := projectReaderMedia(base.FragmentID, revision.ID, snapshot.Media[revision.ID])
 	renderer := readerRenderer(revision, media)
+	display.FeaturedMediaID, display.ImageCount = readerFeaturedImage(media)
 	combined, attributed := projectReaderTags(base.FragmentID, revision.ID, snapshot.Tags[base.FragmentID])
 	annotations := projectReaderAnnotations(snapshot.Annotations[base.FragmentID])
 	enrichment := make([]capturecontract.CapabilityCoverage, 0, len(coverageRows))
@@ -714,7 +715,65 @@ func readerMediaContentHref(fragmentID, revisionID, variantID string) string {
 	return "/v1/media/variants/" + url.PathEscape(variantID) + "/content?" + query.Encode()
 }
 
+// readerArticleBodyRunes is the length, in characters after trimming, at which
+// a revision's content counts as a body rather than a caption.
+const readerArticleBodyRunes = 280
+
+func readerHasBody(revision domain.FragmentRevision) bool {
+	return utf8.RuneCountInString(strings.TrimSpace(revision.Content)) >= readerArticleBodyRunes
+}
+
+// readerPrimaryIsVideo reports whether the item's primary media is a video.
+func readerPrimaryIsVideo(media []capturecontract.ReaderMediaItem) bool {
+	for _, item := range media {
+		if item.Kind == "video" && item.Attachment.Role == "primary" {
+			return true
+		}
+	}
+	return false
+}
+
+// readerFeaturedImage returns the featured image's media asset ID and the
+// number of renderable images. The featured image is the hero if there is
+// one, else the first renderable image by position.
+func readerFeaturedImage(media []capturecontract.ReaderMediaItem) (string, int) {
+	featured, hero, count := "", "", 0
+	firstPosition := 0
+	for _, item := range media {
+		if item.Kind != "image" || !readerRenderableRole(item.Attachment.Role) {
+			continue
+		}
+		count++
+		if item.Attachment.Role == "hero" && hero == "" {
+			hero = item.MediaAssetID
+		}
+		if featured == "" || item.Attachment.Position < firstPosition {
+			featured, firstPosition = item.MediaAssetID, item.Attachment.Position
+		}
+	}
+	if hero != "" {
+		return hero, count
+	}
+	return featured, count
+}
+
 func readerRenderer(revision domain.FragmentRevision, media []capturecontract.ReaderMediaItem) string {
+	// An item whose primary media is a video stays a video whatever its body.
+	if readerPrimaryIsVideo(media) {
+		return "video"
+	}
+	if readerHasBody(revision) {
+		// A body makes the item an article however many images it carries.
+		// Audio and documents keep their own renderers.
+		for _, kind := range []string{"audio", "document"} {
+			for _, item := range media {
+				if item.Kind == kind && readerRenderableRole(item.Attachment.Role) {
+					return kind
+				}
+			}
+		}
+		return "article"
+	}
 	renderableVisuals := 0
 	for _, item := range media {
 		if (item.Kind == "image" || item.Kind == "video") && readerRenderableRole(item.Attachment.Role) {

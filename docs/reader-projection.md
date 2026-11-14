@@ -106,6 +106,15 @@ Media placement is ordered only by
 are never collapsed.
 
 Renderer selection uses provider-neutral content and recognized media roles.
+An item whose primary media is a video is a `video` whatever its body. An item
+with a body, meaning at least 280 characters of content after trimming, is
+otherwise an `article` however many images it carries (an audio or document
+attachment keeps its own renderer). The gallery rule below therefore applies to
+items without a body. `display.featured_media_id` names the media asset of the
+featured image (the `hero` image, else the first renderable image by position,
+absent when there is none) and `display.image_count` counts the renderable
+images (roles primary, hero, gallery_item, inline), so a client can show the
+featured image with a gallery affordance when the count is above one.
 More than one renderable visual attachment (image or video) forms an ordered
 gallery, including mixed-media carousels. A single video then wins over a
 single image, followed by audio, document, article, text, or unknown.

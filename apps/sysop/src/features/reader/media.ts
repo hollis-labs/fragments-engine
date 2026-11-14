@@ -3,6 +3,7 @@ import type {
   ReaderAssetVariant,
   ReaderMediaItem,
   ReaderPlaybackSpec,
+  ReaderRenderableItem,
 } from './types'
 
 export type ReaderResourceFamily = 'article' | 'media'
@@ -11,6 +12,24 @@ export type ResourceState = AcquisitionState | 'unavailable'
 
 export function isReaderVisualRenderer(renderer: string): boolean {
   return renderer === 'image' || renderer === 'gallery' || renderer === 'video'
+}
+
+const IMAGE_ROLES = new Set(['primary', 'gallery_item', 'hero', 'inline'])
+
+/** The item's renderable images in position order. */
+export function articleImages(media: ReaderMediaItem[]): ReaderMediaItem[] {
+  return orderedMedia(media).filter(
+    (entry) => entry.kind === 'image' && IMAGE_ROLES.has(entry.attachment.role),
+  )
+}
+
+/** The featured image of an article item, when the server named one. */
+export function featuredArticleImage(
+  item: Pick<ReaderRenderableItem, 'renderer' | 'display' | 'media'>,
+): ReaderMediaItem | undefined {
+  const featuredId = item.display.featured_media_id
+  if (item.renderer !== 'article' || !featuredId) return undefined
+  return item.media.find((entry) => entry.media_asset_id === featuredId && entry.kind === 'image')
 }
 
 const ENCODED_PATH_SEPARATOR = /%(?:2f|5c)/i
