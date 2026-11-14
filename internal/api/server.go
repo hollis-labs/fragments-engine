@@ -320,6 +320,7 @@ func (s *Server) ListenAndServe(addr string) error {
 	go app.RunIngestWorker(ctx, s.cfgPath)
 	go app.RunIngestScheduler(ctx, s.cfgPath)
 	go app.RunInboxReviewer(ctx, s.cfgPath)
+	go app.RunMediaServeReconcile(ctx, s.cfgPath)
 
 	srv := &http.Server{
 		Addr:              addr,

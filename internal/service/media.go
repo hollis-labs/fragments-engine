@@ -1,10 +1,14 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"io"
+	"log"
+	"net/http"
+	"os"
 	"time"
 
 	"github.com/hollis-labs/fragments-engine/internal/blobstore"
@@ -83,6 +87,15 @@ func (s *MediaService) StoreVariantContentAtomic(ctx context.Context, variantID 
 	if variant.Custody == domain.CustodyCache {
 		retention = domain.RetentionCache
 	}
+	// Keep the first bytes for the serve check below, then hand the whole
+	// stream to the blob store.
+	sample := make([]byte, readerMediaSniffBytes)
+	sampled, err := io.ReadFull(src, sample)
+	if err != nil && err != io.ErrUnexpectedEOF && err != io.EOF {
+		return domain.AssetVariant{}, fmt.Errorf("read media variant content: %w", err)
+	}
+	sample = sample[:sampled]
+	src = io.MultiReader(bytes.NewReader(sample), src)
 	put, err := s.blobs.Put(ctx, expected, src, retention)
 	if err != nil {
 		return domain.AssetVariant{}, err
@@ -95,6 +108,15 @@ func (s *MediaService) StoreVariantContentAtomic(ctx context.Context, variantID 
 		return domain.AssetVariant{}, fmt.Errorf("inspect media blob references: %w", err)
 	}
 	stored, err := s.repo.AttachBlobOn(ctx, tx.Conn(), variant.ID, put.Blob, s.now().UTC())
+	if err != nil {
+		if put.Created && preexistingRefs == 0 {
+			_ = s.blobs.Remove(put.Blob.StorageHandle)
+		}
+		active = false
+		_ = tx.Rollback()
+		return domain.AssetVariant{}, err
+	}
+	stored, err = s.recordServeCheck(ctx, tx.Conn(), stored, sample)
 	if err != nil {
 		if put.Created && preexistingRefs == 0 {
 			_ = s.blobs.Remove(put.Blob.StorageHandle)
@@ -127,4 +149,82 @@ func (s *MediaService) StoreVariantContentAtomic(ctx context.Context, variantID 
 func IsDigestMismatch(err error) bool {
 	var mismatch *blobstore.DigestMismatchError
 	return errors.As(err, &mismatch)
+}
+
+// recordServeCheck decides, from the first bytes of a stored variant, whether
+// the Reader media route will serve it, and records the answer so the Reader
+// projection can tell a client before it asks. The rule is the media route's
+// own (safeReaderMediaType); nothing is served that it would refuse.
+func (s *MediaService) recordServeCheck(ctx context.Context, q repository.MediaWriteConn, variant domain.AssetVariant, sample []byte) (domain.AssetVariant, error) {
+	asset, err := s.repo.GetAssetOn(ctx, q, variant.MediaAssetID)
+	if err != nil {
+		return domain.AssetVariant{}, err
+	}
+	served, reason := readerServeDecision(asset, variant, sample)
+	return s.repo.RecordServeCheckOn(ctx, q, variant.ID, served, reason, s.now().UTC())
+}
+
+// readerServeDecision returns the type the media route would serve the bytes
+// as, or an empty type and the reason it would refuse them. The reason names
+// what the bytes look like, so an unserved file can be told apart from a
+// wrong declaration without opening it.
+func readerServeDecision(asset domain.MediaAsset, variant domain.AssetVariant, sample []byte) (served, reason string) {
+	served, err := safeReaderMediaType(asset, variant, sample)
+	if err == nil {
+		return served, ""
+	}
+	sniffed := normalizedMediaType(http.DetectContentType(sample))
+	return "", fmt.Sprintf("the Reader does not serve this file: %v (the bytes look like %s)", err, sniffed)
+}
+
+// ReconcileServeChecks runs the serve check over variants stored before the
+// check existed. It makes one pass and returns how many variants it checked
+// and how many of those the Reader will not serve. A variant whose blob
+// cannot be opened is left unchecked.
+func (s *MediaService) ReconcileServeChecks(ctx context.Context) (checked, unserved int, err error) {
+	if s == nil || s.repo == nil {
+		return 0, 0, fmt.Errorf("reconcile media serve checks: media repository is required")
+	}
+	opener, ok := s.blobs.(interface {
+		Open(string) (*os.File, error)
+	})
+	if !ok {
+		return 0, 0, fmt.Errorf("reconcile media serve checks: blob store cannot open blobs")
+	}
+	after := ""
+	for {
+		batch, err := s.repo.ListUncheckedServeVariants(ctx, after, 200)
+		if err != nil {
+			return checked, unserved, err
+		}
+		if len(batch) == 0 {
+			return checked, unserved, nil
+		}
+		for _, item := range batch {
+			after = item.Variant.ID
+			if err := ctx.Err(); err != nil {
+				return checked, unserved, err
+			}
+			file, err := opener.Open(item.StorageHandle)
+			if err != nil {
+				log.Printf("media serve check: variant %s: blob cannot be opened", item.Variant.ID)
+				continue
+			}
+			sample := make([]byte, readerMediaSniffBytes)
+			n, readErr := io.ReadFull(file, sample)
+			_ = file.Close()
+			if readErr != nil && readErr != io.ErrUnexpectedEOF && readErr != io.EOF {
+				log.Printf("media serve check: variant %s: blob cannot be read", item.Variant.ID)
+				continue
+			}
+			served, reason := readerServeDecision(item.Asset, item.Variant, sample[:n])
+			if _, err := s.repo.RecordServeCheck(ctx, item.Variant.ID, served, reason, s.now().UTC()); err != nil {
+				return checked, unserved, err
+			}
+			checked++
+			if served == "" {
+				unserved++
+			}
+		}
+	}
 }

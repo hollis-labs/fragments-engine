@@ -682,7 +682,13 @@ func projectReaderMedia(fragmentID, revisionID string, items []domain.MediaManif
 			if isSafeReaderURL(variant.SourceURL) {
 				projected.SourceURL = variant.SourceURL
 			}
-			if variant.BlobDigest != "" || (variant.AcquisitionState == domain.AcquisitionAvailable && projected.SourceURL == "") {
+			// FE holds these bytes but the media route refuses them, so the
+			// item must not offer them: the variant reads as failed, with the
+			// reason, and has no content link.
+			unserved := variant.AcquisitionState == domain.AcquisitionAvailable && variant.Unserved()
+			if unserved {
+				projected.AcquisitionState = string(domain.AcquisitionFailed)
+			} else if variant.BlobDigest != "" || (variant.AcquisitionState == domain.AcquisitionAvailable && projected.SourceURL == "") {
 				projected.ContentHref = readerMediaContentHref(fragmentID, revisionID, variant.ID)
 			}
 			if variant.Failure != nil {
@@ -691,7 +697,7 @@ func projectReaderMedia(fragmentID, revisionID string, items []domain.MediaManif
 			} else if variant.AcquisitionState == domain.AcquisitionFailed {
 				projected.Failure = &capturecontract.AssetFailure{Code: "acquisition_failed", Message: "asset acquisition failed", Retryable: false}
 			}
-			switch variant.AcquisitionState {
+			switch domain.AcquisitionState(projected.AcquisitionState) {
 			case domain.AcquisitionPending:
 				summary.Pending++
 			case domain.AcquisitionAvailable:
@@ -749,7 +755,7 @@ func readerFeaturedImage(media []capturecontract.ReaderMediaItem) (string, int) 
 	firstPosition := 0
 	seen := map[string]bool{}
 	for _, item := range media {
-		if item.Kind != "image" || !readerRenderableRole(item.Attachment.Role) {
+		if item.Kind != "image" || !readerRenderableRole(item.Attachment.Role) || readerImageUnserved(item) {
 			continue
 		}
 		// The same asset attached twice (say as hero and inline) is one image.
@@ -774,6 +780,19 @@ func readerFeaturedImage(media []capturecontract.ReaderMediaItem) (string, int) 
 		return hero, count
 	}
 	return featured, count
+}
+
+// readerImageUnserved reports whether FE holds the image's original in a type
+// it will not serve. Such an image cannot be shown from FE's copy, so it is
+// neither counted nor featured.
+func readerImageUnserved(item capturecontract.ReaderMediaItem) bool {
+	for _, variant := range item.Variants {
+		if variant.Kind == string(domain.VariantOriginal) && variant.Failure != nil &&
+			variant.Failure.Code == domain.AssetFailureUnsupportedMediaType {
+			return true
+		}
+	}
+	return false
 }
 
 func readerRenderer(revision domain.FragmentRevision, media []capturecontract.ReaderMediaItem) string {

@@ -701,6 +701,95 @@ WHERE id = ?`, digest.Value, digest.Value, digest.Value, blob.ByteSize,
 	return loadAssetVariant(ctx, q, variant.ID)
 }
 
+// GetAssetOn loads the logical asset a variant belongs to.
+func (r *MediaRepository) GetAssetOn(ctx context.Context, q MediaWriteConn, assetID string) (domain.MediaAsset, error) {
+	return loadMediaAsset(ctx, q, strings.TrimSpace(assetID))
+}
+
+// RecordServeCheckOn stores the outcome of checking a variant's bytes against
+// the media types the Reader serves. A non-empty servedMIME is the verified
+// type: it fills an empty mime_type and clears an earlier unsupported mark.
+// An empty one marks the variant unsupported, with reason as the failure
+// message. The bytes, digest and acquisition state are left as they are.
+func (r *MediaRepository) RecordServeCheckOn(ctx context.Context, q MediaWriteConn, variantID, servedMIME, reason string, now time.Time) (domain.AssetVariant, error) {
+	variantID = strings.TrimSpace(variantID)
+	var err error
+	if servedMIME != "" {
+		_, err = q.ExecContext(ctx, `
+UPDATE asset_variants SET
+  mime_type = CASE WHEN mime_type = '' THEN ? ELSE mime_type END,
+  failure_message = CASE WHEN failure_code = ? THEN '' ELSE failure_message END,
+  failure_code = CASE WHEN failure_code = ? THEN '' ELSE failure_code END,
+  serve_checked = 1, updated_at = ?
+WHERE id = ?`, servedMIME, domain.AssetFailureUnsupportedMediaType,
+			domain.AssetFailureUnsupportedMediaType, formatTime(now), variantID)
+	} else {
+		_, err = q.ExecContext(ctx, `
+UPDATE asset_variants SET
+  failure_code = ?, failure_message = ?, failure_retryable = 0,
+  serve_checked = 1, updated_at = ?
+WHERE id = ?`, domain.AssetFailureUnsupportedMediaType,
+			reason, formatTime(now), variantID)
+	}
+	if err != nil {
+		return domain.AssetVariant{}, fmt.Errorf("record media serve check: %w", err)
+	}
+	return loadAssetVariant(ctx, q, variantID)
+}
+
+// RecordServeCheck is RecordServeCheckOn outside a caller's transaction.
+func (r *MediaRepository) RecordServeCheck(ctx context.Context, variantID, servedMIME, reason string, now time.Time) (domain.AssetVariant, error) {
+	return r.RecordServeCheckOn(ctx, r.db, variantID, servedMIME, reason, now)
+}
+
+// UncheckedServeVariant is a stored variant whose bytes have not yet been
+// checked against the media types the Reader serves.
+type UncheckedServeVariant struct {
+	Variant       domain.AssetVariant
+	Asset         domain.MediaAsset
+	StorageHandle string
+}
+
+// ListUncheckedServeVariants pages, by variant ID, through available
+// blob-backed variants that have no serve check recorded.
+func (r *MediaRepository) ListUncheckedServeVariants(ctx context.Context, afterID string, limit int) ([]UncheckedServeVariant, error) {
+	rows, err := r.db.QueryContext(ctx, `
+SELECT v.id, b.storage_handle
+FROM asset_variants v JOIN media_blobs b ON b.digest = v.blob_digest
+WHERE v.serve_checked = 0 AND v.blob_digest IS NOT NULL
+  AND v.acquisition_state = 'available' AND v.id > ?
+ORDER BY v.id LIMIT ?`, afterID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list unchecked media variants: %w", err)
+	}
+	type pending struct{ id, handle string }
+	var found []pending
+	for rows.Next() {
+		var item pending
+		if err := rows.Scan(&item.id, &item.handle); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("scan unchecked media variant: %w", err)
+		}
+		found = append(found, item)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	out := make([]UncheckedServeVariant, 0, len(found))
+	for _, item := range found {
+		variant, err := loadAssetVariant(ctx, r.db, item.id)
+		if err != nil {
+			return nil, err
+		}
+		asset, err := loadMediaAsset(ctx, r.db, variant.MediaAssetID)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, UncheckedServeVariant{Variant: variant, Asset: asset, StorageHandle: item.handle})
+	}
+	return out, nil
+}
+
 func (r *MediaRepository) MarkVariantFailed(ctx context.Context, variantID string, failure domain.AssetFailure, now time.Time) (domain.AssetVariant, error) {
 	if strings.TrimSpace(failure.Code) == "" || strings.TrimSpace(failure.Message) == "" {
 		return domain.AssetVariant{}, fmt.Errorf("mark variant failed: code and message are required")
