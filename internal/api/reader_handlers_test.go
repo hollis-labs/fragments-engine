@@ -97,3 +97,21 @@ func serveReaderRequest(handler http.Handler, method, path string) *httptest.Res
 	handler.ServeHTTP(response, request)
 	return response
 }
+
+func TestReaderHTTPRejectsRepeatedSingleValuedFilters(t *testing.T) {
+	handler := NewServer(writeCaptureAPIConfig(t)).Handler()
+	for _, name := range []string{"state", "provider", "since", "until", "q", "later", "archived", "starred", "scope", "cursor"} {
+		path := "/v1/reader/items?scope=all&" + name + "=a&" + name + "=b"
+		if name == "scope" {
+			path = "/v1/reader/items?scope=all&scope=inbox"
+		}
+		response := serveReaderRequest(handler, http.MethodGet, path)
+		if response.Code != http.StatusBadRequest {
+			t.Errorf("repeated %s: status=%d body=%s", name, response.Code, response.Body.String())
+		}
+	}
+	// Repeatable filters are not an error.
+	if response := serveReaderRequest(handler, http.MethodGet, "/v1/reader/items?scope=all&renderer=article&renderer=video&tag=a&tag=b"); response.Code != http.StatusOK {
+		t.Errorf("repeated renderer/tag: status=%d body=%s", response.Code, response.Body.String())
+	}
+}

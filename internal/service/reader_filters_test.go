@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"database/sql"
+	"encoding/base64"
 	"fmt"
 	"path/filepath"
 	"reflect"
@@ -236,9 +237,13 @@ func TestReaderListFiltersPaginateAcrossPages(t *testing.T) {
 }
 
 // pagedReaderStub honours the keyset cursor and limit like the repository.
-type pagedReaderStub struct{ snapshot repository.ReaderSnapshot }
+type pagedReaderStub struct {
+	snapshot repository.ReaderSnapshot
+	requests []repository.ReaderPageRequest
+}
 
 func (s *pagedReaderStub) List(_ context.Context, request repository.ReaderPageRequest) (repository.ReaderSnapshot, error) {
+	s.requests = append(s.requests, request)
 	out := s.snapshot
 	out.Bases = nil
 	for _, base := range s.snapshot.Bases {
@@ -256,4 +261,139 @@ func (s *pagedReaderStub) List(_ context.Context, request repository.ReaderPageR
 
 func (s *pagedReaderStub) Get(context.Context, string, string, string) (repository.ReaderSnapshot, error) {
 	return repository.ReaderSnapshot{}, sql.ErrNoRows
+}
+
+func newBulkReaderStub(total int) *pagedReaderStub {
+	stub := &pagedReaderStub{}
+	start := time.Date(2026, 9, 3, 12, 0, 0, 0, time.UTC)
+	stub.snapshot.Coverage = map[string][]repository.ReaderCoverage{}
+	stub.snapshot.Media = map[string][]domain.MediaManifestItem{}
+	stub.snapshot.Tags = map[string][]repository.ReaderTagFact{}
+	stub.snapshot.Annotations = map[string][]domain.CaptureAnnotation{}
+	stub.snapshot.Effects = map[string][]repository.ReaderEffect{}
+	for index := 0; index < total; index++ {
+		id := fmt.Sprintf("fragment-%05d", index)
+		stub.snapshot.Bases = append(stub.snapshot.Bases, repository.ReaderBase{FragmentID: id, CaptureCount: 1,
+			SortAt: start.Add(-time.Duration(index) * time.Second),
+			FragmentRevision: domain.FragmentRevision{ID: "rev-" + id, FragmentID: id, Ordinal: 1,
+				Title: id, Content: "body", ContentFormat: "markdown", MetadataJSON: `{}`},
+			Source: domain.SourceIdentity{SourceRegistrationID: "reader-test", Provider: "web", SourceItemKey: id, SegmentKey: "root"}})
+		stub.snapshot.Coverage["rev-"+id] = testReaderCoverage(id, "rev-"+id)
+	}
+	return stub
+}
+
+// A filter that matches nothing stops at the scan budget with a cursor, in a
+// bounded number of repository calls, and the cursor resumes the same scan.
+func TestReaderListFilterScanBoundReturnsShortPageWithCursor(t *testing.T) {
+	stub := newBulkReaderStub(readerFilterScanMax + 700)
+	reader := NewReaderService(stub)
+	page, err := reader.List(context.Background(), ReaderListRequest{Scope: "all", Renderers: []string{"video"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Items) != 0 || page.NextCursor == "" {
+		t.Fatalf("items=%d cursor=%q, want an empty page with a cursor", len(page.Items), page.NextCursor)
+	}
+	if len(stub.requests) > 12 {
+		t.Fatalf("scan took %d repository calls, want chunks to grow so it stays small", len(stub.requests))
+	}
+	scanned := 0
+	for _, request := range stub.requests {
+		scanned += request.Limit
+	}
+	if scanned < readerFilterScanMax || scanned > readerFilterScanMax+readerFilterScanChunkMax {
+		t.Fatalf("scanned about %d rows, want just past the %d budget", scanned, readerFilterScanMax)
+	}
+	next, err := reader.List(context.Background(), ReaderListRequest{Scope: "all", Renderers: []string{"video"}, Cursor: page.NextCursor})
+	if err != nil || len(next.Items) != 0 || next.NextCursor != "" {
+		t.Fatalf("resumed scan = %+v err=%v, want it to finish without a cursor", next, err)
+	}
+}
+
+func TestReaderUnfilteredCursorIsByteIdentical(t *testing.T) {
+	cursor, err := encodeReaderCursor("all", time.Date(2026, 9, 3, 12, 0, 0, 500, time.UTC), "fragment-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(cursor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const want = `{"v":1,"scope":"all","sort_at":"2026-09-03T12:00:00.0000005Z","fragment_id":"fragment-1"}`
+	if string(raw) != want {
+		t.Fatalf("unfiltered cursor payload = %s, want %s", raw, want)
+	}
+	filtered, err := encodeReaderCursorFiltered("all", "abc", time.Date(2026, 9, 3, 12, 0, 0, 500, time.UTC), "fragment-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if filtered == cursor {
+		t.Fatal("a filtered cursor must differ from the unfiltered one")
+	}
+}
+
+// Stored timestamps drop trailing zeros, so their text order is not their time
+// order. Bounds, ordering and the keyset cursor must follow time.
+func TestReaderListSubSecondBoundariesFollowTime(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "reader-fraction.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	stamps := map[string]string{
+		"whole":   "2026-11-01T12:00:00Z",
+		"quarter": "2026-11-01T12:00:00.25Z",
+		"half":    "2026-11-01T12:00:00.5Z",
+		"later":   "2026-11-01T12:00:01Z",
+	}
+	for name, stamp := range stamps {
+		built, err := repository.BuildFragment(domain.PipelineFragment{Source: "url", SourceType: "article",
+			SourceID: "https://example.test/" + name, Title: name, Content: name + " body", CreatedAt: time.Now()}, "reader-test", time.Now())
+		if err != nil {
+			t.Fatal(err)
+		}
+		fragment, _, err := repository.NewFragmentRepository(st.DB).UpsertResolved(context.Background(), built)
+		if err != nil {
+			t.Fatal(err)
+		}
+		mustExec(t, st.DB, `UPDATE fragments SET ingested_at = ? WHERE id = ?`, stamp, fragment.ID)
+	}
+	reader := NewReaderService(repository.NewReaderRepository(st.DB))
+	for _, test := range []struct {
+		name    string
+		request ReaderListRequest
+		want    []string
+	}{
+		{"order is time order", ReaderListRequest{}, []string{"later", "half", "quarter", "whole"}},
+		{"since the whole second keeps its fractions", ReaderListRequest{Since: "2026-11-01T12:00:00Z"}, []string{"later", "half", "quarter", "whole"}},
+		{"since a fraction", ReaderListRequest{Since: "2026-11-01T12:00:00.25Z"}, []string{"later", "half", "quarter"}},
+		{"until the whole second excludes its fractions", ReaderListRequest{Until: "2026-11-01T12:00:00Z"}, []string{"whole"}},
+		{"until a fraction", ReaderListRequest{Until: "2026-11-01T12:00:00.5Z"}, []string{"half", "quarter", "whole"}},
+		{"window", ReaderListRequest{Since: "2026-11-01T12:00:00.1Z", Until: "2026-11-01T12:00:00.9Z"}, []string{"half", "quarter"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := listTitles(t, reader, test.request); !reflect.DeepEqual(got, test.want) {
+				t.Fatalf("got %v, want %v", got, test.want)
+			}
+		})
+	}
+	// Keyset paging one row at a time visits every row once, in time order.
+	repo := repository.NewReaderRepository(st.DB)
+	var got []string
+	var cursor *repository.ReaderPageCursor
+	for i := 0; i < 6; i++ {
+		snapshot, err := repo.List(context.Background(), repository.ReaderPageRequest{Scope: "all", Limit: 1, PrincipalID: "reader-user", Cursor: cursor})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(snapshot.Bases) == 0 {
+			break
+		}
+		got = append(got, snapshot.Bases[0].FragmentRevision.Title)
+		cursor = &repository.ReaderPageCursor{SortAt: snapshot.Bases[0].SortAt, FragmentID: snapshot.Bases[0].FragmentID}
+	}
+	if want := []string{"later", "half", "quarter", "whole"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("keyset paging visited %v, want %v", got, want)
+	}
 }

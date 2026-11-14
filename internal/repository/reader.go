@@ -128,7 +128,7 @@ func (r *ReaderRepository) List(ctx context.Context, request ReaderPageRequest) 
 		if request.Cursor.SortAt.IsZero() || strings.TrimSpace(request.Cursor.FragmentID) == "" {
 			return ReaderSnapshot{}, fmt.Errorf("reader cursor is incomplete")
 		}
-		cursorAt, cursorID = formatTime(request.Cursor.SortAt), strings.TrimSpace(request.Cursor.FragmentID)
+		cursorAt, cursorID = formatReaderSortKey(request.Cursor.SortAt), strings.TrimSpace(request.Cursor.FragmentID)
 	}
 	principalID := strings.TrimSpace(request.PrincipalID)
 	if principalID == "" {
@@ -206,6 +206,18 @@ capture_aggregate AS (
   GROUP BY c.fragment_id
 )`
 
+// readerSortKeySQL turns a stored RFC 3339 UTC timestamp, whose fractional part
+// has a variable number of digits (zeros are trimmed), into a fixed-width text
+// that sorts and compares in time order. Plain text comparison puts
+// "12:00:00.5Z" before "12:00:00Z" because '.' sorts before 'Z'.
+const readerSortKeySQL = `(substr(%[1]s, 1, 19) || '.' ||
+  substr(CASE WHEN instr(%[1]s, '.') = 0 THEN '' ELSE rtrim(substr(%[1]s, 21), 'Z') END || '000000000', 1, 9) || 'Z')`
+
+// formatReaderSortKey is the Go side of readerSortKeySQL.
+func formatReaderSortKey(value time.Time) string {
+	return value.UTC().Format("2006-01-02T15:04:05.000000000Z")
+}
+
 const readerListBaseSQL = `
 WITH ` + readerCaptureAggregate + `,
 candidates AS (
@@ -231,10 +243,10 @@ LEFT JOIN reader_command_aggregates rca
 LEFT JOIN reading_states rs
   ON rs.fragment_id = f.id AND rs.principal_id = ?
 LEFT JOIN curated_notes cn ON cn.fragment_id = f.id
-WHERE ((? = '') OR candidates.sort_at < ?
-   OR (candidates.sort_at = ? AND f.id < ?))
+WHERE ((? = '') OR SORTKEY < ?
+   OR (SORTKEY = ? AND f.id < ?))
 %s
-ORDER BY candidates.sort_at DESC, f.id DESC
+ORDER BY SORTKEY DESC, f.id DESC
 LIMIT ?`
 
 // readerListQuery appends the optional filter predicates. With an empty filter
@@ -243,7 +255,9 @@ func readerListQuery(scope string, filter ReaderListFilter) (string, []any) {
 	var clauses strings.Builder
 	var args []any
 	if filter.Provider != "" {
-		clauses.WriteString("\n  AND LOWER(si.provider) = ?")
+		// Providers are stored normalized (lowercase), so an exact match can use
+		// the (provider, provider_item_id) index.
+		clauses.WriteString("\n  AND si.provider = ?")
 		args = append(args, filter.Provider)
 	}
 	if filter.State != "" {
@@ -251,12 +265,12 @@ func readerListQuery(scope string, filter ReaderListFilter) (string, []any) {
 		args = append(args, filter.State)
 	}
 	if filter.Since != nil {
-		clauses.WriteString("\n  AND candidates.sort_at >= ?")
-		args = append(args, formatTime(*filter.Since))
+		clauses.WriteString("\n  AND " + fmt.Sprintf(readerSortKeySQL, "candidates.sort_at") + " >= ?")
+		args = append(args, formatReaderSortKey(*filter.Since))
 	}
 	if filter.Until != nil {
-		clauses.WriteString("\n  AND candidates.sort_at <= ?")
-		args = append(args, formatTime(*filter.Until))
+		clauses.WriteString("\n  AND " + fmt.Sprintf(readerSortKeySQL, "candidates.sort_at") + " <= ?")
+		args = append(args, formatReaderSortKey(*filter.Until))
 	}
 	flagClause := func(column string, want *bool) {
 		if want == nil {
@@ -279,7 +293,9 @@ func readerListQuery(scope string, filter ReaderListFilter) (string, []any) {
 		clauses.WriteString("\n  AND f.id IN (SELECT fragment_id FROM fragments_fts WHERE fragments_fts MATCH ?)")
 		args = append(args, filter.Match)
 	}
-	return fmt.Sprintf(readerListBaseSQL, clauses.String()), args
+	sortKey := fmt.Sprintf(readerSortKeySQL, "candidates.sort_at")
+	query := strings.ReplaceAll(readerListBaseSQL, "SORTKEY", sortKey)
+	return fmt.Sprintf(query, clauses.String()), args
 }
 
 const readerDetailBaseSQL = `

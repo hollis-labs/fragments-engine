@@ -58,12 +58,15 @@ type ReaderListRequest struct {
 	Starred  string
 }
 
-// readerFilterScanChunk is how many candidate rows a filtered page reads per
-// repository call while looking for renderer/tag matches, and
-// readerFilterScanMax bounds the total scanned for one page.
+// A filtered page reads candidate rows in chunks while looking for
+// renderer/tag matches. The first chunk is small so a dense match set stays
+// cheap, and each further chunk doubles up to readerFilterScanChunkMax so a
+// sparse one needs few repository calls (each recomputes the capture
+// aggregate). readerFilterScanMax bounds the total scanned for one page.
 const (
-	readerFilterScanChunk = 100
-	readerFilterScanMax   = 5000
+	readerFilterScanChunk    = 100
+	readerFilterScanChunkMax = 800
+	readerFilterScanMax      = 5000
 )
 
 var (
@@ -103,7 +106,7 @@ func parseReaderListFilter(request ReaderListRequest) (readerListFilter, error) 
 	seenTag := map[string]bool{}
 	for _, raw := range request.Tags {
 		tag := strings.ToLower(strings.TrimSpace(raw))
-		if tag == "" || len(tag) > 255 {
+		if tag == "" || utf8.RuneCountInString(tag) > 255 {
 			return out, &ReaderRequestError{Field: "tag", Reason: "must be a non-empty value of at most 255 characters"}
 		}
 		if !seenTag[tag] {
@@ -120,7 +123,7 @@ func parseReaderListFilter(request ReaderListRequest) (readerListFilter, error) 
 	}
 	if request.Provider != "" {
 		provider := strings.ToLower(strings.TrimSpace(request.Provider))
-		if provider == "" || len(provider) > 255 {
+		if provider == "" || utf8.RuneCountInString(provider) > 255 {
 			return out, &ReaderRequestError{Field: "provider", Reason: "must be a non-empty value of at most 255 characters"}
 		}
 		out.repoFilter.Provider = provider
@@ -148,7 +151,7 @@ func parseReaderListFilter(request ReaderListRequest) (readerListFilter, error) 
 	}
 	if request.Query != "" {
 		terms := strings.Fields(request.Query)
-		if len(terms) == 0 || len(request.Query) > 512 {
+		if len(terms) == 0 || utf8.RuneCountInString(request.Query) > 512 {
 			return out, &ReaderRequestError{Field: "q", Reason: "must contain search text of at most 512 characters"}
 		}
 		// Same quoting as the legacy keyword search: terms cannot inject FTS syntax.
@@ -321,9 +324,10 @@ func (s *ReaderService) listPostFiltered(ctx context.Context, scope, principalID
 	items := make([]capturecontract.ReaderItem, 0, readerPageSize)
 	var lastKept, lastScanned repository.ReaderBase
 	scanned := 0
+	chunk := readerFilterScanChunk
 	for {
 		snapshot, err := s.repository.List(ctx, repository.ReaderPageRequest{
-			Scope: scope, Cursor: cursor, Limit: readerFilterScanChunk, PrincipalID: principalID,
+			Scope: scope, Cursor: cursor, Limit: chunk, PrincipalID: principalID,
 			Filter: filter.repoFilter,
 		})
 		if err != nil {
@@ -345,8 +349,11 @@ func (s *ReaderService) listPostFiltered(ctx context.Context, scope, principalID
 			items = append(items, item)
 			lastKept = base
 		}
-		if len(snapshot.Bases) < readerFilterScanChunk {
+		if len(snapshot.Bases) < chunk {
 			return items, time.Time{}, "", nil
+		}
+		if chunk < readerFilterScanChunkMax {
+			chunk = min(chunk*2, readerFilterScanChunkMax)
 		}
 		last := snapshot.Bases[len(snapshot.Bases)-1]
 		cursor = &repository.ReaderPageCursor{SortAt: last.SortAt, FragmentID: last.FragmentID}
