@@ -32,6 +32,11 @@ CREATE TABLE IF NOT EXISTS reader_changes (
 CREATE INDEX IF NOT EXISTS idx_reader_changes_seq
 ON reader_changes(change_seq, fragment_id);
 
+-- The media triggers find an asset's fragments through attachment_refs by
+-- media_asset_id. Without this index each media write scans the table.
+CREATE INDEX IF NOT EXISTS idx_attachment_refs_media_asset
+ON attachment_refs(media_asset_id, fragment_revision_id);
+
 -- Every fragment that already exists starts in the feed, oldest first.
 INSERT INTO reader_changes(fragment_id, principal_id, kind, change_seq)
 SELECT id, '', 'capture', ROW_NUMBER() OVER (ORDER BY ingested_at, id) FROM fragments;
@@ -614,8 +619,14 @@ BEGIN
   FROM (SELECT NEW.fragment_id AS fragment_id) WHERE fragment_id IS NOT NULL;
 END;
 
+-- When a collection row is deleted directly, its members go by cascade after
+-- the row is gone, so the member trigger can no longer tell whose collection
+-- it was. The member trigger therefore records only while the collection still
+-- exists, and reader_changes_collection_delete below records the members
+-- under the owner before the row goes.
 CREATE TRIGGER IF NOT EXISTS reader_changes_collection_item_delete
 AFTER DELETE ON reader_collection_items
+WHEN EXISTS (SELECT 1 FROM reader_collections c WHERE c.id = OLD.collection_id)
 BEGIN
   UPDATE reader_change_sequence SET seq = seq + 1 WHERE id = 1;
   DELETE FROM reader_changes
@@ -640,4 +651,17 @@ BEGIN
   SELECT DISTINCT fragment_id, NEW.principal_id, 'collections',
     (SELECT seq FROM reader_change_sequence WHERE id = 1)
   FROM (SELECT m.fragment_id AS fragment_id FROM reader_collection_items m WHERE m.collection_id = NEW.id) WHERE fragment_id IS NOT NULL;
+END;
+
+CREATE TRIGGER IF NOT EXISTS reader_changes_collection_delete
+BEFORE DELETE ON reader_collections
+BEGIN
+  UPDATE reader_change_sequence SET seq = seq + 1 WHERE id = 1;
+  DELETE FROM reader_changes
+  WHERE kind = 'collections' AND principal_id = OLD.principal_id
+    AND fragment_id IN (SELECT m.fragment_id AS fragment_id FROM reader_collection_items m WHERE m.collection_id = OLD.id);
+  INSERT INTO reader_changes(fragment_id, principal_id, kind, change_seq)
+  SELECT DISTINCT fragment_id, OLD.principal_id, 'collections',
+    (SELECT seq FROM reader_change_sequence WHERE id = 1)
+  FROM (SELECT m.fragment_id AS fragment_id FROM reader_collection_items m WHERE m.collection_id = OLD.id) WHERE fragment_id IS NOT NULL;
 END;

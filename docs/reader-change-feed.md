@@ -102,7 +102,8 @@ column the item shows actually changes, so rewriting a row with the same
 values does not put the item back in the feed.
 
 This is the complete list. `internal/service/reader_changes_paths_test.go` has
-one case per row.
+a case for every trigger, and fails if the triggers in the database and the
+triggers its cases name ever differ.
 
 | Table | Events | Kind | Scope |
 |---|---|---|---|
@@ -127,6 +128,16 @@ one case per row.
 | `reader_command_effects` | insert, state change | `routing` | principal |
 | `reader_collection_items` | insert, delete | `collections` | the collection's owner |
 | `reader_collections` | update of name or kind | `collections` | the owner, every member |
+| `reader_collections` | delete | `collections` | the owner, every member |
+
+A collection's members are normally removed before the collection row. If
+the row is deleted directly, the members go by cascade after it is gone and
+can no longer be traced to an owner, so the collection's own delete trigger
+records them first and the member trigger stays quiet.
+
+The media triggers look up an asset's fragments through
+`attachment_refs(media_asset_id)`; the migration adds that index so a media
+write does not scan the table.
 
 Reordering a collection is deliberately absent: position does not show on a
 Reader item. A client tracks order through the collection's own `revision`.
