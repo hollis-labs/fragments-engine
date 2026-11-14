@@ -25,6 +25,14 @@ func readerCollectionFixture(t *testing.T, count int) (*store.Store, *ReaderColl
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { st.Close() })
+	ids := seedReaderCollectionFragments(t, st, count)
+	readerRepo := repository.NewReaderRepository(st.DB)
+	return st, NewReaderCollectionService(repository.NewReaderCollectionRepository(st.DB), readerRepo),
+		NewReaderService(readerRepo), ids
+}
+
+func seedReaderCollectionFragments(t *testing.T, st *store.Store, count int) []string {
+	t.Helper()
 	base := time.Date(2026, 11, 14, 9, 0, 0, 0, time.UTC)
 	ids := make([]string, 0, count)
 	for index := 0; index < count; index++ {
@@ -42,9 +50,7 @@ func readerCollectionFixture(t *testing.T, count int) (*store.Store, *ReaderColl
 		}
 		ids = append(ids, fragment.ID)
 	}
-	readerRepo := repository.NewReaderRepository(st.DB)
-	return st, NewReaderCollectionService(repository.NewReaderCollectionRepository(st.DB), readerRepo),
-		NewReaderService(readerRepo), ids
+	return ids
 }
 
 func collectionItemIDs(t *testing.T, collections *ReaderCollectionService, principal, collectionID string) []string {

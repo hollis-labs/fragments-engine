@@ -6,6 +6,10 @@ fragment state:
 - `GET /v1/reader/items?scope=inbox|library|all&cursor=...` plus optional filters (below)
 - `GET /v1/reader/items/{fragmentId}?revision_id=...`
 
+A client that keeps its own copy of the items follows
+`GET /v1/reader/changes` instead of re-listing; see
+[`reader-change-feed.md`](./reader-change-feed.md).
+
 Both endpoints return the frozen Browser Capture and Reader v1 schemas. The
 service validates the whole response against that schema before the transport
 writes it. Because FE's HTTP server has no authentication layer and Reader

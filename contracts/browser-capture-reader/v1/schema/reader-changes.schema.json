@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.hollis-labs.dev/fragments-engine/browser-capture-reader/v1/reader-changes.schema.json",
+  "title": "ReaderChangeList",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "items",
+    "next_cursor",
+    "caught_up"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "fe.reader.changes.v1"
+    },
+    "items": {
+      "description": "Changed Reader items, oldest change first. An item appears once per walk, at its latest change.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Change"
+      }
+    },
+    "next_cursor": {
+      "description": "Opaque cursor to pass as `after`. Always present, also when caught up, so the client can poll from it later.",
+      "type": "string",
+      "minLength": 1
+    },
+    "caught_up": {
+      "description": "True when this page reached the end of the feed as it was when the page was read.",
+      "type": "boolean"
+    }
+  },
+  "$defs": {
+    "Change": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "fragment_id",
+        "change_seq",
+        "kinds",
+        "item"
+      ],
+      "properties": {
+        "fragment_id": {
+          "$ref": "common.schema.json#/$defs/Identifier"
+        },
+        "change_seq": {
+          "description": "Sequence number of the item's latest change. It only grows.",
+          "type": "integer",
+          "minimum": 1
+        },
+        "kinds": {
+          "description": "What changed since the client was last caught up: capture, revision, tags, annotations, note, reading_state, media, enrichment, triage, routing, collections. A client must ignore a kind it does not know.",
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]{0,31}$"
+          }
+        },
+        "item": {
+          "$ref": "reader-item.schema.json"
+        }
+      }
+    }
+  }
+}

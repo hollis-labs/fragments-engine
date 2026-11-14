@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 
 	"github.com/hollis-labs/fragments-engine/internal/app"
@@ -72,6 +73,39 @@ func (s *Server) handleReaderItem(w http.ResponseWriter, r *http.Request) {
 	defer instance.Close()
 	result, err := instance.Reader.Get(r.Context(), service.ReaderGetRequest{
 		FragmentID: fragmentID, RevisionID: r.URL.Query().Get("revision_id"), PrincipalID: readerAPIPrincipal,
+	})
+	if err != nil {
+		writeReaderError(w, r, err)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-cache")
+	writeJSON(w, http.StatusOK, result)
+}
+
+// handleReaderChanges serves the change feed described in
+// docs/reader-change-feed.md.
+func (s *Server) handleReaderChanges(w http.ResponseWriter, r *http.Request) {
+	query := r.URL.Query()
+	if len(query["after"]) > 1 || len(query["limit"]) > 1 {
+		writeCaptureProblem(w, r, http.StatusBadRequest, "validation_failed", "Invalid Reader query", "after and limit may each appear at most once")
+		return
+	}
+	limit := 0
+	if raw, present := query["limit"]; present {
+		value, err := strconv.Atoi(raw[0])
+		if err != nil || value < 1 {
+			writeCaptureProblem(w, r, http.StatusBadRequest, "validation_failed", "Invalid Reader query", "limit must be a positive integer")
+			return
+		}
+		limit = value
+	}
+	instance, ok := s.openReaderApp(w, r)
+	if !ok {
+		return
+	}
+	defer instance.Close()
+	result, err := instance.Reader.Changes(r.Context(), service.ReaderChangesRequest{
+		PrincipalID: readerAPIPrincipal, After: query.Get("after"), Limit: limit,
 	})
 	if err != nil {
 		writeReaderError(w, r, err)

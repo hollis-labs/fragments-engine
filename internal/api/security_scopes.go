@@ -14,7 +14,7 @@ func apiScopes() *auth.ScopeTable {
 		"/v1/capabilities", "/v1/search", "/v1/fragments", "/v1/fragments/browse", "/v1/fragments/get", "/v1/fragments/related", "/v1/fragments/attachment",
 		"/v1/entities", "/v1/entities/fragments", "/v1/recall/status", "/v1/inbox", "/v1/inbox/entities", "/v1/inbox/entity-items",
 		"/v1/reader/items", "/v1/reader/items/{id}", "/v1/reader/items/{id}/content", "/v1/media/variants/{id}/content",
-		"/v1/reader/collections", "/v1/reader/collections/{id}", "/v1/reader/collections/{id}/items",
+		"/v1/reader/changes", "/v1/reader/collections", "/v1/reader/collections/{id}", "/v1/reader/collections/{id}/items",
 	} {
 		t.Route("GET", path, "fragments-engine.read")
 	}

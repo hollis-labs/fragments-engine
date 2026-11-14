@@ -59,6 +59,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/reader/items/{fragmentId}/content", s.handleReaderArticleContent)
 	mux.HandleFunc("POST /v1/reader/items/{fragmentId}/commands", s.handleReaderCommand)
 	mux.HandleFunc("GET /v1/media/variants/{variantId}/content", s.handleReaderMediaContent)
+	mux.HandleFunc("GET /v1/reader/changes", s.handleReaderChanges)
 	s.registerReaderCollectionRoutes(mux)
 	mux.Handle(sysopBasePath+"/", newSysopSPAHandler())
 	s.registerTranscriptRoutes(mux)
