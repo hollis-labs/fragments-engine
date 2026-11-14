@@ -3,7 +3,7 @@
 The v1 Reader endpoints expose complete, server-resolved views of durable
 fragment state:
 
-- `GET /v1/reader/items?scope=inbox|library|all&cursor=...`
+- `GET /v1/reader/items?scope=inbox|library|all&cursor=...` plus optional filters (below)
 - `GET /v1/reader/items/{fragmentId}?revision_id=...`
 
 Both endpoints return the frozen Browser Capture and Reader v1 schemas. The
@@ -11,6 +11,30 @@ service validates the whole response against that schema before the transport
 writes it. Because FE's HTTP server has no authentication layer and Reader
 projections contain private source material, both routes use the existing
 loopback-only gate.
+
+## List filters
+
+`GET /v1/reader/items` accepts these optional query parameters, combinable
+with `scope`. Items always stay newest first, 50 per page.
+
+| Parameter | Meaning |
+|---|---|
+| `renderer` | Any-of `article`, `image`, `gallery`, `video`, `audio`, `document`, `text`. Repeat or comma-separate. |
+| `tag` | Repeatable; every tag must be on the item (case-insensitive, combined tags). |
+| `state` | `unread`, `in_progress` or `read` for the requesting principal. No recorded state counts as `unread`. |
+| `provider` | Source provider, case-insensitive exact match. |
+| `since`, `until` | RFC 3339, inclusive, on the item's capture (list sort) time. |
+| `q` | Keyword text over title and content, using the same FTS index and term quoting as `GET /v1/search`. |
+
+An unknown `renderer` or `state`, a malformed timestamp, `since` after `until`,
+or a repeated single-valued parameter is a 400. The cursor carries a
+fingerprint of the filters it was issued for; presenting it with different
+filters is a 400. With no filters the response and cursors are unchanged.
+
+`renderer` and `tag` are derived during projection, so those filters are
+applied after the SQL filters over a bounded scan (5000 rows per request). If
+the budget runs out before a page fills, the page is short but carries a
+cursor; keep following `next_cursor` until it is absent.
 
 ## Scope semantics
 

@@ -37,6 +37,18 @@ type ReaderPageRequest struct {
 	Cursor      *ReaderPageCursor
 	Limit       int
 	PrincipalID string
+	Filter      ReaderListFilter
+}
+
+// ReaderListFilter holds the filters SQL can answer directly. Renderer and tag
+// are derived by the service projection, so the service applies those.
+type ReaderListFilter struct {
+	Provider string
+	State    string
+	Since    *time.Time
+	Until    *time.Time
+	// Match is an already-quoted FTS5 MATCH expression.
+	Match string
 }
 
 type ReaderBase struct {
@@ -117,9 +129,12 @@ func (r *ReaderRepository) List(ctx context.Context, request ReaderPageRequest) 
 	if principalID == "" {
 		return ReaderSnapshot{}, fmt.Errorf("reader principal ID is required")
 	}
-	rows, err := r.db.QueryContext(ctx, readerListBaseSQL,
-		request.Scope, request.Scope, principalID, principalID,
-		cursorAt, cursorAt, cursorAt, cursorID, request.Limit)
+	query, filterArgs := readerListQuery(request.Filter)
+	args := []any{request.Scope, request.Scope, principalID, principalID,
+		cursorAt, cursorAt, cursorAt, cursorID}
+	args = append(args, filterArgs...)
+	args = append(args, request.Limit)
+	rows, err := r.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return ReaderSnapshot{}, fmt.Errorf("list reader bases: %w", err)
 	}
@@ -211,10 +226,39 @@ LEFT JOIN reader_command_aggregates rca
 LEFT JOIN reading_states rs
   ON rs.fragment_id = f.id AND rs.principal_id = ?
 LEFT JOIN curated_notes cn ON cn.fragment_id = f.id
-WHERE (? = '') OR candidates.sort_at < ?
-   OR (candidates.sort_at = ? AND f.id < ?)
+WHERE ((? = '') OR candidates.sort_at < ?
+   OR (candidates.sort_at = ? AND f.id < ?))
+%s
 ORDER BY candidates.sort_at DESC, f.id DESC
 LIMIT ?`
+
+// readerListQuery appends the optional filter predicates. With an empty filter
+// the statement is the original one apart from redundant parentheses.
+func readerListQuery(filter ReaderListFilter) (string, []any) {
+	var clauses strings.Builder
+	var args []any
+	if filter.Provider != "" {
+		clauses.WriteString("\n  AND LOWER(si.provider) = ?")
+		args = append(args, filter.Provider)
+	}
+	if filter.State != "" {
+		clauses.WriteString("\n  AND COALESCE(rs.state, 'unread') = ?")
+		args = append(args, filter.State)
+	}
+	if filter.Since != nil {
+		clauses.WriteString("\n  AND candidates.sort_at >= ?")
+		args = append(args, formatTime(*filter.Since))
+	}
+	if filter.Until != nil {
+		clauses.WriteString("\n  AND candidates.sort_at <= ?")
+		args = append(args, formatTime(*filter.Until))
+	}
+	if filter.Match != "" {
+		clauses.WriteString("\n  AND f.id IN (SELECT fragment_id FROM fragments_fts WHERE fragments_fts MATCH ?)")
+		args = append(args, filter.Match)
+	}
+	return fmt.Sprintf(readerListBaseSQL, clauses.String()), args
+}
 
 const readerDetailBaseSQL = `
 WITH requested(fragment_id) AS (

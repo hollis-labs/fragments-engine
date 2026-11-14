@@ -3,8 +3,10 @@ package service
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -40,6 +42,156 @@ type ReaderListRequest struct {
 	Scope       string
 	Cursor      string
 	PrincipalID string
+	// Optional filters. Renderers are any-of; Tags are all-of. Since and
+	// Until are RFC 3339 and bound capture time inclusively.
+	Renderers []string
+	Tags      []string
+	State     string
+	Provider  string
+	Since     string
+	Until     string
+	Query     string
+}
+
+// readerFilterScanChunk is how many candidate rows a filtered page reads per
+// repository call while looking for renderer/tag matches, and
+// readerFilterScanMax bounds the total scanned for one page.
+const (
+	readerFilterScanChunk = 100
+	readerFilterScanMax   = 5000
+)
+
+var (
+	readerListRenderers = map[string]bool{"article": true, "image": true, "gallery": true,
+		"video": true, "audio": true, "document": true, "text": true}
+	readerListStates = map[string]bool{"unread": true, "in_progress": true, "read": true}
+)
+
+type readerListFilter struct {
+	renderers   map[string]bool
+	tags        []string
+	repoFilter  repository.ReaderListFilter
+	fingerprint string
+}
+
+func (f readerListFilter) postFilters() bool { return len(f.renderers) > 0 || len(f.tags) > 0 }
+
+func parseReaderListFilter(request ReaderListRequest) (readerListFilter, error) {
+	var out readerListFilter
+	var renderers []string
+	for _, raw := range request.Renderers {
+		for _, value := range strings.Split(raw, ",") {
+			value = strings.ToLower(strings.TrimSpace(value))
+			if !readerListRenderers[value] {
+				return out, &ReaderRequestError{Field: "renderer", Reason: "must be one of article, image, gallery, video, audio, document, text"}
+			}
+			if out.renderers == nil {
+				out.renderers = map[string]bool{}
+			}
+			if !out.renderers[value] {
+				out.renderers[value] = true
+				renderers = append(renderers, value)
+			}
+		}
+	}
+	sort.Strings(renderers)
+	seenTag := map[string]bool{}
+	for _, raw := range request.Tags {
+		tag := strings.ToLower(strings.TrimSpace(raw))
+		if tag == "" || len(tag) > 255 {
+			return out, &ReaderRequestError{Field: "tag", Reason: "must be a non-empty value of at most 255 characters"}
+		}
+		if !seenTag[tag] {
+			seenTag[tag] = true
+			out.tags = append(out.tags, tag)
+		}
+	}
+	sort.Strings(out.tags)
+	if state := strings.ToLower(strings.TrimSpace(request.State)); request.State != "" {
+		if !readerListStates[state] {
+			return out, &ReaderRequestError{Field: "state", Reason: "must be unread, in_progress, or read"}
+		}
+		out.repoFilter.State = state
+	}
+	if request.Provider != "" {
+		provider := strings.ToLower(strings.TrimSpace(request.Provider))
+		if provider == "" || len(provider) > 255 {
+			return out, &ReaderRequestError{Field: "provider", Reason: "must be a non-empty value of at most 255 characters"}
+		}
+		out.repoFilter.Provider = provider
+	}
+	parseBound := func(field, raw string) (*time.Time, error) {
+		if raw == "" {
+			return nil, nil
+		}
+		value, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(raw))
+		if err != nil {
+			return nil, &ReaderRequestError{Field: field, Reason: "must be an RFC 3339 timestamp"}
+		}
+		value = value.UTC()
+		return &value, nil
+	}
+	var err error
+	if out.repoFilter.Since, err = parseBound("since", request.Since); err != nil {
+		return out, err
+	}
+	if out.repoFilter.Until, err = parseBound("until", request.Until); err != nil {
+		return out, err
+	}
+	if out.repoFilter.Since != nil && out.repoFilter.Until != nil && out.repoFilter.Since.After(*out.repoFilter.Until) {
+		return out, &ReaderRequestError{Field: "since", Reason: "must not be after until"}
+	}
+	if request.Query != "" {
+		terms := strings.Fields(request.Query)
+		if len(terms) == 0 || len(request.Query) > 512 {
+			return out, &ReaderRequestError{Field: "q", Reason: "must contain search text of at most 512 characters"}
+		}
+		// Same quoting as the legacy keyword search: terms cannot inject FTS syntax.
+		for i, term := range terms {
+			terms[i] = `"` + strings.ReplaceAll(term, `"`, `""`) + `"`
+		}
+		out.repoFilter.Match = strings.Join(terms, " ")
+	}
+	var parts []string
+	add := func(key, value string) {
+		if value != "" {
+			parts = append(parts, key+"="+value)
+		}
+	}
+	add("renderer", strings.Join(renderers, ","))
+	add("tag", strings.Join(out.tags, "\x1f"))
+	add("state", out.repoFilter.State)
+	add("provider", out.repoFilter.Provider)
+	if out.repoFilter.Since != nil {
+		add("since", out.repoFilter.Since.Format(time.RFC3339Nano))
+	}
+	if out.repoFilter.Until != nil {
+		add("until", out.repoFilter.Until.Format(time.RFC3339Nano))
+	}
+	add("q", out.repoFilter.Match)
+	if len(parts) > 0 {
+		sum := sha256.Sum256([]byte(strings.Join(parts, "\x1e")))
+		out.fingerprint = hex.EncodeToString(sum[:8])
+	}
+	return out, nil
+}
+
+func (f readerListFilter) matches(item capturecontract.ReaderItem) bool {
+	if len(f.renderers) > 0 && !f.renderers[item.Renderer] {
+		return false
+	}
+	if len(f.tags) > 0 {
+		have := make(map[string]bool, len(item.Tags.Combined))
+		for _, tag := range item.Tags.Combined {
+			have[strings.ToLower(tag)] = true
+		}
+		for _, tag := range f.tags {
+			if !have[tag] {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 type ReaderGetRequest struct {
@@ -74,33 +226,51 @@ func (s *ReaderService) List(ctx context.Context, request ReaderListRequest) (ca
 	if err != nil {
 		return capturecontract.ReaderItemList{}, err
 	}
-	cursor, err := decodeReaderCursor(request.Scope, request.Cursor)
+	filter, err := parseReaderListFilter(request)
 	if err != nil {
 		return capturecontract.ReaderItemList{}, err
 	}
-	snapshot, err := s.repository.List(ctx, repository.ReaderPageRequest{
-		Scope: request.Scope, Cursor: cursor, Limit: readerPageSize + 1, PrincipalID: principalID,
-	})
+	cursor, err := decodeReaderCursorFiltered(request.Scope, filter.fingerprint, request.Cursor)
 	if err != nil {
-		return capturecontract.ReaderItemList{}, fmt.Errorf("list reader items: %w", err)
+		return capturecontract.ReaderItemList{}, err
 	}
-	hasNext := len(snapshot.Bases) > readerPageSize
-	if hasNext {
-		snapshot.Bases = snapshot.Bases[:readerPageSize]
-	}
-	items := make([]capturecontract.ReaderItem, 0, len(snapshot.Bases))
-	for _, base := range snapshot.Bases {
-		item, err := projectReaderItem(base, snapshot, principalID)
+	var items []capturecontract.ReaderItem
+	var nextAt time.Time
+	var nextID string
+	if !filter.postFilters() {
+		snapshot, err := s.repository.List(ctx, repository.ReaderPageRequest{
+			Scope: request.Scope, Cursor: cursor, Limit: readerPageSize + 1, PrincipalID: principalID,
+			Filter: filter.repoFilter,
+		})
+		if err != nil {
+			return capturecontract.ReaderItemList{}, fmt.Errorf("list reader items: %w", err)
+		}
+		hasNext := len(snapshot.Bases) > readerPageSize
+		if hasNext {
+			snapshot.Bases = snapshot.Bases[:readerPageSize]
+		}
+		items = make([]capturecontract.ReaderItem, 0, len(snapshot.Bases))
+		for _, base := range snapshot.Bases {
+			item, err := projectReaderItem(base, snapshot, principalID)
+			if err != nil {
+				return capturecontract.ReaderItemList{}, err
+			}
+			items = append(items, item)
+		}
+		if hasNext {
+			last := snapshot.Bases[len(snapshot.Bases)-1]
+			nextAt, nextID = last.SortAt, last.FragmentID
+		}
+	} else {
+		items, nextAt, nextID, err = s.listPostFiltered(ctx, request.Scope, principalID, cursor, filter)
 		if err != nil {
 			return capturecontract.ReaderItemList{}, err
 		}
-		items = append(items, item)
 	}
 	out := capturecontract.ReaderItemList{SchemaVersion: capturecontract.ReaderListVersion,
 		Scope: request.Scope, Items: items}
-	if hasNext {
-		last := snapshot.Bases[len(snapshot.Bases)-1]
-		out.NextCursor, err = encodeReaderCursor(request.Scope, last.SortAt, last.FragmentID)
+	if nextID != "" {
+		out.NextCursor, err = encodeReaderCursorFiltered(request.Scope, filter.fingerprint, nextAt, nextID)
 		if err != nil {
 			return capturecontract.ReaderItemList{}, err
 		}
@@ -109,6 +279,49 @@ func (s *ReaderService) List(ctx context.Context, request ReaderListRequest) (ca
 		return capturecontract.ReaderItemList{}, err
 	}
 	return out, nil
+}
+
+// listPostFiltered pages through SQL-filtered candidates in chunks, keeping
+// the items whose projected renderer and tags match. When the scan budget runs
+// out before a full page is found it returns what it has with a cursor at the
+// last row scanned, so the client continues the same filtered set.
+func (s *ReaderService) listPostFiltered(ctx context.Context, scope, principalID string, cursor *repository.ReaderPageCursor, filter readerListFilter) ([]capturecontract.ReaderItem, time.Time, string, error) {
+	items := make([]capturecontract.ReaderItem, 0, readerPageSize)
+	var lastKept, lastScanned repository.ReaderBase
+	scanned := 0
+	for {
+		snapshot, err := s.repository.List(ctx, repository.ReaderPageRequest{
+			Scope: scope, Cursor: cursor, Limit: readerFilterScanChunk, PrincipalID: principalID,
+			Filter: filter.repoFilter,
+		})
+		if err != nil {
+			return nil, time.Time{}, "", fmt.Errorf("list reader items: %w", err)
+		}
+		for _, base := range snapshot.Bases {
+			item, err := projectReaderItem(base, snapshot, principalID)
+			if err != nil {
+				return nil, time.Time{}, "", err
+			}
+			scanned++
+			lastScanned = base
+			if !filter.matches(item) {
+				continue
+			}
+			if len(items) == readerPageSize {
+				return items, lastKept.SortAt, lastKept.FragmentID, nil
+			}
+			items = append(items, item)
+			lastKept = base
+		}
+		if len(snapshot.Bases) < readerFilterScanChunk {
+			return items, time.Time{}, "", nil
+		}
+		last := snapshot.Bases[len(snapshot.Bases)-1]
+		cursor = &repository.ReaderPageCursor{SortAt: last.SortAt, FragmentID: last.FragmentID}
+		if scanned >= readerFilterScanMax {
+			return items, lastScanned.SortAt, lastScanned.FragmentID, nil
+		}
+	}
 }
 
 func (s *ReaderService) Get(ctx context.Context, request ReaderGetRequest) (capturecontract.ReaderItem, error) {
@@ -169,14 +382,21 @@ type readerCursorEnvelope struct {
 	Scope      string `json:"scope"`
 	SortAt     string `json:"sort_at"`
 	FragmentID string `json:"fragment_id"`
+	// Filters fingerprints the list filters the cursor was issued for. It is
+	// omitted for unfiltered lists so their cursors are unchanged.
+	Filters string `json:"filters,omitempty"`
 }
 
 func encodeReaderCursor(scope string, sortAt time.Time, fragmentID string) (string, error) {
+	return encodeReaderCursorFiltered(scope, "", sortAt, fragmentID)
+}
+
+func encodeReaderCursorFiltered(scope, filters string, sortAt time.Time, fragmentID string) (string, error) {
 	if sortAt.IsZero() || strings.TrimSpace(fragmentID) == "" {
 		return "", fmt.Errorf("encode reader cursor: sort timestamp and fragment ID are required")
 	}
 	raw, err := json.Marshal(readerCursorEnvelope{Version: 1, Scope: scope,
-		SortAt: sortAt.UTC().Format(time.RFC3339Nano), FragmentID: fragmentID})
+		SortAt: sortAt.UTC().Format(time.RFC3339Nano), FragmentID: fragmentID, Filters: filters})
 	if err != nil {
 		return "", fmt.Errorf("encode reader cursor: %w", err)
 	}
@@ -184,6 +404,10 @@ func encodeReaderCursor(scope string, sortAt time.Time, fragmentID string) (stri
 }
 
 func decodeReaderCursor(scope, encoded string) (*repository.ReaderPageCursor, error) {
+	return decodeReaderCursorFiltered(scope, "", encoded)
+}
+
+func decodeReaderCursorFiltered(scope, filters, encoded string) (*repository.ReaderPageCursor, error) {
 	encoded = strings.TrimSpace(encoded)
 	if encoded == "" {
 		return nil, nil
@@ -208,6 +432,9 @@ func decodeReaderCursor(scope, encoded string) (*repository.ReaderPageCursor, er
 	sortAt, err := time.Parse(time.RFC3339Nano, cursor.SortAt)
 	if err != nil || cursor.Version != 1 || cursor.Scope != scope || strings.TrimSpace(cursor.FragmentID) == "" || len(cursor.FragmentID) > 255 {
 		return nil, &ReaderRequestError{Field: "cursor", Reason: "does not belong to this Reader scope"}
+	}
+	if cursor.Filters != filters {
+		return nil, &ReaderRequestError{Field: "cursor", Reason: "was issued for different filters; restart the list without it when changing filters"}
 	}
 	return &repository.ReaderPageCursor{SortAt: sortAt.UTC(), FragmentID: cursor.FragmentID}, nil
 }
