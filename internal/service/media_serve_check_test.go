@@ -85,7 +85,9 @@ func TestMirroredOriginalOfAnUnservedTypeIsNotListedAsAvailable(t *testing.T) {
 		declared string
 		payload  []byte
 	}{
-		"SVG with no declared MIME":           {"", testSVGBytes()},
+		"SVG with no declared MIME": {"", testSVGBytes()},
+		// The shape found on the live FE: a README badge with no XML prolog.
+		"badge SVG with no declared MIME":     {"", []byte(`<svg xmlns="http://www.w3.org/2000/svg" width="90" height="20" role="img"><title>downloads: 12k</title><rect width="90" height="20" fill="#555"/></svg>`)},
 		"SVG declared as SVG":                 {"image/svg+xml", testSVGBytes()},
 		"unrecognized bytes (as AVIF sniffs)": {"", []byte("\x00\x00\x00\x1cftypavif\x00\x00\x00\x00avifmif1miaf")},
 		"JPEG bytes declared as PNG":          {"image/png", testJPEGBytes()},
