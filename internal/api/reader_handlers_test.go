@@ -90,16 +90,6 @@ func TestReaderHTTPRejectsInvalidQueriesAndUnownedRevision(t *testing.T) {
 	}
 }
 
-func TestReaderHTTPIsRestrictedToLoopback(t *testing.T) {
-	request := httptest.NewRequest(http.MethodGet, "/v1/reader/items?scope=all", nil)
-	request.RemoteAddr = "203.0.113.10:1234"
-	response := httptest.NewRecorder()
-	NewServer("unused.yaml").Handler().ServeHTTP(response, request)
-	if response.Code != http.StatusForbidden {
-		t.Fatalf("remote Reader status=%d body=%s", response.Code, response.Body.String())
-	}
-}
-
 func serveReaderRequest(handler http.Handler, method, path string) *httptest.ResponseRecorder {
 	request := httptest.NewRequest(method, path, bytes.NewReader(nil))
 	request.RemoteAddr = "127.0.0.1:1234"

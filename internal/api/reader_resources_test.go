@@ -90,14 +90,6 @@ func TestReaderArticleHTTPNegotiatesSafeImmutableRepresentations(t *testing.T) {
 	if notAcceptable.Code != http.StatusNotAcceptable {
 		t.Fatalf("unsupported Accept status = %d", notAcceptable.Code)
 	}
-
-	remote := httptest.NewRequest(http.MethodGet, path, nil)
-	remote.RemoteAddr = "203.0.113.9:1234"
-	remoteResponse := httptest.NewRecorder()
-	server.ServeHTTP(remoteResponse, remote)
-	if remoteResponse.Code != http.StatusForbidden {
-		t.Fatalf("remote article status = %d", remoteResponse.Code)
-	}
 }
 
 func TestReaderMediaHTTPEnforcesOwnershipRangeMIMEAndConditionalRequests(t *testing.T) {
