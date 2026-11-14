@@ -160,7 +160,61 @@
             "name": "cursor",
             "in": "query",
             "required": false,
+            "description": "Opaque keyset cursor. It is bound to the filters it was issued for; reusing it with different filters is a 400.",
             "schema": {"type": "string", "minLength": 1}
+          },
+          {
+            "name": "renderer",
+            "in": "query",
+            "required": false,
+            "description": "Any-of. Repeat the parameter or comma-separate values.",
+            "style": "form",
+            "explode": true,
+            "schema": {"type": "array", "items": {"type": "string", "enum": ["article", "image", "gallery", "video", "audio", "document", "text"]}}
+          },
+          {
+            "name": "tag",
+            "in": "query",
+            "required": false,
+            "description": "All-of, case-insensitive, matched against the combined tags.",
+            "style": "form",
+            "explode": true,
+            "schema": {"type": "array", "items": {"type": "string", "minLength": 1, "maxLength": 255}}
+          },
+          {
+            "name": "state",
+            "in": "query",
+            "required": false,
+            "description": "Reading state for the requesting principal; items with no recorded state are unread.",
+            "schema": {"type": "string", "enum": ["unread", "in_progress", "read"]}
+          },
+          {
+            "name": "provider",
+            "in": "query",
+            "required": false,
+            "description": "Source provider, case-insensitive exact match.",
+            "schema": {"type": "string", "minLength": 1, "maxLength": 255}
+          },
+          {
+            "name": "since",
+            "in": "query",
+            "required": false,
+            "description": "Inclusive lower bound on capture time (the item's list sort time).",
+            "schema": {"type": "string", "format": "date-time"}
+          },
+          {
+            "name": "until",
+            "in": "query",
+            "required": false,
+            "description": "Inclusive upper bound on capture time (the item's list sort time).",
+            "schema": {"type": "string", "format": "date-time"}
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "description": "Keyword text matched against title and content with the same full-text index as GET /v1/search.",
+            "schema": {"type": "string", "minLength": 1, "maxLength": 512}
           }
         ],
         "responses": {

@@ -19,9 +19,16 @@ func (s *Server) handleReaderItems(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if len(r.URL.Query()["scope"]) != 1 || len(r.URL.Query()["cursor"]) > 1 {
+	query := r.URL.Query()
+	if len(query["scope"]) != 1 || len(query["cursor"]) > 1 {
 		writeCaptureProblem(w, r, http.StatusBadRequest, "validation_failed", "Invalid Reader query", "scope is required once and cursor may appear at most once")
 		return
+	}
+	for _, name := range []string{"state", "provider", "since", "until", "q"} {
+		if len(query[name]) > 1 {
+			writeCaptureProblem(w, r, http.StatusBadRequest, "validation_failed", "Invalid Reader query", name+" may appear at most once")
+			return
+		}
 	}
 	instance, ok := s.openReaderApp(w, r)
 	if !ok {
@@ -29,7 +36,10 @@ func (s *Server) handleReaderItems(w http.ResponseWriter, r *http.Request) {
 	}
 	defer instance.Close()
 	result, err := instance.Reader.List(r.Context(), service.ReaderListRequest{
-		Scope: r.URL.Query().Get("scope"), Cursor: r.URL.Query().Get("cursor"), PrincipalID: readerAPIPrincipal,
+		Scope: query.Get("scope"), Cursor: query.Get("cursor"), PrincipalID: readerAPIPrincipal,
+		Renderers: query["renderer"], Tags: query["tag"], State: query.Get("state"),
+		Provider: query.Get("provider"), Since: query.Get("since"), Until: query.Get("until"),
+		Query: query.Get("q"),
 	})
 	if err != nil {
 		writeReaderError(w, r, err)
