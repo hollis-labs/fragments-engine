@@ -1936,7 +1936,7 @@ func fileSHA256(path string) (string, error) {
 
 func runTranscript(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: fragments-engine transcript <migrate|import|tool-calls|usage|enrich|embed|search|show> --config PATH [flags]")
+		return fmt.Errorf("usage: fragments-engine transcript <migrate|import|tool-calls|usage|enrich|embed|search|coverage|show> --config PATH [flags]")
 	}
 	fs := flag.NewFlagSet("transcript "+args[0], flag.ContinueOnError)
 	configPath := fs.String("config", "fragments.example.yaml", "path to config file")
@@ -1963,6 +1963,8 @@ func runTranscript(args []string) error {
 	embedModel := fs.String("embed-model", "", "embed/search --semantic: local embedding model (default from config)")
 	source := fs.String("source", "", "import: backup copy of the SQLite transcripts.db to import")
 	runID := fs.String("run-id", "import", "import: name of the run; re-running with the same name resumes it")
+	grace := fs.Duration("grace", 15*time.Minute, "coverage: files written within this window count as pending, not missing")
+	host := fs.String("host", "", "coverage: host label for the scanned roots (default: ingest label host, else this machine)")
 	if err := fs.Parse(args[1:]); err != nil {
 		return err
 	}
@@ -2002,6 +2004,12 @@ func runTranscript(args []string) error {
 	case "enrich":
 		return runTranscriptEnrich(cfg, store, enrichFlags{dryRun: *dryRun, limit: *limit, session: *session, model: *model, provider: *provider,
 			force: *force, maxCost: *maxCost, concurrency: *concurrency, sessions: *sessions, sample: *sample, stopAfter: *stopAfter, tool: *tool, order: *order, stage: *stage})
+	case "coverage":
+		cov, ok := store.(transcript.CoverageSource)
+		if !ok {
+			return fmt.Errorf("transcript coverage: this corpus cannot list its sessions")
+		}
+		return runTranscriptCoverage(cfg, cov, *host, *grace)
 	case "show":
 		return runTranscriptShow(store, *session)
 	case "embed":
@@ -2386,6 +2394,53 @@ func runTranscriptShow(store transcript.Backend, nativeID string) error {
 		_ = json.Unmarshal([]byte(rec.ResultJSON), &v)
 		pretty, _ := json.MarshalIndent(v, "", "  ")
 		fmt.Printf("tier %d (prompt=%s model=%s):\n%s\n", tier, rec.PromptVersion, rec.Model, pretty)
+	}
+	return nil
+}
+
+// runTranscriptCoverage compares session files under the enabled claude_code
+// and codex ingest roots with the store's tx_sessions, per tool and host. It
+// prints ids only and returns an error (non-zero exit) when the store lacks a
+// session that is on disk, so it can run as a scheduled drift alarm.
+func runTranscriptCoverage(cfg config.Config, store transcript.CoverageSource, hostFlag string, grace time.Duration) error {
+	var files []transcript.CoverageFile
+	for _, in := range cfg.Ingests {
+		if !in.Enabled || (in.Kind != "claude_code" && in.Kind != "codex") {
+			continue
+		}
+		host := hostFlag
+		if host == "" {
+			host = in.Labels["host"]
+		}
+		if host == "" {
+			host, _ = os.Hostname()
+		}
+		root := config.ExpandHome(in.Source.Root)
+		var found []transcript.CoverageFile
+		var err error
+		if in.Kind == "claude_code" {
+			found, err = transcript.ScanClaudeFiles(root, host)
+		} else {
+			found, err = transcript.ScanCodexFiles(root, host)
+		}
+		if err != nil {
+			return fmt.Errorf("coverage: scan %s: %w", in.Name, err)
+		}
+		files = append(files, found...)
+	}
+	stored, err := store.StoredSessionIDs(context.Background())
+	if err != nil {
+		return err
+	}
+	rows := transcript.Coverage(files, stored, grace)
+	for _, r := range rows {
+		fmt.Printf("tool=%s host=%s files=%d in_store=%d unidentified=%d pending=%d missing=%d\n", r.Tool, r.Host, r.Files, r.InStore, r.Unidentified, r.Pending, len(r.Missing))
+		for _, id := range r.Missing {
+			fmt.Printf("  missing %s\n", id)
+		}
+	}
+	if transcript.Drifted(rows) {
+		return fmt.Errorf("coverage drift: sessions on disk are missing from the store")
 	}
 	return nil
 }

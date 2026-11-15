@@ -1019,3 +1019,27 @@ func (s *Service) SessionUsage(ctx context.Context, nativeSessionID string) (tra
 	})
 	return t, err
 }
+
+// StoredSessionIDs returns the native ids of main sessions, by tool, for the
+// coverage check.
+func (s *Service) StoredSessionIDs(ctx context.Context) (map[string]map[string]bool, error) {
+	rows, err := s.st.QueryContext(ctx, `SELECT harness, native_session_id FROM sessions WHERE kind = 'main'`)
+	if err != nil {
+		return nil, errors.New("transcript: cannot list sessions")
+	}
+	defer rows.Close()
+	out := map[string]map[string]bool{}
+	for rows.Next() {
+		var tool, id string
+		if err := rows.Scan(&tool, &id); err != nil {
+			return nil, errors.New("transcript: cannot read sessions")
+		}
+		if out[tool] == nil {
+			out[tool] = map[string]bool{}
+		}
+		out[tool][id] = true
+	}
+	return out, rows.Err()
+}
+
+var _ transcript.CoverageSource = (*Service)(nil)

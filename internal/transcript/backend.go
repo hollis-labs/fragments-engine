@@ -51,4 +51,11 @@ type BrowseBackend interface {
 	SessionUsage(ctx context.Context, nativeSessionID string) (UsageTotals, error)
 }
 
+// CoverageSource lists the main sessions a corpus holds, by tool, for the
+// coverage check that compares them with the session files on disk.
+type CoverageSource interface {
+	StoredSessionIDs(ctx context.Context) (map[string]map[string]bool, error)
+}
+
 var _ Backend = (*Store)(nil)
+var _ CoverageSource = (*Store)(nil)
