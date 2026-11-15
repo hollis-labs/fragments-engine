@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 
@@ -235,6 +236,51 @@ func checkPrivate(path string, directory bool) error {
 	return nil
 }
 
+// trustedAncestorUID reports whether an ancestor owned by uid may sit above the
+// private root: root, or the effective user. Inside a single-uid user namespace
+// (the Tether sandbox) host root is unmapped and stats as the kernel overflow
+// uid, so that uid stands in for root there. It is accepted only when uid 0 has
+// no mapping; the writable-by-others check in checkParents still applies.
+func trustedAncestorUID(uid uint32) bool {
+	if uid == 0 || uid == uint32(os.Geteuid()) {
+		return true
+	}
+	return uid == overflowUID() && !rootMapped()
+}
+
+func overflowUID() uint32 {
+	b, err := os.ReadFile("/proc/sys/kernel/overflowuid")
+	if err != nil {
+		return 65534
+	}
+	n, err := strconv.ParseUint(strings.TrimSpace(string(b)), 10, 32)
+	if err != nil {
+		return 65534
+	}
+	return uint32(n)
+}
+
+// rootMapped reports whether uid 0 is mapped in this process's user namespace.
+// An unreadable map is treated as mapped, which keeps the strict behaviour.
+func rootMapped() bool {
+	b, err := os.ReadFile("/proc/self/uid_map")
+	if err != nil {
+		return true
+	}
+	for _, line := range strings.Split(string(b), "\n") {
+		f := strings.Fields(line)
+		if len(f) != 3 {
+			continue
+		}
+		start, e1 := strconv.ParseUint(f[0], 10, 64)
+		size, e2 := strconv.ParseUint(f[2], 10, 64)
+		if e1 == nil && e2 == nil && start == 0 && size > 0 {
+			return true
+		}
+	}
+	return false
+}
+
 func checkParents(path string) error {
 	var parents []os.FileInfo
 	for {
@@ -243,7 +289,7 @@ func checkParents(path string) error {
 			return errors.New("transcript: destination ancestors must be existing directories without symlinks")
 		}
 		stat, ok := info.Sys().(*syscall.Stat_t)
-		if !ok || (stat.Uid != 0 && stat.Uid != uint32(os.Geteuid())) {
+		if !ok || !trustedAncestorUID(stat.Uid) {
 			return errors.New("transcript: destination ancestor belongs to another user")
 		}
 		parents = append(parents, info)
