@@ -255,3 +255,16 @@ func TestRejectedRecordsAreDistinguishableFromStoreFailures(t *testing.T) {
 		t.Fatalf("a closed store must fail as a store error: %v", err)
 	}
 }
+
+func TestTrustedAncestorUID(t *testing.T) {
+	if !trustedAncestorUID(0) || !trustedAncestorUID(uint32(os.Geteuid())) {
+		t.Fatal("root and the effective user must be trusted")
+	}
+	other := uint32(os.Geteuid()) + 4242
+	if other == overflowUID() {
+		other++
+	}
+	if trustedAncestorUID(other) {
+		t.Fatal("an unrelated uid must not be trusted")
+	}
+}
