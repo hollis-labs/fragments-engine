@@ -166,7 +166,17 @@ func Open(ctx context.Context, cfg config.Config) (*App, error) {
 			return nil, err
 		}
 		backend = pgstore.NewService(pgCorpus)
-		pipeline.SetTranscriptStore(pgstore.NewWriter(pgCorpus))
+		w := pgstore.NewWriter(pgCorpus)
+		// A session's host is the `host` label of the ingest that produced it. An
+		// ingest without one records "unknown": a host is never guessed.
+		hosts := map[string]string{}
+		for _, in := range cfg.Ingests {
+			if h := strings.TrimSpace(in.Labels["host"]); h != "" {
+				hosts[in.Name] = h
+			}
+		}
+		w.HostFor = func(registration string) string { return hosts[registration] }
+		pipeline.SetTranscriptStore(w)
 	case cfg.Transcripts.PrivateRoot != "":
 		transcriptStore, err = transcript.Open(config.ExpandHome(cfg.Transcripts.PrivateRoot))
 		if err != nil {

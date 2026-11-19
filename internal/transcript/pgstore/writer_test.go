@@ -297,3 +297,35 @@ func TestWriterBackfillsThinkingOnStoredTurns(t *testing.T) {
 		t.Errorf("replay journaled: %s -> %s", head, got)
 	}
 }
+
+// The host comes from the ingest that produced the session; a session stored with
+// an unknown host (imported history) learns it, and a known host is never changed.
+func TestWriterRecordsAndLearnsHost(t *testing.T) {
+	w, s, done := openWriter(t)
+	defer done()
+	ctx := context.Background()
+	d := func() *domain.TranscriptDetail {
+		return &domain.TranscriptDetail{Session: domain.TranscriptSession{Tool: "claude", NativeSessionID: "n", Kind: "main"},
+			Turns: []domain.TranscriptTurn{{EventUUID: "e1", Role: "user", Text: "hi"}}}
+	}
+	if _, err := w.Accept(ctx, "r", frag("n", d())); err != nil { // no mapping: unknown
+		t.Fatal(err)
+	}
+	if got := scalar(t, s, `SELECT host_id FROM sessions`); got != "unknown" {
+		t.Fatalf("host = %s", got)
+	}
+	w.HostFor = func(string) string { return "mac" }
+	if _, err := w.Accept(ctx, "r", frag("n", d())); err != nil {
+		t.Fatal(err)
+	}
+	if got := scalar(t, s, `SELECT host_id FROM sessions`) + "/" + scalar(t, s, `SELECT host_id FROM sources`); got != "mac/mac" {
+		t.Fatalf("host not learned: %s", got)
+	}
+	w.HostFor = func(string) string { return "other" }
+	if _, err := w.Accept(ctx, "r", frag("n", d())); err != nil {
+		t.Fatal(err)
+	}
+	if got := scalar(t, s, `SELECT host_id FROM sessions`); got != "mac" {
+		t.Fatalf("known host changed: %s", got)
+	}
+}

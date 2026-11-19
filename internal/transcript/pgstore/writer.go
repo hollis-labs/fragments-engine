@@ -350,6 +350,7 @@ func (w *Writer) upsertSession(ctx context.Context, tx store.Tx, registration st
  parent_session_id, parent_native_id, is_fork, model, cwd_redacted, git_branch_redacted, description_redacted, started_at, ended_at, ingest_state, generation, content_revision, content_digest, metadata)
 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'current',1,1,'unset',?::jsonb)
 ON CONFLICT (session_id) DO UPDATE SET
+ host_id = CASE WHEN sessions.host_id = 'unknown' THEN excluded.host_id ELSE sessions.host_id END,
  model = COALESCE(sessions.model, excluded.model), cwd_redacted = COALESCE(sessions.cwd_redacted, excluded.cwd_redacted),
  git_branch_redacted = COALESCE(sessions.git_branch_redacted, excluded.git_branch_redacted),
  entrypoint = CASE WHEN sessions.entrypoint = '' THEN excluded.entrypoint ELSE sessions.entrypoint END,
@@ -366,7 +367,7 @@ ON CONFLICT (session_id) DO UPDATE SET
 
 func (w *Writer) ensureSource(ctx context.Context, tx store.Tx, registration, harness string) error {
 	_, err := tx.ExecContext(ctx, `INSERT INTO sources (source_id, harness, host_id, source_kind, canonical_root_ref, parser_version) VALUES (?,?,?,'archive',?,?)
-ON CONFLICT (source_id) DO NOTHING`, registration, transcript.Redact(harness), w.hostOf(registration), registration, MappingVersion)
+ON CONFLICT (source_id) DO UPDATE SET host_id = CASE WHEN sources.host_id = 'unknown' THEN excluded.host_id ELSE sources.host_id END`, registration, transcript.Redact(harness), w.hostOf(registration), registration, MappingVersion)
 	return err
 }
 
