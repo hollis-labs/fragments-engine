@@ -2405,7 +2405,7 @@ func runTranscriptShow(store transcript.Backend, nativeID string) error {
 func runTranscriptCoverage(cfg config.Config, store transcript.CoverageSource, hostFlag string, grace time.Duration) error {
 	var files []transcript.CoverageFile
 	for _, in := range cfg.Ingests {
-		if !in.Enabled || (in.Kind != "claude_code" && in.Kind != "codex") {
+		if !in.Enabled || (in.Kind != "claude_code" && in.Kind != "codex_sessions") {
 			continue
 		}
 		host := hostFlag
