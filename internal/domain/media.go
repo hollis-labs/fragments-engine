@@ -174,6 +174,17 @@ type AssetFailure struct {
 	Retryable bool   `json:"retryable"`
 }
 
+// AssetFailureUnsupportedMediaType marks a variant whose bytes FE holds but
+// will not serve: an active or unrecognized type, one outside the closed
+// family for its kind, or bytes that contradict the declared MIME. The
+// variant stays available as custody; the Reader projects it as failed.
+const AssetFailureUnsupportedMediaType = "unsupported_media_type"
+
+// Unserved reports whether the variant carries that mark.
+func (v AssetVariant) Unserved() bool {
+	return v.Failure != nil && v.Failure.Code == AssetFailureUnsupportedMediaType
+}
+
 // AssetVariant owns acquisition and custody independently from every sibling
 // representation of the logical MediaAsset.
 type AssetVariant struct {

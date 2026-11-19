@@ -38,10 +38,13 @@ This file was backfilled from the git history as a good-faith summary, not an ex
 - Relative config and destination paths are anchored to the install directory, not the process working directory.
 - README rewritten as a pre-release identity and stack-fit document.
 
+### Fixed
+
+- **Reader items no longer list as available a stored file the media route refuses.** Stored bytes are checked against the served media types when they are stored; a servable file gets its verified `mime_type`, and one FE does not serve (SVG, AVIF, bytes that contradict the declared MIME) is listed as `failed` with code `unsupported_media_type`, has no `content_href`, and is left out of `display.image_count`. The closed MIME list and the media route are unchanged. Migration `024_media_serve_check.sql`; existing variants are checked once when `serve-api` starts. See `docs/reader-resources.md`.
+
 ## [0.1.1] - 2026-05-15
 
 ### Fixed
-
 - Patch release over v0.1.0; see `git log v0.1.0..v0.1.1`.
 
 ## [0.1.0] - 2026-05-15

@@ -64,6 +64,7 @@ type App struct {
 	ReaderResources   *service.ReaderResourceService
 	ReaderCommands    *service.ReaderCommandService
 	ReaderCollections *service.ReaderCollectionService
+	Media             *service.MediaService
 }
 
 func Open(ctx context.Context, cfg config.Config) (*App, error) {
@@ -200,6 +201,7 @@ func Open(ctx context.Context, cfg config.Config) (*App, error) {
 		ReaderCommands: service.NewReaderCommandService(
 			repository.NewReaderCommandRepository(st.DB), assetAcquisition, routingSvc, readerService,
 		),
+		Media: mediaService,
 		ReaderCollections: service.NewReaderCollectionService(
 			repository.NewReaderCollectionRepository(st.DB), readerRepo,
 		),

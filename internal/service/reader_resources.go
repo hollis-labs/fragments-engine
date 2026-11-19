@@ -259,7 +259,7 @@ func (s *ReaderResourceService) OpenMedia(ctx context.Context, fragmentID, revis
 	if owned.Blob != nil && !strings.EqualFold(owned.Blob.Digest.Value, actual.Value) {
 		return ReaderMediaResource{}, &ReaderResourceIntegrityError{Reason: "blob digest mismatch"}
 	}
-	sample := make([]byte, 512)
+	sample := make([]byte, readerMediaSniffBytes)
 	n, readErr := io.ReadFull(file, sample)
 	if readErr != nil && readErr != io.ErrUnexpectedEOF && readErr != io.EOF {
 		return ReaderMediaResource{}, fmt.Errorf("sniff reader media: %w", readErr)
@@ -312,6 +312,10 @@ func hashReaderFile(ctx context.Context, file *os.File) (domain.ContentDigest, e
 	}
 	return domain.ContentDigest{Algorithm: "sha256", Value: hex.EncodeToString(h.Sum(nil))}, nil
 }
+
+// readerMediaSniffBytes is how much of a file the MIME check reads; it is what
+// http.DetectContentType considers.
+const readerMediaSniffBytes = 512
 
 func safeReaderMediaType(asset domain.MediaAsset, variant domain.AssetVariant, sample []byte) (string, error) {
 	sniffed := normalizedMediaType(http.DetectContentType(sample))

@@ -69,6 +69,28 @@ Pending, reference-only, and failed variants return an explicit
 `capability_unavailable` problem; a missing or non-owned resource returns the
 same 404 response.
 
+### What the Reader item says about stored bytes
+
+FE can hold bytes it will not serve: a mirrored SVG badge, an AVIF, a file
+whose bytes contradict its declared MIME. So that a client does not ask for
+them, the same check the media route applies is run once when the bytes are
+stored, on their first 512 bytes, and its outcome is recorded on the variant:
+
+- Servable: the verified type fills an empty `mime_type`. The item lists the
+  variant as `available` with that type and a `content_href`.
+- Not servable: the bytes and digest stay in custody, and the variant is marked
+  with failure code `unsupported_media_type` (not retryable). The item lists
+  it with `acquisition_state: failed`, that failure, and no `content_href`.
+  The failure message names what the bytes look like. An image whose original
+  is marked this way is not counted in `display.image_count` and is never the
+  featured image.
+
+The media route is unchanged and still decides for itself on every request;
+the recorded outcome only informs the projection. Variants stored before the
+check existed are checked by a single pass when `serve-api` starts, which logs
+how many it checked and how many will not be served. Compatibility media read
+from `legacy_storage_path` has no stored blob and is not checked.
+
 ## Playback
 
 Reader playback uses one strict constructor for the closed `PlaybackSpec`. It

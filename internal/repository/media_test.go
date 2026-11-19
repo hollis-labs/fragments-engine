@@ -637,3 +637,71 @@ func mediaTestItem(provider, providerID, sourceKey, locator string, kind domain.
 func digestOf(value string) string {
 	return domain.DigestText(value)
 }
+
+// A reconcile page must not pair a blob handle observed before a writer's
+// commit with variant metadata observed after it. Both states are valid; a
+// mixture would let the checker approve or reject the wrong bytes.
+func TestUncheckedServeVariantsUseCoherentSnapshot(t *testing.T) {
+	st, fragment := mediaTestStoreAndFragment(t, "serve-snapshot", nil)
+	defer st.Close()
+	ctx := context.Background()
+	repo := NewMediaRepository(st.DB)
+	now := time.Now().UTC()
+	item := mediaTestItem("web", "", "original", "https://example.test/image", domain.MediaImage, domain.AttachmentInline, 0, []domain.AssetVariant{{VariantIdentity: "original", Kind: domain.VariantOriginal, Custody: domain.CustodyMirror}})
+	manifest, err := repo.UpsertManifest(ctx, fragment.Revision.ID, []domain.MediaManifestItem{item}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := manifest[0].Variants[0].ID
+	type state struct{ digest, mime, handle string }
+	states := []state{{digestOf("png"), "image/png", "blob-png"}, {digestOf("svg"), "image/svg+xml", "blob-svg"}}
+	for _, state := range states {
+		if _, err := st.DB.Exec(`INSERT INTO media_blobs(digest,algorithm,storage_handle,byte_size,retention,created_at,verified_at) VALUES (?,'sha256',?,1,'indefinite',?,?)`, state.digest, state.handle, formatTime(now), formatTime(now)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	setState := func(state state) error {
+		_, err := st.DB.Exec(`UPDATE asset_variants SET blob_digest=?, digest=?, mime_type=?, acquisition_state='available', serve_checked=0 WHERE id=?`, state.digest, state.digest, state.mime, id)
+		return err
+	}
+	if err := setState(states[0]); err != nil {
+		t.Fatal(err)
+	}
+	stop := make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		for i := 0; ; i++ {
+			select {
+			case <-stop:
+				done <- nil
+				return
+			default:
+			}
+			if err := setState(states[i%2]); err != nil {
+				done <- err
+				return
+			}
+		}
+	}()
+	defer func() {
+		close(stop)
+		if err := <-done; err != nil {
+			t.Error(err)
+		}
+	}()
+	for i := 0; i < 256; i++ {
+		page, err := repo.ListUncheckedServeVariants(ctx, "", 200)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(page) != 1 {
+			t.Fatalf("page size = %d", len(page))
+		}
+		got := page[0]
+		for _, state := range states {
+			if got.StorageHandle == state.handle && (got.Variant.BlobDigest != state.digest || got.Variant.MIMEType != state.mime) {
+				t.Fatalf("mixed snapshot: handle=%s digest=%s MIME=%s", got.StorageHandle, got.Variant.BlobDigest, got.Variant.MIMEType)
+			}
+		}
+	}
+}

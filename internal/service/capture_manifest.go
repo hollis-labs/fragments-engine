@@ -139,6 +139,9 @@ func (s *CaptureService) AcceptManifest(ctx context.Context, raw []byte) (captur
 	}
 	write.Media = media
 	write.AssetBindings = bindings
+	if s.media != nil {
+		write.CheckStoredMedia = s.media.checkStoredMediaOn
+	}
 	write.Inbox = &repository.CaptureInboxWrite{Reason: "awaiting routing", StagedAt: now}
 	write.EnrichmentObservations, write.CapabilityCoverage = buildInitialCaptureEnrichment(envelope, fragment, media, now)
 	write.FollowUpKind = "capture_enrichment"
@@ -540,49 +543,7 @@ func projectOptimisticReader(envelope capturecontract.CaptureEnvelope, accepted 
 	if full {
 		article.FullContentHref = "/v1/reader/items/" + url.PathEscape(accepted.Fragment.ID) + "/content?revision_id=" + url.QueryEscape(accepted.ObservedRevision.ID)
 	}
-	media := make([]capturecontract.ReaderMediaItem, 0, len(accepted.Media))
-	acquisition := capturecontract.AcquisitionSummary{}
-	for _, item := range accepted.Media {
-		variants := make([]capturecontract.ReaderAssetVariant, 0, len(item.Variants))
-		for _, variant := range item.Variants {
-			out := capturecontract.ReaderAssetVariant{
-				AssetVariantID: variant.ID, Kind: string(variant.Kind), Custody: string(variant.Custody),
-				AcquisitionState: string(variant.AcquisitionState), MIMEType: variant.MIMEType,
-				Width: positiveIntPointer(variant.Width), Height: positiveIntPointer(variant.Height),
-				DurationSeconds: positiveFloatPointer(variant.DurationSeconds), ByteSize: nonzeroInt64Pointer(variant.ByteSize),
-				Digest: contractDigest(variant.Digest), SourceURL: variant.SourceURL,
-			}
-			if variant.BlobDigest != "" {
-				query := url.Values{
-					"fragment_id": {accepted.Fragment.ID},
-					"revision_id": {accepted.ObservedRevision.ID},
-				}
-				out.ContentHref = "/v1/media/variants/" + url.PathEscape(variant.ID) + "/content?" + query.Encode()
-			}
-			if variant.Failure != nil {
-				out.Failure = &capturecontract.AssetFailure{Code: variant.Failure.Code, Message: variant.Failure.Message, Retryable: variant.Failure.Retryable}
-			}
-			switch variant.AcquisitionState {
-			case domain.AcquisitionPending:
-				acquisition.Pending++
-			case domain.AcquisitionAvailable:
-				acquisition.Available++
-			case domain.AcquisitionReferenceOnly:
-				acquisition.ReferenceOnly++
-			case domain.AcquisitionFailed:
-				acquisition.Failed++
-			}
-			variants = append(variants, out)
-		}
-		media = append(media, capturecontract.ReaderMediaItem{
-			Attachment: capturecontract.AttachmentRef{AttachmentID: item.Attachment.ID,
-				FragmentRevisionID: item.Attachment.FragmentRevisionID, MediaAssetID: item.Asset.ID,
-				Role: string(item.Attachment.Role), Position: item.Attachment.Position,
-				Caption: item.Attachment.Caption, SourceContext: item.Attachment.SourceContext},
-			MediaAssetID: item.Asset.ID, ProviderMediaID: item.Asset.ProviderMediaID,
-			Kind: string(item.Asset.Kind), AltText: item.Asset.AltText, Variants: variants,
-		})
-	}
+	media, acquisition := projectReaderMedia(accepted.Fragment.ID, accepted.ObservedRevision.ID, accepted.Media)
 	combined, attributed := projectTags(accepted.Tags)
 	annotations := make([]capturecontract.ReaderAnnotation, 0, len(accepted.Annotations))
 	for _, item := range accepted.Annotations {
