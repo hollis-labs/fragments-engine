@@ -176,18 +176,29 @@ func (w *Writer) apply(ctx context.Context, tx store.Tx, registration string, in
 		if l := int64(len(t.Thinking)); l > thinkBytes {
 			thinkBytes = l
 		}
-		res, err := tx.ExecContext(ctx, `INSERT INTO events (session_id, event_id, ordinal, parent_event_id, kind, role, event_at, ingested_at, event_revision,
+		// A turn already stored is left alone, except that thinking text the earlier
+		// capture did not have (history imported from the previous store kept only a
+		// byte count) is filled in. RETURNING says which happened.
+		var inserted bool
+		err := tx.QueryRowContext(ctx, `INSERT INTO events (session_id, event_id, ordinal, parent_event_id, kind, role, event_at, ingested_at, event_revision,
  request_id, is_sidechain, stop_reason, has_thinking, thinking_bytes, text_redacted, thinking_redacted, payload_redacted, content_digest)
-VALUES (?,?,?,?, 'turn', ?,?,?,1, ?,?,?,?,?,?,?,?::jsonb,?) ON CONFLICT (session_id, event_id) DO NOTHING`,
+VALUES (?,?,?,?, 'turn', ?,?,?,1, ?,?,?,?,?,?,?,?::jsonb,?)
+ON CONFLICT (session_id, event_id) DO UPDATE SET thinking_redacted = excluded.thinking_redacted, has_thinking = true,
+ thinking_bytes = greatest(events.thinking_bytes, excluded.thinking_bytes), content_digest = excluded.content_digest,
+ event_revision = events.event_revision + 1
+ WHERE events.thinking_redacted = '' AND excluded.thinking_redacted <> ''
+RETURNING (xmax = 0)`,
 			pk, eventID, ordinal+1, nullStr(transcript.Redact(t.ParentUUID)), transcript.Redact(t.Role), tsPtr(t.TS), now,
-			transcript.Redact(t.RequestID), t.IsSidechain, transcript.Redact(t.StopReason), t.HasThinking || thinking != "", thinkBytes, text, thinking, payload, eventDigest(text, thinking))
+			transcript.Redact(t.RequestID), t.IsSidechain, transcript.Redact(t.StopReason), t.HasThinking || thinking != "", thinkBytes, text, thinking, payload, eventDigest(text, thinking)).Scan(&inserted)
+		if errors.Is(err, sql.ErrNoRows) {
+			continue // already stored, nothing to add
+		}
 		if err != nil {
 			return "", err
 		}
-		if n, _ := res.RowsAffected(); n == 0 {
-			continue
+		if inserted {
+			ordinal++
 		}
-		ordinal++
 		changed++
 		if err := j.note(ctx, "event_upsert", eventID); err != nil {
 			return "", err

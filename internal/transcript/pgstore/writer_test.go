@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/hollis-labs/fragments-engine/internal/domain"
+	"github.com/hollis-labs/fragments-engine/internal/transcript"
 	"github.com/hollis-labs/libs/core/store"
 	"github.com/hollis-labs/libs/core/store/migrate"
 )
@@ -250,5 +251,49 @@ func TestWriterKeepsUnsupportedStepsRaw(t *testing.T) {
 	}
 	if got := scalar(t, s, `SELECT legacy_turn_count FROM sessions`); got != "1" {
 		t.Errorf("turn count = %s", got)
+	}
+}
+
+// History captured before thinking text was kept has the event but not the text.
+// A replay that now carries it fills it in, once, and leaves ordinals alone.
+func TestWriterBackfillsThinkingOnStoredTurns(t *testing.T) {
+	w, s, done := openWriter(t)
+	defer done()
+	ctx := context.Background()
+	d := func(thinking string) *domain.TranscriptDetail {
+		return &domain.TranscriptDetail{Session: domain.TranscriptSession{Tool: "claude", NativeSessionID: "n", Kind: "main"},
+			Turns: []domain.TranscriptTurn{
+				{EventUUID: "e1", Role: "assistant", Text: "answer", HasThinking: true, ThinkingBytes: 11, Thinking: thinking},
+				{EventUUID: "e2", Role: "user", Text: "next"},
+			}}
+	}
+	if _, err := w.Accept(ctx, "r", frag("n", d(""))); err != nil {
+		t.Fatal(err)
+	}
+	if got := scalar(t, s, `SELECT thinking_redacted FROM events WHERE event_id = 'e1'`); got != "" {
+		t.Fatalf("setup: %q", got)
+	}
+	out, err := w.Accept(ctx, "r", frag("n", d("weigh A or B")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != transcript.Updated {
+		t.Errorf("outcome = %v", out)
+	}
+	if got := scalar(t, s, `SELECT thinking_redacted FROM events WHERE event_id = 'e1'`); got != "weigh A or B" {
+		t.Errorf("thinking not backfilled: %q", got)
+	}
+	if got := scalar(t, s, `SELECT string_agg(event_id || ':' || ordinal, ',' ORDER BY ordinal) FROM events`); got != "e1:0,e2:1" {
+		t.Errorf("ordinals disturbed: %s", got)
+	}
+	if got := scalar(t, s, `SELECT count(*) FROM search_documents WHERE field = 'thinking' AND entity_key = 'e1'`); got != "1" {
+		t.Errorf("thinking not searchable: %s", got)
+	}
+	head := scalar(t, s, `SELECT head FROM feed_state`)
+	if out, _ := w.Accept(ctx, "r", frag("n", d("weigh A or B"))); out != transcript.Skipped {
+		t.Errorf("replay = %v", out)
+	}
+	if got := scalar(t, s, `SELECT head FROM feed_state`); got != head {
+		t.Errorf("replay journaled: %s -> %s", head, got)
 	}
 }
