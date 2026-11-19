@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.0.0",
   "license": "MIT",
-  "description": "Sysop frontend for Fragments Engine — built on @hollis-labs/sysop-ui.",
+  "description": "Sysop frontend for Fragments Engine \u2014 built on @hollis-labs/sysop-ui.",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -20,7 +20,7 @@
     "@dnd-kit/sortable": "^10.0.0",
     "@dnd-kit/utilities": "^3.2.2",
     "@fontsource-variable/geist": "^5.2.8",
-    "@hollis-labs/sysop-ui": "github:hollis-labs/sysop-ui#v0.6.5",
+    "@hollis-labs/sysop-ui": "file:vendor/hollis-labs-sysop-ui-0.6.5.tgz",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "cmdk": "^1.1.1",

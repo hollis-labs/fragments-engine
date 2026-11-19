@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -103,6 +104,9 @@ func TestFragmentServiceIntakeEnrichesGitHubRepoURL(t *testing.T) {
 }
 
 func TestInboxReviewerReviewsPinterestPinAndDownloadsImage(t *testing.T) {
+	if _, err := exec.LookPath("sips"); err != nil {
+		t.Skip("image previews need macOS sips; not available on this host")
+	}
 	svcs := setupManualTestServices(t)
 	defer svcs.close()
 
