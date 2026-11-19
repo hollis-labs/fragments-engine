@@ -20,10 +20,14 @@ import (
 )
 
 const (
-	tailWindow      = 4096
-	maxExcerptBytes = 2048
-	rawExcerptBytes = 16 << 10
+	tailWindow = 4096
+	// maxLineBytes is a safety ceiling for one JSONL line, not a content rule.
+	maxLineBytes = 1 << 30
 )
+
+// passBytes bounds how much of one rollout a single run reads; a larger file is
+// read in successive passes that resume at the stored cursor. A var for tests.
+var passBytes int64 = 64 << 20
 
 // session_meta carries the thread's identity. A subagent names its parent under
 // source.subagent.thread_spawn; a fork names it as forked_from_id.
@@ -61,6 +65,7 @@ type textMessage struct {
 	ts             time.Time
 	thinking       bool
 	thinkingBytes  int
+	thinkingText   string
 }
 
 // rolloutResult is one parse of a rollout file, whole or from a stored cursor.
@@ -74,8 +79,8 @@ type rolloutResult struct {
 	lineNo       int
 	tail         []byte
 	incomplete   *tailInfo // a final line still being written
-	limitHit     bool
-	eventsAppend bool // an incremental parse saw only legacy event messages
+	more         bool      // the pass stopped at passBytes; the file has more
+	eventsAppend bool      // an incremental parse saw only legacy event messages
 }
 
 func digestHex(b []byte) string {
@@ -107,7 +112,7 @@ var patchPath = regexp.MustCompile(`(?m)^\*\*\* (?:Add|Update|Delete) File: (.+)
 // line, with startLine lines before it and tail the bytes that precede it) up
 // to the last complete line. A half-written final line is reported, never
 // consumed, so the cursor never moves past bytes that can still change.
-func parseRollout(ctx context.Context, path string, start int64, startLine int, tail []byte, maxBytes int64, excerpt int) (rolloutResult, error) {
+func parseRollout(ctx context.Context, path string, start int64, startLine int, tail []byte, limit int64) (rolloutResult, error) {
 	file, err := os.Open(path)
 	if err != nil {
 		class := "unreadable_file"
@@ -122,10 +127,8 @@ func parseRollout(ctx context.Context, path string, start int64, startLine int, 
 			return rolloutResult{}, &domain.CollectionError{Class: "read_error", Offset: start}
 		}
 	}
-	limited := &io.LimitedReader{R: file, N: maxBytes + 1}
-	reader := bufio.NewReaderSize(limited, 1<<20)
+	reader := bufio.NewReaderSize(file, 1<<20)
 	res := rolloutResult{offset: start, lineNo: startLine, tail: append([]byte(nil), tail...)}
-	var retained int
 	var lineStart int64
 	fail := func(class string) error {
 		return &domain.CollectionError{Class: class, Line: res.lineNo, Offset: lineStart}
@@ -147,6 +150,7 @@ func parseRollout(ctx context.Context, path string, start int64, startLine int, 
 	var curModel, curEffort, lastTurn string
 	var pendingThinking bool
 	var pendingBytes int
+	var pendingText []string
 
 	for {
 		if err := ctx.Err(); err != nil {
@@ -169,6 +173,10 @@ func parseRollout(ctx context.Context, path string, start int64, startLine int, 
 			// No trailing newline and not valid JSON: the writer was still
 			// appending when this copy was made. Stop before it.
 			res.incomplete = &tailInfo{line: res.lineNo + 1, offset: res.offset}
+			break
+		}
+		if limit > 0 && res.offset-start >= limit && res.lineNo > startLine {
+			res.more = true // this line belongs to the next pass
 			break
 		}
 		res.lineNo++
@@ -273,6 +281,7 @@ func parseRollout(ctx context.Context, path string, start int64, startLine int, 
 				Input     json.RawMessage `json:"input"`
 				Output    json.RawMessage `json:"output"`
 				Summary   json.RawMessage `json:"summary"`
+				Content   json.RawMessage `json:"content"`
 				Action    json.RawMessage `json:"action"`
 			}
 			_ = json.Unmarshal(record.Payload, &x)
@@ -293,21 +302,22 @@ func parseRollout(ctx context.Context, path string, start int64, startLine int, 
 				// Edge whitespace is dropped, as the searchable record's turn
 				// splitter drops it: enrichment digests are over this text.
 				text := strings.TrimSpace(strings.Join(parts, "\n"))
-				if retained += len(text); retained > maxRetainedText {
-					return rolloutResult{}, fail("size_limit")
-				}
 				m := textMessage{role: msg.Role, text: text, id: lineID, ts: ts}
 				if msg.Role == "assistant" && pendingThinking {
-					m.thinking, m.thinkingBytes = true, pendingBytes
-					pendingThinking, pendingBytes = false, 0
+					m.thinking, m.thinkingBytes, m.thinkingText = true, pendingBytes, strings.Join(pendingText, "\n\n")
+					pendingThinking, pendingBytes, pendingText = false, 0, nil
 				}
 				res.responses = append(res.responses, m)
 				lastTurn = lineID
 			case "reasoning":
-				// The reasoning text is never kept: only that it happened, and how
-				// much readable summary there was.
+				// Reasoning text (summary and any readable content) is kept in full and
+				// attached to the assistant message that follows it.
 				pendingThinking = true
-				pendingBytes += summaryBytes(x.Summary)
+				txt := reasoningText(x.Summary, x.Content)
+				pendingBytes += len(txt)
+				if txt != "" {
+					pendingText = append(pendingText, txt)
+				}
 			case "function_call", "custom_tool_call", "tool_search_call", "web_search_call":
 				id := x.CallID
 				if id == "" {
@@ -334,7 +344,9 @@ func parseRollout(ctx context.Context, path string, start int64, startLine int, 
 				if call.EndedAt.IsZero() && haveTS {
 					call.EndedAt = ts
 				}
-				setExcerpt(call, text, excerpt)
+				if text != "" {
+					call.Results = []domain.TranscriptResultPart{{PartID: "0", MediaType: "text/plain", Text: text, Complete: true}}
+				}
 			}
 		case "event_msg":
 			var msg message
@@ -365,9 +377,6 @@ func parseRollout(ctx context.Context, path string, start int64, startLine int, 
 					continue
 				}
 				msg.Message = strings.TrimSpace(msg.Message)
-				if retained += len(msg.Message); retained > maxRetainedText {
-					return rolloutResult{}, fail("size_limit")
-				}
 				res.events = append(res.events, textMessage{role: role, text: msg.Message, id: lineID, ts: ts})
 			case "token_count":
 				// The same count is emitted again whenever the session is idle, so a
@@ -398,15 +407,14 @@ func parseRollout(ctx context.Context, path string, start int64, startLine int, 
 				if (ev.ExitCode != nil && *ev.ExitCode != 0) || (ev.Success != nil && !*ev.Success) || ev.Status == "failed" || ev.Status == "error" {
 					call.IsError = true
 				}
-				setExcerpt(call, out, excerpt)
+				if out != "" && len(call.Results) == 0 {
+					call.Results = []domain.TranscriptResultPart{{PartID: "0", MediaType: "text/plain", Text: out, Complete: true}}
+				}
 			}
 		}
 		if readErr == io.EOF {
 			break
 		}
-	}
-	if limited.N == 0 {
-		return rolloutResult{}, &domain.CollectionError{Class: "size_limit", Offset: maxBytes}
 	}
 	// Per-response records beat the repeated running counts; never both.
 	usage := records
@@ -433,18 +441,24 @@ func usageRow(id, model, effort string, ts time.Time, u tokenUsage) domain.Trans
 		CacheRead: u.Cached, CacheCreation: u.CacheWrite, Effort: effort}
 }
 
-func summaryBytes(raw json.RawMessage) int {
-	var items []struct {
-		Text string `json:"text"`
+// reasoningText joins the readable text of a reasoning item: its summary parts
+// and any content parts. Encrypted reasoning carries no text and yields "".
+func reasoningText(raws ...json.RawMessage) string {
+	var out []string
+	for _, raw := range raws {
+		var items []struct {
+			Text string `json:"text"`
+		}
+		if json.Unmarshal(raw, &items) != nil {
+			continue
+		}
+		for _, it := range items {
+			if strings.TrimSpace(it.Text) != "" {
+				out = append(out, it.Text)
+			}
+		}
 	}
-	if json.Unmarshal(raw, &items) != nil {
-		return 0
-	}
-	n := 0
-	for _, it := range items {
-		n += len(it.Text)
-	}
-	return n
+	return strings.Join(out, "\n\n")
 }
 
 func toolName(typ, namespace, name string) string {
@@ -460,8 +474,8 @@ func toolName(typ, namespace, name string) string {
 	return name
 }
 
-// toolInput returns the call's input as JSON. A patch is reduced to the files it
-// names and its size: the patch text is source code the store has no use for.
+// toolInput returns the call's input as JSON. A patch keeps its full text beside
+// the files it names and its size.
 func toolInput(typ, name, arguments, input string, action json.RawMessage) string {
 	switch {
 	case typ == "web_search_call":
@@ -482,7 +496,7 @@ func toolInput(typ, name, arguments, input string, action json.RawMessage) strin
 				paths = append(paths, p)
 			}
 		}
-		out, _ := json.Marshal(map[string]any{"paths": paths, "patch_bytes": len(input)})
+		out, _ := json.Marshal(map[string]any{"paths": paths, "patch_bytes": len(input), "patch": input})
 		return string(out)
 	case typ == "custom_tool_call":
 		out, _ := json.Marshal(map[string]string{"input": input})
@@ -531,22 +545,9 @@ func outputFailed(text string) bool {
 	return m != nil && m[1] != "0"
 }
 
-func setExcerpt(call *domain.TranscriptToolCall, text string, excerpt int) {
-	if excerpt <= 0 || text == "" {
-		return
-	}
-	if len(text) > rawExcerptBytes {
-		text = text[:rawExcerptBytes]
-	}
-	call.ResultExcerpt, call.MaxExcerpt = text, excerpt
-}
-
 // collectSegment parses one rollout, from its stored cursor when that is still
 // valid. It returns a skip class instead of a fragment when nothing is new.
-func collectSegment(ctx context.Context, path, rel string, info os.FileInfo, maxBytes int64, excerpt int) (domain.PipelineFragment, string, *tailInfo, error) {
-	if excerpt > maxExcerptBytes {
-		excerpt = maxExcerptBytes
-	}
+func collectSegment(ctx context.Context, path, rel string, info os.FileInfo) (domain.PipelineFragment, string, *tailInfo, error) {
 	cur, hasCur := domain.LookupCursor(ctx, rel)
 	incremental := false
 	var start int64
@@ -560,7 +561,7 @@ func collectSegment(ctx context.Context, path, rel string, info os.FileInfo, max
 	if incremental && info.Size() == cur.ByteOffset {
 		return domain.PipelineFragment{}, "unchanged", nil, nil
 	}
-	res, err := parseRollout(ctx, path, start, startLine, window, maxBytes, excerpt)
+	res, err := parseRollout(ctx, path, start, startLine, window, passBytes)
 	if err != nil {
 		return domain.PipelineFragment{}, "", nil, err
 	}
@@ -569,7 +570,8 @@ func collectSegment(ctx context.Context, path, rel string, info os.FileInfo, max
 	// that has events but no response messages is re-read from the start.
 	if incremental && len(res.responses) == 0 && len(res.events) > 0 {
 		incremental, start, startLine, window = false, 0, 0, nil
-		if res, err = parseRollout(ctx, path, 0, 0, nil, maxBytes, excerpt); err != nil {
+		// Settling the message stream needs the whole file, so this read is not bounded.
+		if res, err = parseRollout(ctx, path, 0, 0, nil, 0); err != nil {
 			return domain.PipelineFragment{}, "", nil, err
 		}
 	}
@@ -583,6 +585,9 @@ func collectSegment(ctx context.Context, path, rel string, info os.FileInfo, max
 			return domain.PipelineFragment{}, "unchanged", res.incomplete, nil
 		}
 		return domain.PipelineFragment{}, "empty", res.incomplete, nil
+	}
+	if res.more {
+		domain.NoteSkip(ctx, "batch_continues", rel)
 	}
 	sessionID := res.meta.ID
 	if incremental && cur.SourceID != "" {
@@ -604,7 +609,7 @@ func collectSegment(ctx context.Context, path, rel string, info os.FileInfo, max
 		parts = append(parts, "## "+msg.role+"\n\n"+msg.text)
 		res.detail.Turns = append(res.detail.Turns, domain.TranscriptTurn{
 			EventUUID: msg.id, Role: msg.role, TS: msg.ts, Text: msg.text,
-			HasThinking: msg.thinking, ThinkingBytes: msg.thinkingBytes,
+			HasThinking: msg.thinking, ThinkingBytes: msg.thinkingBytes, Thinking: msg.thinkingText,
 		})
 	}
 	created := res.created

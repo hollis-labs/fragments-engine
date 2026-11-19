@@ -86,6 +86,15 @@ func TestWriterCapturesEverythingAndKeepsJournal(t *testing.T) {
 	if got := scalar(t, s, `SELECT (bytes_redacted = ?::bytea)::text FROM tool_results WHERE call_id = 'c1' AND part_id = '1'`, png); got != "true" {
 		t.Errorf("image bytes not preserved")
 	}
+	if got := scalar(t, s, `SELECT redaction_state || '/' || read_policy FROM tool_results WHERE call_id = 'c1' AND part_id = '1'`); got != "not_redactable/open" {
+		t.Errorf("image policy = %s", got)
+	}
+	if got := scalar(t, s, `SELECT redaction_state || '/' || read_policy FROM tool_results WHERE call_id = 'c1' AND part_id = '0'`); got != "redacted/open" {
+		t.Errorf("text policy = %s", got)
+	}
+	if _, err := s.ExecContext(ctx, `UPDATE tool_results SET read_policy = 'withheld' WHERE call_id = 'c1' AND part_id = '1'`); err != nil {
+		t.Fatal(err)
+	}
 	// the big result is searchable and chunked; thinking and tool input are searchable
 	if n := scalar(t, s, `SELECT chunk_count::text FROM search_documents WHERE source_kind = 'tool_result'`); n == "0" || n == "1" {
 		t.Errorf("large result was not chunked: %s", n)
@@ -108,6 +117,11 @@ func TestWriterCapturesEverythingAndKeepsJournal(t *testing.T) {
 	}
 	if h := scalar(t, s, `SELECT head::text FROM feed_state`); h != head1 {
 		t.Errorf("replay moved the journal %s -> %s", head1, h)
+	}
+
+	// a withhold set by policy survives a re-parse of the same part
+	if got := scalar(t, s, `SELECT read_policy FROM tool_results WHERE call_id = 'c1' AND part_id = '1'`); got != "withheld" {
+		t.Errorf("withhold was reset: %s", got)
 	}
 
 	// a later batch: a new call without a result, then its result arrives in another batch

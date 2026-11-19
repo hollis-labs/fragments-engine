@@ -503,11 +503,18 @@ func (w *Writer) applyResultPart(ctx context.Context, tx store.Tx, j *journal, p
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return 0, err
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO tool_results (session_id, call_id, part_id, ordinal, media_type, text_redacted, json_redacted, bytes_redacted, result_complete, content_digest)
-VALUES (?,?,?,?,?,?,?::jsonb,?,?,?)
+	// Binary parts cannot be redacted; say so. read_policy is left at its stored value
+	// (new rows are 'open'), so a later withhold survives a re-parse of the same part.
+	redaction := "redacted"
+	if data != nil {
+		redaction = "not_redactable"
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO tool_results (session_id, call_id, part_id, ordinal, media_type, text_redacted, json_redacted, bytes_redacted, result_complete, content_digest, redaction_state)
+VALUES (?,?,?,?,?,?,?::jsonb,?,?,?,?)
 ON CONFLICT (session_id, call_id, part_id) DO UPDATE SET ordinal = excluded.ordinal, media_type = excluded.media_type, text_redacted = excluded.text_redacted,
- json_redacted = excluded.json_redacted, bytes_redacted = excluded.bytes_redacted, result_complete = excluded.result_complete, content_digest = excluded.content_digest`,
-		pk, callID, partID, p.Ordinal, media, text, jsn, data, p.Complete, digestSrc); err != nil {
+ json_redacted = excluded.json_redacted, bytes_redacted = excluded.bytes_redacted, result_complete = excluded.result_complete, content_digest = excluded.content_digest,
+ redaction_state = excluded.redaction_state`,
+		pk, callID, partID, p.Ordinal, media, text, jsn, data, p.Complete, digestSrc, redaction); err != nil {
 		return 0, err
 	}
 	if err := j.note(ctx, "tool_result_upsert", callID+"/"+partID); err != nil {

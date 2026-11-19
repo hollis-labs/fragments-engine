@@ -2,7 +2,9 @@ package codex
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -129,20 +131,6 @@ func TestEventOnlyFallbackAndSafeMalformedHandling(t *testing.T) {
 	}
 }
 
-func TestParserEnforcesReadBudget(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "rollout.jsonl")
-	if err := os.WriteFile(path, []byte(syntheticRollout), 0600); err != nil {
-		t.Fatal(err)
-	}
-	info, err := os.Stat(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, _, _, err := collectSegment(context.Background(), path, "rollout.jsonl", info, int64(len(syntheticRollout)-1), 0); err == nil {
-		t.Fatal("read beyond budget accepted")
-	}
-}
-
 // A forked rollout carries its own session_meta first and replays the parent's
 // second. The file keeps its own identity; the parent is recorded as ancestry.
 func TestForkedRolloutKeepsOwnIdentityAndRecordsParent(t *testing.T) {
@@ -171,7 +159,6 @@ func TestForkedRolloutKeepsOwnIdentityAndRecordsParent(t *testing.T) {
 // Failures are counted per file with a class, the path hash, a line and a byte
 // offset, and nothing from the record.
 func TestPerFileFailuresCarrySanitizedPositions(t *testing.T) {
-	long := strings.Repeat("x", 11*1024*1024)
 	for _, tc := range []struct {
 		name, raw, class string
 		line             int
@@ -179,7 +166,6 @@ func TestPerFileFailuresCarrySanitizedPositions(t *testing.T) {
 	}{
 		{"malformed", "{\"type\":\"session_meta\",\"payload\":{\"id\":\"a\"}}\npassword=synthetic-no-diagnostic\n", "invalid_record", 2, 45},
 		{"bad-meta", `{"type":"session_meta","payload":{"id":""}}` + "\n", "invalid_session_meta", 1, 0},
-		{"long-line", `{"type":"session_meta","payload":{"id":"a"}}` + "\n" + long + "\n", "unreadable_line", 2, 45},
 		{"no-meta", `{"type":"event_msg","payload":{"type":"user_message","message":"synthetic-no-diagnostic"}}` + "\n", "missing_session_meta", 0, 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -205,32 +191,114 @@ func TestPerFileFailuresCarrySanitizedPositions(t *testing.T) {
 	}
 }
 
-func TestOverCapFilesAreSkippedAndCounted(t *testing.T) {
-	old := maxRetainedText
-	maxRetainedText = 64
-	defer func() { maxRetainedText = old }()
+// There is no size limit any more: a big file or a long message is ingested whole.
+func TestLargeRolloutsAreIngestedNotSkipped(t *testing.T) {
 	root := t.TempDir()
-	write := func(name, raw string) {
-		if err := os.WriteFile(filepath.Join(root, name), []byte(raw), 0600); err != nil {
-			t.Fatal(err)
-		}
+	long := strings.Repeat("y", 20<<20) // past the old 16 MB retained-text cap
+	raw := `{"type":"session_meta","payload":{"id":"big"}}
+{"type":"event_msg","payload":{"type":"user_message","message":"` + long + `"}}
+`
+	if err := os.WriteFile(filepath.Join(root, "big.jsonl"), []byte(raw), 0600); err != nil {
+		t.Fatal(err)
 	}
-	write("ok.jsonl", `{"type":"session_meta","payload":{"id":"small"}}
-{"type":"event_msg","payload":{"type":"user_message","message":"short"}}
-`)
-	write("raw-big.jsonl", strings.Repeat("x", 1024*1024+1))
-	write("text-big.jsonl", `{"type":"session_meta","payload":{"id":"big"}}
-{"type":"event_msg","payload":{"type":"user_message","message":"`+strings.Repeat("y", 100)+`"}}
-`)
 	skips := &domain.SkipCollector{}
 	ctx := domain.WithSkipCollector(context.Background(), skips)
 	cfg := config.IngestConfig{Kind: kind, Source: config.IngestSource{Root: root}, Rules: map[string]any{"max_file_size_mb": 1}}
 	got, err := (Source{}).Collect(ctx, cfg)
-	if err != nil || len(got) != 1 || got[0].SourceID != "small" {
+	if err != nil || len(got) != 1 || len(got[0].Detail.Turns) != 1 || len(got[0].Detail.Turns[0].Text) != len(long) {
 		t.Fatalf("collect: %v %d", err, len(got))
 	}
-	if n := skips.ByClass()["size_limit"]; n != 2 {
+	if n := skips.ByClass()["size_limit"]; n != 0 {
 		t.Fatalf("skips = %v", skips.ByClass())
+	}
+}
+
+func TestReasoningOutputsAndPatchesAreCapturedInFull(t *testing.T) {
+	longOut := strings.Repeat("out line\n", 4000)
+	patch := "*** Begin Patch\n*** Add File: a.go\n+package a\n*** End Patch"
+	raw := goodMeta + "\n" +
+		`{"timestamp":"2026-10-09T01:00:01Z","type":"response_item","payload":{"type":"reasoning","summary":[{"type":"summary_text","text":"weigh A against B"}],"encrypted_content":"zzz"}}` + "\n" +
+		`{"timestamp":"2026-10-09T01:00:02Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"doing it"}]}}` + "\n" +
+		`{"timestamp":"2026-10-09T01:00:03Z","type":"response_item","payload":{"type":"function_call","call_id":"c1","name":"shell","arguments":"{\"cmd\":\"ls\"}"}}` + "\n" +
+		`{"timestamp":"2026-10-09T01:00:04Z","type":"response_item","payload":{"type":"function_call_output","call_id":"c1","output":` + jsonString(longOut) + `}}` + "\n" +
+		`{"timestamp":"2026-10-09T01:00:05Z","type":"response_item","payload":{"type":"custom_tool_call","call_id":"c2","name":"apply_patch","input":` + jsonString(patch) + `}}` + "\n"
+	path := filepath.Join(t.TempDir(), "r.jsonl")
+	if err := os.WriteFile(path, []byte(raw), 0600); err != nil {
+		t.Fatal(err)
+	}
+	info, _ := os.Stat(path)
+	f, class, _, err := collectSegment(context.Background(), path, "r.jsonl", info)
+	if err != nil || class != "" {
+		t.Fatalf("%v %q", err, class)
+	}
+	var asst domain.TranscriptTurn
+	for _, turn := range f.Detail.Turns {
+		if turn.Role == "assistant" {
+			asst = turn
+		}
+	}
+	if asst.Thinking != "weigh A against B" || !asst.HasThinking {
+		t.Fatalf("thinking %+v", asst)
+	}
+	byID := map[string]domain.TranscriptToolCall{}
+	for _, c := range f.Detail.Tools {
+		byID[c.ToolUseID] = c
+	}
+	if r := byID["c1"].Results; len(r) != 1 || r[0].Text != longOut {
+		t.Fatalf("output cut: %+v", byID["c1"].Results)
+	}
+	if !strings.Contains(byID["c2"].InputJSON, "package a") || !strings.Contains(byID["c2"].InputJSON, `"a.go"`) {
+		t.Fatalf("patch input %s", byID["c2"].InputJSON)
+	}
+}
+
+func jsonString(s string) string {
+	b, _ := json.Marshal(s)
+	return string(b)
+}
+
+func TestLargeRolloutIsReadInBoundedPassesWithoutLoss(t *testing.T) {
+	old := passBytes
+	passBytes = 4 << 10
+	defer func() { passBytes = old }()
+	var b strings.Builder
+	b.WriteString(goodMeta + "\n")
+	for i := 0; i < 50; i++ {
+		fmt.Fprintf(&b, `{"timestamp":"2026-10-09T01:00:%02dZ","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"m%d %s"}]}}`+"\n", i%60, i, strings.Repeat("w", 300))
+	}
+	path := filepath.Join(t.TempDir(), "r.jsonl")
+	if err := os.WriteFile(path, []byte(b.String()), 0600); err != nil {
+		t.Fatal(err)
+	}
+	var cur domain.TranscriptCursor
+	have := false
+	seen := map[string]bool{}
+	passes := 0
+	for ; passes < 100; passes++ {
+		skips := &domain.SkipCollector{}
+		ctx := domain.WithSkipCollector(context.Background(), skips)
+		ctx = domain.WithCursorLookup(ctx, func(p string) (domain.TranscriptCursor, bool) { return cur, have })
+		info, _ := os.Stat(path)
+		f, class, _, err := collectSegment(ctx, path, "r.jsonl", info)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if class == "unchanged" {
+			break
+		}
+		for _, turn := range f.Detail.Turns {
+			if seen[turn.EventUUID] {
+				t.Fatalf("%s read twice", turn.EventUUID)
+			}
+			seen[turn.EventUUID] = true
+		}
+		cur, have = f.Detail.Cursor, true
+		if skips.ByClass()["batch_continues"] == 0 {
+			break
+		}
+	}
+	if passes < 3 || len(seen) != 50 {
+		t.Fatalf("passes=%d turns=%d", passes, len(seen))
 	}
 }
 
