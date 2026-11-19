@@ -22,13 +22,14 @@ func TestMigrationParity(t *testing.T) {
 }
 
 // pgDSN returns an admin DSN for a scratch Postgres with pgvector, or skips.
-// CI fails instead of skipping.
+// The dedicated CI job (transcript-pg) sets FE_TRANSCRIPTS_REQUIRE_PG=1 and fails
+// instead of skipping; other jobs have no Postgres service and skip.
 func pgDSN(t *testing.T) string {
 	t.Helper()
 	dsn := os.Getenv("FE_TRANSCRIPTS_TEST_PG_DSN")
 	if dsn == "" {
-		if os.Getenv("CI") != "" && os.Getenv("CI") != "0" && os.Getenv("CI") != "false" {
-			t.Fatal("FE_TRANSCRIPTS_TEST_PG_DSN is required in CI")
+		if os.Getenv("FE_TRANSCRIPTS_REQUIRE_PG") == "1" {
+			t.Fatal("FE_TRANSCRIPTS_TEST_PG_DSN is required when FE_TRANSCRIPTS_REQUIRE_PG=1")
 		}
 		t.Skip("FE_TRANSCRIPTS_TEST_PG_DSN not set")
 	}
