@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -431,6 +432,9 @@ func TestFileDestinationExecutor_AnchorsRelativeRootToInstallDir(t *testing.T) {
 }
 
 func TestFileDestinationExecutor_PublishesBundleAndLocalAttachments(t *testing.T) {
+	if _, err := exec.LookPath("sips"); err != nil {
+		t.Skip("image previews need macOS sips; not available on this host")
+	}
 	tempDir := t.TempDir()
 	sourcePath := filepath.Join(tempDir, "diagram.png")
 	rawPNG, err := base64.StdEncoding.DecodeString("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aGxQAAAAASUVORK5CYII=")
