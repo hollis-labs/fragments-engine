@@ -1020,10 +1020,11 @@ func (s *Service) SessionUsage(ctx context.Context, nativeSessionID string) (tra
 	return t, err
 }
 
-// StoredSessionIDs returns the native ids of main sessions, by tool, for the
-// coverage check.
+// StoredSessionIDs returns the native ids of sessions of every kind, by tool, for
+// the coverage check. Codex stores a spawned agent's rollout as a subagent session
+// under its own id, so a main-only list would report those files as missing.
 func (s *Service) StoredSessionIDs(ctx context.Context) (map[string]map[string]bool, error) {
-	rows, err := s.st.QueryContext(ctx, `SELECT harness, native_session_id FROM sessions WHERE kind = 'main'`)
+	rows, err := s.st.QueryContext(ctx, `SELECT harness, native_session_id FROM sessions`)
 	if err != nil {
 		return nil, errors.New("transcript: cannot list sessions")
 	}
