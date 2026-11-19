@@ -58,6 +58,7 @@ func TestFindInSessionMapsHitsToTurnsAndRanges(t *testing.T) {
 	}
 }
 
+// Result text now lives in full in the Postgres corpus; the SQLite store no longer receives an excerpt.
 func TestSessionErrorsListsFailedCalls(t *testing.T) {
 	st, id := turnSearchStore(t)
 	res, err := st.SessionErrors(context.Background(), id)
@@ -65,7 +66,7 @@ func TestSessionErrorsListsFailedCalls(t *testing.T) {
 		t.Fatalf("%+v %v", res, err)
 	}
 	it := res.Items[0]
-	if it.Tool != "Bash" || it.Target != "ls" || it.ErrorExcerpt != "boom" || it.TurnOffset == nil || it.Seq == nil {
+	if it.Tool != "Bash" || it.Target != "ls" || it.TurnOffset == nil || it.Seq == nil {
 		t.Fatalf("%+v", it)
 	}
 }

@@ -5,12 +5,14 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -67,12 +69,15 @@ type segmentResult struct {
 	lineNo               int
 	tail                 []byte
 	malformed            int
+	// more is set when the pass stopped at passBytes with the file not yet read
+	// to its end; the cursor sits after the last complete line, so the next run resumes there.
+	more bool
 }
 
 // collectSegment parses one session file, from its stored cursor when that is
 // still valid. It returns a skip class instead of a fragment when there is
 // nothing new to store.
-func collectSegment(ctx context.Context, root, path, relPath string, info os.FileInfo, excerpt int) (domain.PipelineFragment, string, error) {
+func collectSegment(ctx context.Context, root, path, relPath string, info os.FileInfo) (domain.PipelineFragment, string, error) {
 	cur, hasCur := domain.LookupCursor(ctx, relPath)
 	var start int64
 	var startLine int
@@ -86,12 +91,16 @@ func collectSegment(ctx context.Context, root, path, relPath string, info os.Fil
 	if incremental && info.Size() == cur.ByteOffset {
 		return domain.PipelineFragment{}, "unchanged", nil
 	}
-	res, err := parseSegment(ctx, path, start, startLine, tail, excerpt)
+	res, err := parseSegment(ctx, path, start, startLine, tail)
 	if err != nil {
 		return domain.PipelineFragment{}, "", err
 	}
 	if res.malformed > 0 {
 		domain.NoteSkip(ctx, "malformed_line", relPath)
+	}
+	if res.more {
+		// A large session is read in bounded passes; the pipeline runs again until none remain.
+		domain.NoteSkip(ctx, "batch_continues", relPath)
 	}
 	if res.offset == start {
 		if incremental {
@@ -238,7 +247,7 @@ func readLine(r *bufio.Reader, lineNo int, offset int64) ([]byte, error) {
 	}
 }
 
-func parseSegment(ctx context.Context, path string, start int64, startLine int, tail []byte, excerpt int) (segmentResult, error) {
+func parseSegment(ctx context.Context, path string, start int64, startLine int, tail []byte) (segmentResult, error) {
 	file, err := os.Open(path)
 	if err != nil {
 		class := "unreadable_file"
@@ -283,6 +292,10 @@ func parseSegment(ctx context.Context, path string, start int64, startLine int, 
 			if json.Unmarshal(line, &probe) != nil {
 				break
 			}
+		}
+		if res.offset-start >= passBytes && res.lineNo > startLine {
+			res.more = true // stop before this line; it belongs to the next pass
+			break
 		}
 		res.lineNo++
 		res.offset += int64(len(line))
@@ -350,7 +363,7 @@ func parseSegment(ctx context.Context, path string, start int64, startLine int, 
 			turn := domain.TranscriptTurn{
 				EventUUID: uuid, ParentUUID: ev.ParentUUID, Role: ev.Type, TS: ts, RequestID: ev.RequestID,
 				IsSidechain: ev.IsSidechain, StopReason: msg.StopReason, Text: text,
-				HasThinking: thinking > 0, ThinkingBytes: thinking,
+				HasThinking: thinking != "", ThinkingBytes: len(thinking), Thinking: thinking,
 			}
 			res.detail.Turns = append(res.detail.Turns, turn)
 			if text != "" {
@@ -391,9 +404,9 @@ func parseSegment(ctx context.Context, path string, start int64, startLine int, 
 						continue
 					}
 					call := toolFor(tools, &toolOrder, b.ToolUseID)
-					size, ex := resultText(b.Content, excerpt)
+					size, parts := resultParts(b.Content)
 					call.HasResult, call.IsError, call.ResultSize, call.EndedAt = true, b.IsError, size, ts
-					call.ResultExcerpt, call.MaxExcerpt = ex, excerpt
+					call.Results = parts
 				}
 			}
 		}
@@ -428,26 +441,25 @@ func max64(a, b int64) int64 {
 	return a
 }
 
-// splitContent returns the searchable text, the byte length of any thinking
-// (the thinking itself is dropped here), and the structured blocks.
-func splitContent(raw json.RawMessage) (string, int, []block) {
+// splitContent returns the searchable text, the thinking text in full (joined
+// in order), and the structured blocks.
+func splitContent(raw json.RawMessage) (string, string, []block) {
 	raw = bytes.TrimSpace(raw)
 	if len(raw) == 0 {
-		return "", 0, nil
+		return "", "", nil
 	}
 	if raw[0] == '"' {
 		var s string
 		if json.Unmarshal(raw, &s) != nil {
-			return "", 0, nil
+			return "", "", nil
 		}
-		return strings.TrimSpace(s), 0, nil
+		return strings.TrimSpace(s), "", nil
 	}
 	var blocks []block
 	if json.Unmarshal(raw, &blocks) != nil {
-		return "", 0, nil
+		return "", "", nil
 	}
-	var parts []string
-	thinking := 0
+	var parts, thoughts []string
 	for _, b := range blocks {
 		switch b.Type {
 		case "text":
@@ -455,41 +467,73 @@ func splitContent(raw json.RawMessage) (string, int, []block) {
 				parts = append(parts, b.Text)
 			}
 		case "thinking":
-			thinking += len(b.Thinking)
+			if b.Thinking != "" {
+				thoughts = append(thoughts, b.Thinking)
+			}
 		}
 	}
-	return strings.TrimSpace(strings.Join(parts, "\n")), thinking, blocks
+	return strings.TrimSpace(strings.Join(parts, "\n")), strings.Join(thoughts, "\n\n"), blocks
 }
 
-// resultText measures a tool result's text and, when excerpts are enabled,
-// returns a bounded raw excerpt for the store to redact and truncate.
-func resultText(raw json.RawMessage, excerpt int) (int, string) {
+// resultParts returns a tool result's complete content as ordered parts and its
+// total size in bytes. Text blocks stay text; base64 images become bytes with
+// their media type; any other block is kept as JSON rather than dropped. Nothing
+// is truncated.
+func resultParts(raw json.RawMessage) (int, []domain.TranscriptResultPart) {
 	raw = bytes.TrimSpace(raw)
-	if len(raw) == 0 {
-		return 0, ""
+	if len(raw) == 0 || string(raw) == "null" {
+		return 0, nil
 	}
-	var text string
 	if raw[0] == '"' {
-		_ = json.Unmarshal(raw, &text)
-	} else {
-		var blocks []block
-		if json.Unmarshal(raw, &blocks) == nil {
-			var parts []string
-			for _, b := range blocks {
-				if b.Type == "text" {
-					parts = append(parts, b.Text)
+		var text string
+		if json.Unmarshal(raw, &text) != nil {
+			return len(raw), []domain.TranscriptResultPart{{PartID: "0", MediaType: "application/json", JSON: string(raw), Complete: true}}
+		}
+		if text == "" {
+			return 0, nil
+		}
+		return len(text), []domain.TranscriptResultPart{{PartID: "0", MediaType: "text/plain", Text: text, Complete: true}}
+	}
+	var items []json.RawMessage
+	if json.Unmarshal(raw, &items) != nil {
+		return len(raw), []domain.TranscriptResultPart{{PartID: "0", MediaType: "application/json", JSON: string(raw), Complete: true}}
+	}
+	var parts []domain.TranscriptResultPart
+	size := 0
+	for i, item := range items {
+		id := strconv.Itoa(i)
+		var b struct {
+			Type   string `json:"type"`
+			Text   string `json:"text"`
+			Source struct {
+				Type      string `json:"type"`
+				MediaType string `json:"media_type"`
+				Data      string `json:"data"`
+			} `json:"source"`
+		}
+		if json.Unmarshal(item, &b) == nil {
+			switch {
+			case b.Type == "text":
+				parts = append(parts, domain.TranscriptResultPart{PartID: id, Ordinal: i, MediaType: "text/plain", Text: b.Text, Complete: true})
+				size += len(b.Text)
+				continue
+			case b.Type == "image" && b.Source.Type == "base64":
+				if data, err := base64.StdEncoding.DecodeString(b.Source.Data); err == nil {
+					mt := b.Source.MediaType
+					if mt == "" {
+						mt = "application/octet-stream"
+					}
+					parts = append(parts, domain.TranscriptResultPart{PartID: id, Ordinal: i, MediaType: mt, Bytes: data, Complete: true})
+					size += len(data)
+					continue
 				}
 			}
-			text = strings.Join(parts, "\n")
 		}
+		// Unknown or undecodable block: keep the source JSON as is.
+		parts = append(parts, domain.TranscriptResultPart{PartID: id, Ordinal: i, MediaType: "application/json", JSON: string(item), Complete: true})
+		size += len(item)
 	}
-	if excerpt <= 0 {
-		return len(text), ""
-	}
-	if len(text) > rawExcerptBytes {
-		return len(text), text[:rawExcerptBytes]
-	}
-	return len(text), text
+	return size, parts
 }
 
 func effortOf(ev event) string {

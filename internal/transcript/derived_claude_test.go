@@ -277,7 +277,7 @@ func TestClaudeBackfillKeepsExistingRecordIdentity(t *testing.T) {
 	}
 }
 
-func TestClaudeSubagentLinkageAndToolResultExcerpt(t *testing.T) {
+func TestClaudeSubagentLinkage(t *testing.T) {
 	st := openStore(t)
 	root := t.TempDir()
 	proj := filepath.Join(root, "proj")
@@ -303,26 +303,18 @@ func TestClaudeSubagentLinkageAndToolResultExcerpt(t *testing.T) {
  JOIN tx_sessions p ON p.session_pk = c.session_pk AND p.session_pk = s.parent_session_pk WHERE s.kind = 'subagent'`); n != 1 {
 		t.Fatalf("subagent not joinable to its spawning call: %d", n)
 	}
-	var excerpt string
-	if err := st.db.QueryRow(`SELECT result_excerpt_redacted FROM tx_tool_calls WHERE tool_use_id = 't1'`).Scan(&excerpt); err != nil {
-		t.Fatal(err)
-	}
-	if excerpt == "" || len(excerpt) > 24 || strings.Contains(excerpt, "synthetic-result") {
-		t.Fatalf("excerpt %q", excerpt)
-	}
 }
 
-func TestToolInputCapAndUnreadableLine(t *testing.T) {
+// The retiring SQLite store still fingerprints a large tool input; the Postgres
+// writer keeps it whole (see pgstore). A very long line is no longer rejected.
+func TestSQLiteStoreFingerprintsLargeToolInput(t *testing.T) {
 	st := openStore(t)
 	root := t.TempDir()
 	big := strings.Repeat("a", 5000)
 	line := fmt.Sprintf(`{"type":"assistant","uuid":"a1","requestId":"r1","sessionId":"S1","timestamp":"2026-10-10T10:00:00Z","message":{"content":[{"type":"tool_use","id":"t1","name":"Write","input":{"content":"%s","path":"x"}}]}}`, big)
 	writeLines(t, filepath.Join(root, "p", "S1.jsonl"), line)
-	// A line over the cap is skipped with a class, and does not stop other files.
-	hugePath := filepath.Join(root, "p", "S2.jsonl")
-	writeLines(t, hugePath, strings.Repeat("x", 10<<20+10))
 	_, skips, _ := pass(t, st, root, nil)
-	if skips["unreadable_line"] != 1 {
+	if skips["unreadable_line"] != 0 || skips["size_limit"] != 0 {
 		t.Fatalf("skips %v", skips)
 	}
 	var input string

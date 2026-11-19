@@ -59,7 +59,9 @@ type TranscriptTurn struct {
 	StopReason    string
 	Text          string // searchable text blocks only
 	HasThinking   bool
-	ThinkingBytes int // length of thinking text; the text itself is never kept
+	ThinkingBytes int // length of thinking text in bytes
+	// Thinking is the model's thinking text, kept in full (redacted by the store).
+	Thinking string
 }
 
 type TranscriptToolCall struct {
@@ -74,8 +76,25 @@ type TranscriptToolCall struct {
 	ResultSize int
 	// ResultExcerpt is raw and bounded by the source; the store redacts it and
 	// truncates to MaxExcerpt. Empty unless the ingest enabled excerpts.
+	// Superseded by Results; only the retiring SQLite store reads it.
 	ResultExcerpt string
 	MaxExcerpt    int
+	// Results is the complete tool result, one entry per content part, in full.
+	// Nothing is truncated; large results are the store's to chunk for search.
+	Results []TranscriptResultPart
+}
+
+// TranscriptResultPart is one part of a tool result. Exactly one of Text, JSON
+// or Bytes is set. PartID is stable across re-parses of the same source.
+type TranscriptResultPart struct {
+	PartID    string
+	Ordinal   int
+	MediaType string // "text/plain", "application/json", "image/png", ...
+	Text      string
+	JSON      string
+	Bytes     []byte
+	// Complete is false only when the source itself was cut off (an unfinished tail).
+	Complete bool
 }
 
 type TranscriptUsage struct {
