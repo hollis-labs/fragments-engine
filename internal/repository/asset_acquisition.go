@@ -163,7 +163,9 @@ WHERE media_asset_id = ? AND kind = ? ORDER BY created_at, id`, assetID, string(
 	if _, err := q.ExecContext(ctx, `
 UPDATE asset_variants
 SET custody = ?, acquisition_state = ?, retention = ?,
-    failure_code = '', failure_message = '', failure_retryable = 0,
+    failure_code = CASE WHEN failure_code = 'unsupported_media_type' THEN failure_code ELSE '' END,
+    failure_message = CASE WHEN failure_code = 'unsupported_media_type' THEN failure_message ELSE '' END,
+    failure_retryable = 0,
     updated_at = ?
 WHERE id = ? AND media_asset_id = ?`, string(requested), string(nextState),
 		string(retention), formatTime(now), variant.ID, assetID); err != nil {

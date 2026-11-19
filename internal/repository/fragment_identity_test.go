@@ -415,6 +415,15 @@ CREATE TABLE fragment_attachments (
 CREATE TABLE legacy_fragment_history (
  fragment_id TEXT NOT NULL, detail TEXT NOT NULL, FOREIGN KEY(fragment_id) REFERENCES fragments(id)
 );
+CREATE TABLE inbox (
+ fragment_id TEXT PRIMARY KEY, reason TEXT NOT NULL DEFAULT '', staged_at TEXT NOT NULL, route_id TEXT DEFAULT NULL,
+ FOREIGN KEY(fragment_id) REFERENCES fragments(id) ON DELETE CASCADE
+);
+CREATE TABLE route_log (
+ id INTEGER PRIMARY KEY AUTOINCREMENT, fragment_id TEXT NOT NULL, route_id TEXT DEFAULT NULL,
+ destination_id TEXT DEFAULT NULL, decision TEXT NOT NULL, reason TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL,
+ FOREIGN KEY(fragment_id) REFERENCES fragments(id) ON DELETE CASCADE
+);
 CREATE TABLE entities (
  id TEXT PRIMARY KEY, kind TEXT NOT NULL, value TEXT NOT NULL, created_at TEXT NOT NULL,
  UNIQUE(kind, value)

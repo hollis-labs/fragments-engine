@@ -692,7 +692,7 @@ UPDATE asset_variants
 SET expected_digest = CASE WHEN expected_digest = '' THEN ? ELSE expected_digest END,
     digest = ?, blob_digest = ?, byte_size = ?, acquisition_state = 'available',
     failure_code = '', failure_message = '', failure_retryable = 0,
-    retention = ?, updated_at = ?
+    serve_checked = 0, retention = ?, updated_at = ?
 WHERE id = ?`, digest.Value, digest.Value, digest.Value, blob.ByteSize,
 		string(retention), formatTime(now), variant.ID)
 	if err != nil {
@@ -711,8 +711,10 @@ func (r *MediaRepository) GetAssetOn(ctx context.Context, q MediaWriteConn, asse
 // type: it fills an empty mime_type and clears an earlier unsupported mark.
 // An empty one marks the variant unsupported, with reason as the failure
 // message. The bytes, digest and acquisition state are left as they are.
-func (r *MediaRepository) RecordServeCheckOn(ctx context.Context, q MediaWriteConn, variantID, servedMIME, reason string, now time.Time) (domain.AssetVariant, error) {
-	variantID = strings.TrimSpace(variantID)
+// Conditional on the inspected snapshot still being current and unchecked, so
+// a background pass cannot overwrite a concurrent upload or metadata change.
+func (r *MediaRepository) RecordServeCheckOn(ctx context.Context, q MediaWriteConn, variant domain.AssetVariant, servedMIME, reason string, now time.Time) (domain.AssetVariant, error) {
+	variantID := strings.TrimSpace(variant.ID)
 	var err error
 	if servedMIME != "" {
 		_, err = q.ExecContext(ctx, `
@@ -721,15 +723,17 @@ UPDATE asset_variants SET
   failure_message = CASE WHEN failure_code = ? THEN '' ELSE failure_message END,
   failure_code = CASE WHEN failure_code = ? THEN '' ELSE failure_code END,
   serve_checked = 1, updated_at = ?
-WHERE id = ?`, servedMIME, domain.AssetFailureUnsupportedMediaType,
-			domain.AssetFailureUnsupportedMediaType, formatTime(now), variantID)
+WHERE id = ? AND blob_digest = ? AND mime_type = ?
+  AND acquisition_state = 'available' AND serve_checked = 0 AND updated_at = ?`, servedMIME, domain.AssetFailureUnsupportedMediaType,
+			domain.AssetFailureUnsupportedMediaType, formatTime(now), variantID, variant.BlobDigest, variant.MIMEType, formatTime(variant.UpdatedAt))
 	} else {
 		_, err = q.ExecContext(ctx, `
 UPDATE asset_variants SET
   failure_code = ?, failure_message = ?, failure_retryable = 0,
   serve_checked = 1, updated_at = ?
-WHERE id = ?`, domain.AssetFailureUnsupportedMediaType,
-			reason, formatTime(now), variantID)
+WHERE id = ? AND blob_digest = ? AND mime_type = ?
+  AND acquisition_state = 'available' AND serve_checked = 0 AND updated_at = ?`, domain.AssetFailureUnsupportedMediaType,
+			reason, formatTime(now), variantID, variant.BlobDigest, variant.MIMEType, formatTime(variant.UpdatedAt))
 	}
 	if err != nil {
 		return domain.AssetVariant{}, fmt.Errorf("record media serve check: %w", err)
@@ -738,8 +742,8 @@ WHERE id = ?`, domain.AssetFailureUnsupportedMediaType,
 }
 
 // RecordServeCheck is RecordServeCheckOn outside a caller's transaction.
-func (r *MediaRepository) RecordServeCheck(ctx context.Context, variantID, servedMIME, reason string, now time.Time) (domain.AssetVariant, error) {
-	return r.RecordServeCheckOn(ctx, r.db, variantID, servedMIME, reason, now)
+func (r *MediaRepository) RecordServeCheck(ctx context.Context, variant domain.AssetVariant, servedMIME, reason string, now time.Time) (domain.AssetVariant, error) {
+	return r.RecordServeCheckOn(ctx, r.db, variant, servedMIME, reason, now)
 }
 
 // UncheckedServeVariant is a stored variant whose bytes have not yet been
@@ -753,7 +757,15 @@ type UncheckedServeVariant struct {
 // ListUncheckedServeVariants pages, by variant ID, through available
 // blob-backed variants that have no serve check recorded.
 func (r *MediaRepository) ListUncheckedServeVariants(ctx context.Context, afterID string, limit int) ([]UncheckedServeVariant, error) {
-	rows, err := r.db.QueryContext(ctx, `
+	// Keep selection and hydration in one read snapshot. Otherwise a concurrent
+	// attach can pair the selected old handle with a newly loaded blob digest
+	// and MIME, defeating even a conditional write of the serve-check result.
+	tx, err := r.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return nil, fmt.Errorf("begin media serve snapshot: %w", err)
+	}
+	defer tx.Rollback()
+	rows, err := tx.QueryContext(ctx, `
 SELECT v.id, b.storage_handle
 FROM asset_variants v JOIN media_blobs b ON b.digest = v.blob_digest
 WHERE v.serve_checked = 0 AND v.blob_digest IS NOT NULL
@@ -772,20 +784,27 @@ ORDER BY v.id LIMIT ?`, afterID, limit)
 		}
 		found = append(found, item)
 	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
 	if err := rows.Close(); err != nil {
 		return nil, err
 	}
 	out := make([]UncheckedServeVariant, 0, len(found))
 	for _, item := range found {
-		variant, err := loadAssetVariant(ctx, r.db, item.id)
+		variant, err := loadAssetVariant(ctx, tx, item.id)
 		if err != nil {
 			return nil, err
 		}
-		asset, err := loadMediaAsset(ctx, r.db, variant.MediaAssetID)
+		asset, err := loadMediaAsset(ctx, tx, variant.MediaAssetID)
 		if err != nil {
 			return nil, err
 		}
 		out = append(out, UncheckedServeVariant{Variant: variant, Asset: asset, StorageHandle: item.handle})
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("finish media serve snapshot: %w", err)
 	}
 	return out, nil
 }

@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -155,5 +157,136 @@ func TestReconcileServeChecksFixesVariantsStoredBeforeTheCheck(t *testing.T) {
 	}
 	if checked, _, err := media.ReconcileServeChecks(context.Background()); err != nil || checked != 0 {
 		t.Fatalf("second reconcile pass = %d checked, %v", checked, err)
+	}
+}
+
+func TestAssetAcquisitionPreservesUnservedMark(t *testing.T) {
+	st, blobs, fragment, variant := mirroredImageFixture(t, "", testSVGBytes())
+	repo := repository.NewMediaRepository(st.DB)
+	svc := NewAssetAcquisitionService(repo)
+	command := AssetAcquisitionCommand{CommandID: "keep-svg", IdempotencyKey: "keep-svg", MediaAssetID: variant.MediaAssetID, VariantKind: variant.Kind, RequestedCustody: domain.CustodyMirror, RequestedBy: "reader-a"}
+	for i := 0; i < 2; i++ {
+		result, err := svc.Request(context.Background(), command)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !result.Variant.Unserved() || result.Variant.AcquisitionState != domain.AcquisitionAvailable {
+			t.Fatalf("request erased check: %+v", result.Variant)
+		}
+	}
+	if checked, _, err := NewMediaService(repo, blobs).ReconcileServeChecks(context.Background()); err != nil || checked != 0 {
+		t.Fatalf("reconcile = %d, %v", checked, err)
+	}
+	item, projected := readerImageVariant(t, st, fragment)
+	if projected.AcquisitionState != "failed" || projected.ContentHref != "" || item.Display.ImageCount != 0 {
+		t.Fatalf("reacquisition offered SVG: %+v", item)
+	}
+}
+
+func TestServeCheckDoesNotOverwriteNewerVariantState(t *testing.T) {
+	for _, change := range []string{"checked", "mime", "state", "blob"} {
+		t.Run(change, func(t *testing.T) {
+			st, _, _, variant := mirroredImageFixture(t, "", testPNGBytes())
+			repo := repository.NewMediaRepository(st.DB)
+			mustExec(t, st.DB, `UPDATE asset_variants SET serve_checked=0 WHERE id=?`, variant.ID)
+			switch change {
+			case "checked":
+				mustExec(t, st.DB, `UPDATE asset_variants SET serve_checked=1 WHERE id=?`, variant.ID)
+			case "mime":
+				mustExec(t, st.DB, `UPDATE asset_variants SET mime_type='image/jpeg' WHERE id=?`, variant.ID)
+			case "state":
+				mustExec(t, st.DB, `UPDATE asset_variants SET acquisition_state='failed', failure_code='client.failed' WHERE id=?`, variant.ID)
+			case "blob":
+				mustExec(t, st.DB, `UPDATE asset_variants SET blob_digest=NULL WHERE id=?`, variant.ID)
+			}
+			before, err := repo.GetVariant(context.Background(), variant.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, err := repo.RecordServeCheck(context.Background(), variant, "", "stale rejection", variant.UpdatedAt)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(got, before) {
+				t.Fatalf("stale check overwrote %s: got %+v want %+v", change, got, before)
+			}
+		})
+	}
+}
+
+func TestCaptureDedupChecksMediaBeforeReceiptAndReplay(t *testing.T) {
+	for _, tc := range []struct {
+		name, declared string
+		payload        []byte
+		unserved       bool
+	}{
+		{"SVG", "", testSVGBytes(), true},
+		{"PNG", "", testPNGBytes(), false},
+		{"wrong declaration", "image/jpeg", testPNGBytes(), true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			st, svc, _ := openManifestTestService(t, filepath.Join(t.TempDir(), "capture.db"))
+			envelope := actionEnvelope(t)
+			envelope.Media[0].Variants = envelope.Media[0].Variants[:1]
+			envelope.Media[0].Variants[0].MIMEType = ""
+			digest := digestBytes(tc.payload)
+			envelope.Media[0].Variants[0].Digest = &capturecontract.Digest{Algorithm: "sha256", Value: digest.Value}
+			if _, err := svc.AcceptManifest(ctx, encodeEnvelope(t, envelope)); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := svc.StoreAssetContent(ctx, envelope.CaptureID, "upload", digest, bytes.NewReader(tc.payload)); err != nil {
+				t.Fatal(err)
+			}
+			envelope.CaptureID = "capture-dedup"
+			envelope.Annotations = []capturecontract.CaptureAnnotation{}
+			envelope.Source.SourceItemKey = "https://example.test/dedup"
+			envelope.Source.CanonicalURL = envelope.Source.SourceItemKey
+			envelope.Source.SubmittedURL = envelope.Source.SourceItemKey
+			envelope.Media[0].SourceLocator = "https://cdn.example.test/dedup"
+			envelope.Media[0].Variants[0].MIMEType = tc.declared
+			raw := encodeEnvelope(t, envelope)
+			receipt, err := svc.AcceptManifest(ctx, raw)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if receipt.AssetInstructions[0].Action != "reuse_blob" {
+				t.Fatalf("instructions = %+v", receipt.AssetInstructions)
+			}
+			variant := receipt.ReaderItem.Media[0].Variants[0]
+			stored, err := repository.NewMediaRepository(st.DB).GetVariant(ctx, variant.AssetVariantID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var checked int
+			if err := st.DB.QueryRow(`SELECT serve_checked FROM asset_variants WHERE id=?`, stored.ID).Scan(&checked); err != nil {
+				t.Fatal(err)
+			}
+			if checked != 1 || stored.Unserved() != tc.unserved {
+				t.Fatalf("dedup not checked before commit: %+v checked=%d", stored, checked)
+			}
+			if tc.unserved {
+				if variant.AcquisitionState != "failed" || variant.ContentHref != "" || variant.Failure == nil || variant.Failure.Code != domain.AssetFailureUnsupportedMediaType || receipt.ReaderItem.Operations.Acquisition.Failed != 1 || receipt.ReaderItem.Display.ImageCount != 0 {
+					t.Fatalf("optimistic receipt offered unsafe media: %+v", receipt.ReaderItem)
+				}
+			} else if variant.AcquisitionState != "available" || variant.ContentHref == "" || variant.MIMEType != "image/png" {
+				t.Fatalf("receipt lost safe media: %+v", variant)
+			}
+			replay, err := svc.AcceptManifest(ctx, raw)
+			if err != nil {
+				t.Fatal(err)
+			}
+			receipt.IdempotentReplay = true
+			if !reflect.DeepEqual(receipt, replay) {
+				t.Fatal("replay changed checked receipt")
+			}
+			resource, err := NewReaderResourceService(repository.NewReaderResourceRepository(st.DB), svc.media.blobs.(*blobstore.FileStore), t.TempDir()).OpenMedia(ctx, receipt.FragmentID, receipt.FragmentRevisionID, stored.ID)
+			if err == nil {
+				resource.Close()
+			}
+			if (!tc.unserved && err != nil) || tc.unserved != IsReaderResourceUnavailable(err) {
+				t.Fatalf("media route disagrees: %v", err)
+			}
+		})
 	}
 }

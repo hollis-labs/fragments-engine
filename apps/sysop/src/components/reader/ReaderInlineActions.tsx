@@ -93,6 +93,7 @@ export function ReaderActionPill({
     const choices: AcquisitionChoice[] = []
     for (const media of item.media) {
       for (const variant of media.variants) {
+        if (variant.failure?.code === 'unsupported_media_type') continue
         if (variant.acquisition_state === 'available' || variant.acquisition_state === 'pending') continue
         choices.push({
           key: variant.asset_variant_id,

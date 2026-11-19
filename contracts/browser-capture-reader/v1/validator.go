@@ -39,6 +39,7 @@ const (
 	SchemaReaderCollectionUpdate  SchemaName = "reader-collection-update"
 	SchemaReaderCollectionAddItem SchemaName = "reader-collection-add-item"
 	SchemaReaderCollectionOrder   SchemaName = "reader-collection-order"
+	SchemaReaderChanges           SchemaName = "reader-changes"
 	SchemaConversationRef         SchemaName = "conversation-ref"
 	SchemaAPIProblem              SchemaName = "error"
 	SchemaCapabilities            SchemaName = "capabilities"
@@ -62,6 +63,7 @@ var schemaFiles = map[SchemaName]string{
 	SchemaReaderCollectionUpdate:  "reader-collection-update.schema.json",
 	SchemaReaderCollectionAddItem: "reader-collection-add-item.schema.json",
 	SchemaReaderCollectionOrder:   "reader-collection-order.schema.json",
+	SchemaReaderChanges:           "reader-changes.schema.json",
 	SchemaConversationRef:         "conversation-ref.schema.json",
 	SchemaAPIProblem:              "error.schema.json",
 	SchemaCapabilities:            "capabilities.schema.json",

@@ -15,6 +15,7 @@ This file was backfilled from the git history as a good-faith summary, not an ex
 ### Added
 
 - **Reader collections.** Named, ordered, per-principal sets of fragments (playlists, reading lists) under `/v1/reader/collections`: create, rename, delete, list with item counts, list members as Reader items in order, and add, remove and reorder members with `expected_revision`. Reader items gain an optional `collections` field. New contract schemas and OpenAPI paths; migration `022_reader_collections.sql`. See `docs/reader-collections.md`.
+- **Reader change feed.** `GET /v1/reader/changes?after=<cursor>&limit=` returns the Reader items created or changed since a cursor, in change order, each once and at its current state, so a client can keep a local index current without re-listing. The sequence is advanced by SQLite triggers on the tables a Reader item is projected from; migration `023_reader_change_feed.sql` adds them and seeds existing fragments. See `docs/reader-change-feed.md`.
 - **Browser capture v1 and a media-aware Reader.** A published capture/Reader contract (`contracts/browser-capture-reader/v1/`: OpenAPI, types, capabilities and validator), media custody, and Sysop Reader improvements for readability, media and inline controls.
 - **Pre-fetched intake.** Intake accepts `source_url`, `description` and `selection`; such content is never re-fetched or re-enriched by the inbox reviewer.
 - **`callback` destination kind**, dispatched through the existing delivery queue, alongside `file`, `mcp`, `api` and `cli`.

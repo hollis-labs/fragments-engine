@@ -161,7 +161,7 @@ func (s *MediaService) recordServeCheck(ctx context.Context, q repository.MediaW
 		return domain.AssetVariant{}, err
 	}
 	served, reason := readerServeDecision(asset, variant, sample)
-	return s.repo.RecordServeCheckOn(ctx, q, variant.ID, served, reason, s.now().UTC())
+	return s.repo.RecordServeCheckOn(ctx, q, variant, served, reason, s.now().UTC())
 }
 
 // readerServeDecision returns the type the media route would serve the bytes
@@ -218,7 +218,7 @@ func (s *MediaService) ReconcileServeChecks(ctx context.Context) (checked, unser
 				continue
 			}
 			served, reason := readerServeDecision(item.Asset, item.Variant, sample[:n])
-			if _, err := s.repo.RecordServeCheck(ctx, item.Variant.ID, served, reason, s.now().UTC()); err != nil {
+			if _, err := s.repo.RecordServeCheck(ctx, item.Variant, served, reason, s.now().UTC()); err != nil {
 				return checked, unserved, err
 			}
 			checked++
@@ -227,4 +227,43 @@ func (s *MediaService) ReconcileServeChecks(ctx context.Context) (checked, unser
 			}
 		}
 	}
+}
+
+// checkStoredMediaOn checks deduplicated capture blobs under the acceptance
+// write reservation, including blobs reused with a different MIME declaration.
+func (s *MediaService) checkStoredMediaOn(ctx context.Context, q repository.MediaWriteConn, items []domain.MediaManifestItem) error {
+	opener, ok := s.blobs.(interface {
+		Open(string) (*os.File, error)
+	})
+	for _, item := range items {
+		for _, variant := range item.Variants {
+			if variant.BlobDigest == "" || variant.AcquisitionState != domain.AcquisitionAvailable {
+				continue
+			}
+			if !ok {
+				return fmt.Errorf("capture media: blob store cannot open blobs")
+			}
+			blob, found, err := s.repo.FindBlobByDigestOn(ctx, q, variant.BlobDigest)
+			if err != nil {
+				return err
+			}
+			if !found {
+				return fmt.Errorf("capture media: stored blob missing")
+			}
+			file, err := opener.Open(blob.StorageHandle)
+			if err != nil {
+				return err
+			}
+			sample := make([]byte, readerMediaSniffBytes)
+			n, err := io.ReadFull(file, sample)
+			file.Close()
+			if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
+				return err
+			}
+			if _, err := s.recordServeCheck(ctx, q, variant, sample[:n]); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }

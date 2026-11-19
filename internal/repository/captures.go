@@ -40,6 +40,8 @@ type CaptureWrite struct {
 	// The repository applies it after canonical resolution and before snapshot
 	// construction/commit. It cannot change identity or immutable revision rows.
 	LegacyProjection *LegacyProjectionWrite
+	// CheckStoredMedia validates reused blobs before projecting the receipt.
+	CheckStoredMedia func(context.Context, MediaWriteConn, []domain.MediaManifestItem) error
 	// BuildAcceptanceSnapshot runs after every row required by manifest
 	// acceptance has been written, but before COMMIT. It lets the application
 	// persist an exact transport response without moving transaction ownership
@@ -284,6 +286,17 @@ INSERT INTO fragment_description_observations (
 	resolvedBindings, err := r.insertCaptureAssetBindings(ctx, conn, attempt, resolvedMedia, write.AssetBindings)
 	if err != nil {
 		return domain.CaptureAcceptance{}, err
+	}
+	if write.CheckStoredMedia != nil {
+		// Reload after dedup attaches; the service checks the exact bytes and
+		// metadata within this transaction, before the immutable receipt.
+		storedMedia, err := listMediaByRevision(ctx, conn, revisionID)
+		if err != nil {
+			return domain.CaptureAcceptance{}, err
+		}
+		if err := write.CheckStoredMedia(ctx, conn, storedMedia); err != nil {
+			return domain.CaptureAcceptance{}, fmt.Errorf("check accepted capture media: %w", err)
+		}
 	}
 	// Known-digest reuse may have advanced variants to available while bindings
 	// were resolved. Re-read the revision projection before snapshotting so the
