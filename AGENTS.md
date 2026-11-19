@@ -23,6 +23,11 @@ destination model.
 - `contracts/browser-capture-reader/v1/` — the published capture and Reader
   contract: OpenAPI, types, capabilities and the validator that enforces them.
 - `apps/sysop/` — the React UI, built and embedded into the Go binary.
+- `internal/transcript/` and `internal/transcript/pgstore/` — the transcript
+  corpus. `pgstore` is the Postgres writer, importer and read service
+  (`transcript.Backend`); the SQLite `Store` is being retired. Fragments Engine
+  is the corpus's only writer; readers hold SELECT only. Read
+  `docs/transcript-corpus.md` before changing capture, limits or redaction.
 - `README.md` — the operational command, config and destination reference.
 
 ## Commands

@@ -33,7 +33,25 @@ decision instead of being filed silently.
 - **Exposes one service layer** three ways — CLI, HTTP API, and MCP — so a
   human, a script, or an agent hit the same behavior.
 
-## Private transcript storage
+## Transcript corpus (Postgres)
+
+With `transcripts.store: postgres` the transcript corpus is a Postgres database with
+pgvector, and Fragments Engine is its only writer. Credentials are read from the
+environment variables named in `transcripts.postgres` (`dsn_env` for the DML-only
+runtime role, `migrate_dsn_env` for the schema owner, used only by `transcript migrate`);
+connection strings are never in the config file and TLS verification is required
+(`allow_insecure` is for local development databases). The corpus keeps everything an
+agent session produced, with secrets redacted and nothing cut for length: tool inputs
+and results in full, thinking text, no file-size or line limits (large files are read
+in bounded passes). Commands: `transcript migrate`, `transcript import --source
+BACKUP`, `transcript coverage`. Agents read the corpus through the shared-services
+transcript tools, not through Fragments Engine. See `docs/transcript-corpus.md`.
+
+## Private transcript storage (SQLite, being retired)
+
+The SQLite store below is selected when `transcripts.store` is unset. It is replaced by
+the Postgres corpus at cutover and then removed; it has no fallback, cache or dual write
+afterwards.
 
 Claude Code, Codex, Antigravity and ChatGPT transcript ingests require an explicit
 `transcripts.private_root`. An empty value refuses transcript ingestion before
