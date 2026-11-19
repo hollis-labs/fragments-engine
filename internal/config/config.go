@@ -28,8 +28,27 @@ type Config struct {
 // TranscriptConfig names the explicit local owner-private destination. Blank
 // means transcript ingestion is unavailable, with no shared-store fallback.
 type TranscriptConfig struct {
+	// Store selects the corpus: "sqlite" (the default, being retired) or
+	// "postgres". Postgres is the only writer target after cutover.
+	Store       string           `json:"store" yaml:"store"`
 	PrivateRoot string           `json:"private_root" yaml:"private_root"`
+	Postgres    TranscriptPG     `json:"postgres" yaml:"postgres"`
 	Enrichment  EnrichmentConfig `json:"enrichment" yaml:"enrichment"`
+}
+
+// TranscriptPG names the environment variables that hold the Postgres
+// credentials. Connection strings never live in the config file.
+type TranscriptPG struct {
+	// DSNEnv names the variable holding the runtime (DML-only) DSN.
+	DSNEnv string `json:"dsn_env" yaml:"dsn_env"`
+	// MigrateDSNEnv names the variable holding the schema-owner DSN. It is read
+	// only by the migrate command, never by the running service.
+	MigrateDSNEnv string `json:"migrate_dsn_env" yaml:"migrate_dsn_env"`
+}
+
+// UsesPostgres reports whether the transcript corpus is Postgres.
+func (t TranscriptConfig) UsesPostgres() bool {
+	return strings.EqualFold(strings.TrimSpace(t.Store), "postgres")
 }
 
 // EnrichmentConfig drives transcript enrichment. Nothing leaves the machine

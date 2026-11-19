@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	corestore "github.com/hollis-labs/libs/core/store"
 	queue "github.com/hollis-labs/libs/core/util/queue"
 	queuesqlite "github.com/hollis-labs/libs/core/util/queue/driver/sqlite"
 
@@ -31,6 +32,7 @@ import (
 	"github.com/hollis-labs/fragments-engine/internal/service"
 	"github.com/hollis-labs/fragments-engine/internal/store"
 	"github.com/hollis-labs/fragments-engine/internal/transcript"
+	"github.com/hollis-labs/fragments-engine/internal/transcript/pgstore"
 )
 
 // go-queue tables for async ingest jobs. Created on demand by the sqlite
@@ -44,9 +46,15 @@ const (
 // private root is configured.
 func (a *App) Transcripts() *transcript.Store { return a.transcripts }
 
+// TranscriptBackend returns the configured transcript corpus (Postgres or the
+// retiring SQLite store), or nil when none is configured.
+func (a *App) TranscriptBackend() transcript.Backend { return a.backend }
+
 type App struct {
 	store             *store.Store
 	transcripts       *transcript.Store
+	backend           transcript.Backend
+	pgCorpus          *corestore.Store
 	recall            recall.Indexer
 	Fragments         *service.FragmentService
 	Inbox             *service.InboxService
@@ -146,15 +154,31 @@ func Open(ctx context.Context, cfg config.Config) (*App, error) {
 		ingest.NewRecallStage(recallIndex),
 	}, claude.Source{}, codex.Source{}, antigravity.Source{}, chatgpt.Source{}, urlsource.Source{}, filesystemdocs.Source{}, gitchanges.Source{}, nilvault.Source{})
 	var transcriptStore *transcript.Store
-	if cfg.Transcripts.PrivateRoot != "" {
+	var backend transcript.Backend
+	var pgCorpus *corestore.Store
+	switch {
+	case cfg.Transcripts.UsesPostgres():
+		// Postgres is the only target: no SQLite fallback, cache or dual write.
+		pgCorpus, err = pgstore.Open(ctx, cfg.Transcripts.Postgres.DSNEnv)
+		if err != nil {
+			_ = recallIndex.Close()
+			_ = st.Close()
+			return nil, err
+		}
+		backend = pgstore.NewService(pgCorpus)
+		pipeline.SetTranscriptStore(pgstore.NewWriter(pgCorpus))
+	case cfg.Transcripts.PrivateRoot != "":
 		transcriptStore, err = transcript.Open(config.ExpandHome(cfg.Transcripts.PrivateRoot))
 		if err != nil {
 			_ = recallIndex.Close()
 			_ = st.Close()
 			return nil, err
 		}
+		backend = transcriptStore
+		pipeline.SetTranscriptStore(transcriptStore)
+	default:
+		pipeline.SetTranscriptStore(nil)
 	}
-	pipeline.SetTranscriptStore(transcriptStore)
 	legacyCapture := legacycapture.NewService(captureRepo)
 	pipeline.SetLegacyCaptureService(legacyCapture)
 	fragmentService := service.NewFragmentService(fragmentRepo, entityRepo, attachmentRepo, routingRepo, recallIndex, pipeline, visionAnalyzer, manualEnricher, corpusWriter)
@@ -166,6 +190,8 @@ func Open(ctx context.Context, cfg config.Config) (*App, error) {
 	return &App{
 		store:           st,
 		transcripts:     transcriptStore,
+		backend:         backend,
+		pgCorpus:        pgCorpus,
 		recall:          recallIndex,
 		Fragments:       fragmentService,
 		Inbox:           service.NewInboxService(inboxRepo),
@@ -225,6 +251,9 @@ func (a *App) Close() error {
 	var transcriptErr error
 	if a.transcripts != nil {
 		transcriptErr = a.transcripts.Close()
+	}
+	if a.pgCorpus != nil {
+		transcriptErr = errors.Join(transcriptErr, a.pgCorpus.Close())
 	}
 	if a.recall != nil {
 		_ = a.recall.Close()

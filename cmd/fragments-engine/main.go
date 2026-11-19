@@ -1912,9 +1912,9 @@ func runTranscript(args []string) error {
 		return err
 	}
 	defer instance.Close()
-	store := instance.Transcripts()
+	store := instance.TranscriptBackend()
 	if store == nil {
-		return fmt.Errorf("transcript: no private root configured")
+		return fmt.Errorf("transcript: no corpus configured (set transcripts.store and its credentials)")
 	}
 	switch args[0] {
 	case "enrich":
@@ -1982,7 +1982,7 @@ type enrichFlags struct {
 // runTranscriptEnrich plans or runs transcript enrichment. A dry run needs no
 // gateway and makes no model call; a real run needs the provider to be listed
 // in transcripts.enrichment.allowed_providers. Output is counts only.
-func runTranscriptEnrich(cfg config.Config, store *transcript.Store, f enrichFlags) error {
+func runTranscriptEnrich(cfg config.Config, store transcript.Backend, f enrichFlags) error {
 	ec := cfg.Transcripts.Enrichment
 	pick := func(flagVal, cfgVal, def string) string {
 		if flagVal != "" {
@@ -2227,7 +2227,7 @@ func buildEnrichEmbedder(ec config.EnrichmentConfig, modelFlag string) (enrich.E
 
 // runTranscriptEmbed embeds enriched summaries with a local embedding server;
 // it never calls a hosted model.
-func runTranscriptEmbed(cfg config.Config, store *transcript.Store, modelFlag string, limit int) error {
+func runTranscriptEmbed(cfg config.Config, store transcript.Backend, modelFlag string, limit int) error {
 	e, model, err := buildEnrichEmbedder(cfg.Transcripts.Enrichment, modelFlag)
 	if err != nil {
 		return err
@@ -2240,7 +2240,7 @@ func runTranscriptEmbed(cfg config.Config, store *transcript.Store, modelFlag st
 
 // runTranscriptSearch finds sessions by their enriched title, summary, topics
 // and entities. It prints titles because the owner is reading their own store.
-func runTranscriptSearch(cfg config.Config, store *transcript.Store, query string, semantic bool, modelFlag string, limit int) error {
+func runTranscriptSearch(cfg config.Config, store transcript.Backend, query string, semantic bool, modelFlag string, limit int) error {
 	if strings.TrimSpace(query) == "" {
 		return fmt.Errorf("transcript search requires --query")
 	}
@@ -2275,7 +2275,7 @@ func runTranscriptSearch(cfg config.Config, store *transcript.Store, query strin
 
 // runTranscriptShow prints a session's stored Tier 0 facts and newest Tier 1
 // result as JSON, for the owner to review in their own terminal.
-func runTranscriptShow(store *transcript.Store, nativeID string) error {
+func runTranscriptShow(store transcript.Backend, nativeID string) error {
 	if nativeID == "" {
 		return fmt.Errorf("transcript show requires --session")
 	}

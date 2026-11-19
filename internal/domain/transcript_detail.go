@@ -18,8 +18,8 @@ type TranscriptDetail struct {
 	Turns   []TranscriptTurn
 	// Steps are source records without a typed model, kept as raw events.
 	Steps []TranscriptStep
-	Tools   []TranscriptToolCall
-	Usage   []TranscriptUsage
+	Tools []TranscriptToolCall
+	Usage []TranscriptUsage
 	// Reset means the cursor was invalid (truncated or rewritten source), so the
 	// store drops the segment's derived rows before applying this parse.
 	Reset bool

@@ -162,7 +162,7 @@ type Summary struct {
 }
 
 type Runner struct {
-	Store *transcript.Store
+	Store transcript.EnrichBackend
 	GW    Gateway
 	Opts  Options
 }

@@ -50,3 +50,17 @@ func RedactJSONValue(raw string) (string, bool) {
 	}
 	return string(clean), true
 }
+
+// Digest is the hex sha256 the corpus uses for content digests.
+func Digest(value []byte) string { return digest(value) }
+
+// Clip cuts text to at most max bytes on a rune boundary.
+func Clip(text string, max int) string { return clip(text, max) }
+
+// SummaryTextOf renders the searchable form of a stored Tier 1 result.
+func SummaryTextOf(resultJSON string) string { return summaryTextOf(resultJSON) }
+
+// NewWriteError reports a persistent store write failure in the form the
+// enrichment runner treats as its own hard stop (store_write), distinct from a
+// provider failure. The cause is not carried, so no content can leak.
+func NewWriteError(what string) error { return &WriteError{What: what} }

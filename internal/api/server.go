@@ -20,6 +20,7 @@ import (
 	"github.com/hollis-labs/fragments-engine/internal/domain"
 	"github.com/hollis-labs/fragments-engine/internal/recall"
 	"github.com/hollis-labs/fragments-engine/internal/service"
+	"github.com/hollis-labs/fragments-engine/internal/transcript/pgstore"
 )
 
 type Server struct {
@@ -27,6 +28,9 @@ type Server struct {
 	security *httpSecurity
 	// semProbe caches whether the local embedding server answered recently, so
 	// the status route does not call it on every page load.
+	// pg is the Postgres corpus, opened once and shared by requests.
+	pgMu     sync.Mutex
+	pg       *pgstore.Service
 	semProbe struct {
 		mu     sync.Mutex
 		at     time.Time
@@ -39,6 +43,21 @@ const (
 	maxCaptureCompletionBytes int64 = 1 << 20
 	maxCaptureAssetBytes      int64 = 256 << 20
 )
+
+// postgresCorpus opens the Postgres corpus on first use and reuses it.
+func (s *Server) postgresCorpus(ctx context.Context, cfg config.Config) (*pgstore.Service, error) {
+	s.pgMu.Lock()
+	defer s.pgMu.Unlock()
+	if s.pg != nil {
+		return s.pg, nil
+	}
+	st, err := pgstore.Open(ctx, cfg.Transcripts.Postgres.DSNEnv)
+	if err != nil {
+		return nil, err
+	}
+	s.pg = pgstore.NewService(st)
+	return s.pg, nil
+}
 
 func NewServer(cfgPath string) *Server {
 	return &Server{cfgPath: cfgPath}
