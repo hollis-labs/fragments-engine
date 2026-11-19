@@ -2,6 +2,7 @@ package pgstore
 
 import (
 	"context"
+	"encoding/base64"
 	"strings"
 	"sync"
 	"testing"
@@ -224,5 +225,30 @@ func TestWriterReplacesNULRatherThanFailing(t *testing.T) {
 	}
 	if got := scalar(t, s, `SELECT payload_redacted->>'nul_replaced' FROM events`); got != "true" {
 		t.Errorf("NUL replacement not recorded: %q", got)
+	}
+}
+
+// A record with no typed model is stored raw, flagged not redactable, and does
+// not count as a turn.
+func TestWriterKeepsUnsupportedStepsRaw(t *testing.T) {
+	w, s, done := openWriter(t)
+	defer done()
+	raw := []byte{0x08, 0x96, 0x01, 0xff, 0x00, 0x42}
+	d := &domain.TranscriptDetail{Session: domain.TranscriptSession{Tool: "antigravity", NativeSessionID: "n", Kind: "main"},
+		Turns: []domain.TranscriptTurn{{EventUUID: "step-0", Role: "user", Text: "hi"}},
+		Steps: []domain.TranscriptStep{{EventUUID: "step-1", Type: 17, Format: 0, Status: 3, Payload: raw}}}
+	for i := 0; i < 2; i++ { // the replay must not duplicate it
+		if _, err := w.Accept(context.Background(), "r", frag("n", d)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := scalar(t, s, `SELECT count(*) FROM events WHERE kind = 'step'`); got != "1" {
+		t.Fatalf("steps stored = %s", got)
+	}
+	if got := scalar(t, s, `SELECT payload_redacted->>'step_type' || '/' || (payload_redacted->>'not_redactable') || '/' || (payload_redacted->>'payload_b64') FROM events WHERE kind = 'step'`); got != "17/true/"+base64.StdEncoding.EncodeToString(raw) {
+		t.Errorf("payload = %s", got)
+	}
+	if got := scalar(t, s, `SELECT legacy_turn_count FROM sessions`); got != "1" {
+		t.Errorf("turn count = %s", got)
 	}
 }

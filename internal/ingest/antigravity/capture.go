@@ -7,7 +7,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"io"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -37,12 +36,10 @@ import (
 // again once the producer has synced their final state. The store keys every
 // row by event or call id, so re-reading a step never duplicates it.
 const (
-	stepUser     = 14
-	stepPlanner  = 15
-	stepToolRun  = 132
-	maxStepBytes = 10 << 20
-	maxExcerpt   = 2048
-	statusOK     = 3
+	stepUser    = 14
+	stepPlanner = 15
+	stepToolRun = 132
+	statusOK    = 3
 )
 
 // A pass reads at most this many steps or this much step text, whichever comes
@@ -133,7 +130,7 @@ func tableColumns(ctx context.Context, db *sql.DB, table string) (map[string]boo
 // captureConversation turns one conversation database into a fragment carrying
 // the searchable text and the structured detail. It returns a skip class instead
 // of a fragment when there is nothing new to store.
-func captureConversation(ctx context.Context, brainRoot, path, relPath string, info os.FileInfo, maxBytes int64, excerpt int) (domain.PipelineFragment, string, error) {
+func captureConversation(ctx context.Context, brainRoot, path, relPath string, info os.FileInfo) (domain.PipelineFragment, string, error) {
 	if err := snapshotReady(path); err != nil {
 		return domain.PipelineFragment{}, "", err
 	}
@@ -214,7 +211,7 @@ func captureConversation(ctx context.Context, brainRoot, path, relPath string, i
 		}
 		switch s.typ {
 		case stepUser, stepPlanner:
-			if s.format != 0 || s.size > maxStepBytes {
+			if s.format != 0 {
 				return domain.PipelineFragment{}, "", errPayload
 			}
 			body, err := stepText(s.typ, s.payload)
@@ -230,16 +227,17 @@ func captureConversation(ctx context.Context, brainRoot, path, relPath string, i
 				planner(&s, &turn, &detail, models, calls, &order)
 			}
 			if turn.Text != "" {
-				if int64(text.Len()+len(turn.Text)+20) > maxBytes {
-					return domain.PipelineFragment{}, "", errors.New("Antigravity conversation exceeds size limit")
-				}
 				fmt.Fprintf(&text, "## %s\n\n%s\n\n", role, turn.Text)
 			}
 			detail.Turns = append(detail.Turns, turn)
 		case stepToolRun:
-			toolResult(brainRoot, id, excerpt, &s, calls, &order)
+			toolResult(brainRoot, id, &s, calls, &order)
 		default:
-			domain.NoteSkip(ctx, "unsupported_step_"+strconv.Itoa(s.typ), relPath)
+			// No typed model yet: keep the record raw so nothing is lost and a later
+			// parser can decode it from the corpus.
+			detail.Steps = append(detail.Steps, domain.TranscriptStep{
+				EventUUID: s.eventID(), Type: s.typ, Format: s.format, Status: s.status, TS: s.created(), Payload: s.payload,
+			})
 		}
 	}
 	for _, key := range order {
@@ -324,8 +322,10 @@ func stepColumns(cols map[string]bool) string {
 	if hasColumn(cols, "error_details") {
 		errs = "CASE WHEN error_details IS NOT NULL AND length(error_details) > 0 THEN 1 ELSE 0 END"
 	}
-	return "idx, step_type, step_format, " + status + ", length(step_payload), CASE WHEN step_type IN (14,15) AND length(step_payload) <= " +
-		strconv.Itoa(maxStepBytes) + " THEN step_payload END, " + meta + ", " + errs
+	// Every step but a tool run keeps its payload: conversation steps are decoded,
+	// anything else is stored raw. Tool-run output lives in files, not the payload.
+	return "idx, step_type, step_format, " + status + ", length(step_payload), CASE WHEN step_type <> " +
+		strconv.Itoa(stepToolRun) + " THEN step_payload END, " + meta + ", " + errs
 }
 
 func scanStep(rows interface{ Scan(...any) error }) (stepRow, error) {
@@ -446,6 +446,9 @@ func planner(s *stepRow, turn *domain.TranscriptTurn, detail *domain.TranscriptD
 		}
 		if f, ok := raw.first(3); ok && f.wire == 2 {
 			turn.HasThinking, turn.ThinkingBytes = true, len(f.b)
+			if validText(f.b) {
+				turn.Thinking = string(f.b)
+			}
 		}
 		for _, c := range raw.all(7) {
 			if c.wire != 2 {
@@ -489,7 +492,7 @@ func varintOf(m pbMsg, num int) uint64 {
 // Status is read from the step: 3 is done, and a step with error details (status
 // 4 or 7) is an error. Any other status (2, 5, 6) is not a known result and the
 // call keeps status none.
-func toolResult(brainRoot, id string, excerpt int, s *stepRow, calls map[string]*domain.TranscriptToolCall, order *[]string) {
+func toolResult(brainRoot, id string, s *stepRow, calls map[string]*domain.TranscriptToolCall, order *[]string) {
 	if !s.hasMeta {
 		return
 	}
@@ -515,42 +518,31 @@ func toolResult(brainRoot, id string, excerpt int, s *stepRow, calls map[string]
 		return
 	}
 	tc.HasResult, tc.IsError, tc.EndedAt = true, isErr, s.latest()
-	size, text := outputFile(brainRoot, id, s.idx, excerpt)
+	size, parts := outputFile(brainRoot, id, s.idx)
 	tc.ResultSize = size
-	if excerpt > 0 {
-		tc.ResultExcerpt, tc.MaxExcerpt = text, excerpt
-	}
+	tc.Results = parts
 }
 
-// outputFile returns the size, and optionally a bounded valid-UTF-8 excerpt, of
-// the output a tool step wrote under brain/<conversation>/.system_generated.
-func outputFile(brainRoot, id string, idx int64, excerpt int) (int, string) {
+// outputFile returns the size and the complete content of the output a tool step
+// wrote under brain/<conversation>/.system_generated. Text is kept as text; bytes
+// that are not valid UTF-8 are kept as bytes rather than cut or dropped.
+func outputFile(brainRoot, id string, idx int64) (int, []domain.TranscriptResultPart) {
 	path := filepath.Join(brainRoot, id, ".system_generated", "steps", strconv.FormatInt(idx, 10), "output.txt")
 	info, err := os.Lstat(path)
 	if err != nil || !info.Mode().IsRegular() {
-		return 0, ""
+		return 0, nil
 	}
-	size := int(info.Size())
-	if excerpt <= 0 {
-		return size, ""
-	}
-	f, err := os.Open(path)
+	raw, err := os.ReadFile(path)
 	if err != nil {
-		return size, ""
+		return int(info.Size()), nil
 	}
-	defer f.Close()
-	buf, err := io.ReadAll(io.LimitReader(f, int64(excerpt)))
-	if err != nil {
-		return size, ""
+	if len(raw) == 0 {
+		return 0, nil
 	}
-	if !utf8.Valid(buf) {
-		if head, ok := trimPartialRune(buf); ok {
-			buf = head
-		} else {
-			return size, ""
-		}
+	if utf8.Valid(raw) && validText(raw) {
+		return len(raw), []domain.TranscriptResultPart{{PartID: "0", MediaType: "text/plain", Text: string(raw), Complete: true}}
 	}
-	return size, string(buf)
+	return len(raw), []domain.TranscriptResultPart{{PartID: "0", MediaType: "application/octet-stream", Bytes: raw, Complete: true}}
 }
 
 // workspacePath returns the first workspace path recorded for the conversation.

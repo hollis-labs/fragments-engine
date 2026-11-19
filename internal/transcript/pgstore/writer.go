@@ -3,6 +3,7 @@ package pgstore
 import (
 	"context"
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -198,6 +199,37 @@ VALUES (?,?,?,?, 'turn', ?,?,?,1, ?,?,?,?,?,?,?,?::jsonb,?) ON CONFLICT (session
 		}
 	}
 
+	// Records without a typed model are kept as raw events (kind "step"); their
+	// payload cannot be redacted, and the event says so.
+	for _, st := range d.Steps {
+		if strings.TrimSpace(st.EventUUID) == "" {
+			return "", errors.New("transcript: step without an event id")
+		}
+		eventID, _ := pgText(transcript.Redact(st.EventUUID))
+		payload, err := json.Marshal(map[string]any{
+			"step_type": st.Type, "step_format": st.Format, "step_status": st.Status,
+			"payload_b64": base64.StdEncoding.EncodeToString(st.Payload), "payload_bytes": len(st.Payload), "not_redactable": true,
+		})
+		if err != nil {
+			return "", err
+		}
+		digest := sha(string(payload))
+		res, err := tx.ExecContext(ctx, `INSERT INTO events (session_id, event_id, ordinal, kind, role, event_at, ingested_at, event_revision, content_digest, payload_redacted)
+VALUES (?,?,?, 'step', 'system', ?,?,1, ?, ?::jsonb) ON CONFLICT (session_id, event_id) DO NOTHING`,
+			pk, eventID, ordinal+1, tsPtr(st.TS), now, digest, string(payload))
+		if err != nil {
+			return "", err
+		}
+		if n, _ := res.RowsAffected(); n == 0 {
+			continue
+		}
+		ordinal++
+		changed++
+		if err := j.note(ctx, "event_upsert", eventID); err != nil {
+			return "", err
+		}
+	}
+
 	for _, c := range d.Tools {
 		n, err := w.applyTool(ctx, tx, j, pk, c)
 		if err != nil {
@@ -222,7 +254,7 @@ ON CONFLICT (session_id, request_id) DO UPDATE SET
 		_ = res
 	}
 
-	if _, err := tx.ExecContext(ctx, `UPDATE sessions SET legacy_turn_count = (SELECT count(*) FROM events WHERE session_id = ?),
+	if _, err := tx.ExecContext(ctx, `UPDATE sessions SET legacy_turn_count = (SELECT count(*) FROM events WHERE session_id = ? AND kind = 'turn'),
  content_digest = (SELECT encode(sha256(convert_to(coalesce(string_agg(content_digest, '' ORDER BY ordinal, event_id), ''), 'UTF8')), 'hex') FROM events WHERE session_id = ?),
  content_revision = content_revision + ? WHERE session_id = ?`, pk, pk, boolToInt(changed > 0), pk); err != nil {
 		return "", err

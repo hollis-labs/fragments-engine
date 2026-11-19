@@ -29,27 +29,6 @@ func (Source) Collect(ctx context.Context, cfg config.IngestConfig) ([]domain.Pi
 	if err != nil {
 		return nil, err
 	}
-	maxBytes := int64(50 * 1024 * 1024)
-	if rules.MaxFileSizeMB > 0 {
-		if rules.MaxFileSizeMB > 1024 {
-			return nil, errors.New("Antigravity file limit exceeds 1024 MiB")
-		}
-		maxBytes = int64(rules.MaxFileSizeMB) * 1024 * 1024
-	}
-	excerpt := rules.ToolResultExcerptBytes
-	if excerpt < 0 {
-		excerpt = 0
-	}
-	if excerpt > maxExcerpt {
-		excerpt = maxExcerpt
-	}
-	onError := rules.ToolResultExcerptOnErrorBytes
-	if onError < 0 {
-		onError = 0
-	}
-	if onError > maxExcerpt {
-		onError = maxExcerpt
-	}
 	if strings.TrimSpace(cfg.Source.Root) == "" {
 		return nil, errors.New("Antigravity source root is required")
 	}
@@ -85,10 +64,6 @@ func (Source) Collect(ctx context.Context, cfg config.IngestConfig) ([]domain.Pi
 				domain.NoteSkip(ctx, "log_chunks_excluded", relPath)
 				continue
 			}
-			if before.Size() > maxBytes {
-				domain.NoteSkip(ctx, "size_limit", relPath)
-				continue
-			}
 			var (
 				content  string
 				trimmed  bool
@@ -96,9 +71,9 @@ func (Source) Collect(ctx context.Context, cfg config.IngestConfig) ([]domain.Pi
 				skip     string
 			)
 			if section == "conversations" {
-				captured, skip, err = captureConversation(ctx, filepath.Join(root, "brain"), path, relPath, before, maxBytes, domain.ExcerptCapture(excerpt, onError))
+				captured, skip, err = captureConversation(ctx, filepath.Join(root, "brain"), path, relPath, before)
 			} else {
-				content, trimmed, err = brain(ctx, path, maxBytes)
+				content, trimmed, err = brain(ctx, path)
 			}
 			if errors.Is(err, errBrainEncoding) {
 				// One undecodable artifact must not abort the run. It is counted
@@ -124,7 +99,6 @@ func (Source) Collect(ctx context.Context, cfg config.IngestConfig) ([]domain.Pi
 					domain.NoteSkip(ctx, skip, relPath)
 					continue
 				}
-				captured.Detail.ApplyExcerptPolicy(excerpt, onError)
 				out = append(out, captured)
 				continue
 			}
@@ -185,15 +159,15 @@ var errBrainEncoding = errors.New("Antigravity brain artifact is not supported U
 // incomplete UTF-8 sequence at its very end (a size-capped chunk cut mid-rune)
 // is decoded after dropping that partial rune and reported as trimmed; any other
 // invalid text returns errBrainEncoding.
-func brain(ctx context.Context, path string, maxBytes int64) (string, bool, error) {
+func brain(ctx context.Context, path string) (string, bool, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return "", false, errors.New("cannot open Antigravity brain artifact")
 	}
 	defer f.Close()
-	raw, err := io.ReadAll(io.LimitReader(f, maxBytes+1))
-	if err != nil || int64(len(raw)) > maxBytes {
-		return "", false, errors.New("cannot read Antigravity brain artifact within size limit")
+	raw, err := io.ReadAll(f)
+	if err != nil {
+		return "", false, errors.New("cannot read Antigravity brain artifact")
 	}
 	if err := ctx.Err(); err != nil {
 		return "", false, err

@@ -16,6 +16,8 @@ import (
 type TranscriptDetail struct {
 	Session TranscriptSession
 	Turns   []TranscriptTurn
+	// Steps are source records without a typed model, kept as raw events.
+	Steps []TranscriptStep
 	Tools   []TranscriptToolCall
 	Usage   []TranscriptUsage
 	// Reset means the cursor was invalid (truncated or rewritten source), so the
@@ -62,6 +64,18 @@ type TranscriptTurn struct {
 	ThinkingBytes int // length of thinking text in bytes
 	// Thinking is the model's thinking text, kept in full (redacted by the store).
 	Thinking string
+}
+
+// TranscriptStep is a source record this reader has no typed model for. It is
+// kept, not dropped: its type, format, status and raw payload are stored as an
+// event so a later parser can decode it without re-reading the source.
+type TranscriptStep struct {
+	EventUUID string
+	Type      int
+	Format    int
+	Status    int
+	TS        time.Time
+	Payload   []byte // raw bytes; not redactable
 }
 
 type TranscriptToolCall struct {

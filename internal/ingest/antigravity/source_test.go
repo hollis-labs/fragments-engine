@@ -165,7 +165,9 @@ func TestPendingWALRefusedWithoutCheckpoint(t *testing.T) {
 	}
 }
 
-func TestBrainBoundsSymlinksAndPartialTransfers(t *testing.T) {
+// A brain artifact over the old size cap is ingested; symlinks, partial transfers
+// and undecodable files are still excluded and counted.
+func TestBrainSymlinksPartialTransfersAndLargeFiles(t *testing.T) {
 	root := t.TempDir()
 	brainRoot := filepath.Join(root, "brain")
 	if err := os.MkdirAll(filepath.Join(brainRoot, ".rsync-partial"), 0700); err != nil {
@@ -181,7 +183,7 @@ func TestBrainBoundsSymlinksAndPartialTransfers(t *testing.T) {
 	}
 	cfg := config.IngestConfig{Source: config.IngestSource{Root: root}, Rules: map[string]any{"max_file_size_mb": 1}}
 	got, err := (Source{}).Collect(context.Background(), cfg)
-	if err != nil || len(got) != 1 {
+	if err != nil || len(got) != 2 {
 		t.Fatalf("bounds/discovery: %d %v", len(got), err)
 	}
 	if err := os.WriteFile(filepath.Join(brainRoot, "invalid.txt"), []byte{0xff}, 0600); err != nil {
@@ -189,7 +191,7 @@ func TestBrainBoundsSymlinksAndPartialTransfers(t *testing.T) {
 	}
 	skips := &domain.SkipCollector{}
 	got, err = (Source{}).Collect(domain.WithSkipCollector(context.Background(), skips), cfg)
-	if err != nil || len(got) != 1 || skips.ByClass()["not_utf8"] != 1 {
+	if err != nil || len(got) != 2 || skips.ByClass()["not_utf8"] != 1 {
 		t.Fatalf("invalid text must be a counted skip, not an abort: %d %v %v", len(got), err, skips.ByClass())
 	}
 	ctx, cancel := context.WithCancel(context.Background())
