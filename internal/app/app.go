@@ -159,7 +159,7 @@ func Open(ctx context.Context, cfg config.Config) (*App, error) {
 	switch {
 	case cfg.Transcripts.UsesPostgres():
 		// Postgres is the only target: no SQLite fallback, cache or dual write.
-		pgCorpus, err = pgstore.Open(ctx, cfg.Transcripts.Postgres.DSNEnv)
+		pgCorpus, err = pgstore.Open(ctx, pgstore.ConnFor(cfg.Transcripts.Postgres))
 		if err != nil {
 			_ = recallIndex.Close()
 			_ = st.Close()

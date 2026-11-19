@@ -2,9 +2,13 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"sort"
@@ -19,6 +23,7 @@ import (
 	mcpserver "github.com/hollis-labs/fragments-engine/internal/mcp"
 	"github.com/hollis-labs/fragments-engine/internal/service"
 	"github.com/hollis-labs/fragments-engine/internal/transcript"
+	"github.com/hollis-labs/fragments-engine/internal/transcript/pgstore"
 )
 
 func main() {
@@ -792,9 +797,6 @@ func runRecall(args []string) error {
 	}
 	fs := flag.NewFlagSet("recall status", flag.ContinueOnError)
 	configPath := fs.String("config", "fragments.example.yaml", "path to config file")
-	if err := fs.Parse(args[1:]); err != nil {
-		return err
-	}
 	cfg, err := config.Load(*configPath)
 	if err != nil {
 		return err
@@ -1873,9 +1875,68 @@ func skipReasons(reasons map[string]int) string {
 // runTranscript reads structure from the owner-private transcript store. It
 // prints metadata only (names, ids, times, counts); no transcript text, tool
 // input or tool output is ever printed.
+func runTranscriptImport(cfg config.Config, source, runID string) error {
+	if source == "" {
+		return fmt.Errorf("transcript import: --source BACKUP is required (import a backup copy, never the live file)")
+	}
+	ctx := context.Background()
+	identity, err := fileSHA256(source)
+	if err != nil {
+		return err
+	}
+	src, err := sql.Open("sqlite", "file:"+source+"?mode=ro")
+	if err != nil {
+		return err
+	}
+	defer src.Close()
+	dst, err := pgstore.Open(ctx, pgstore.ConnFor(cfg.Transcripts.Postgres))
+	if err != nil {
+		return err
+	}
+	defer dst.Close()
+	im := &pgstore.Importer{Src: src, Dst: dst, RunID: runID, SourceIdentity: identity, Batch: 5000,
+		Log: func(f string, a ...any) { log.Printf(f, a...) }}
+	if err := im.Run(ctx); err != nil {
+		return err
+	}
+	names := make([]string, 0)
+	for n := range im.Tables() {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	ok := true
+	for _, n := range names {
+		st := im.Tables()[n]
+		verified := st.Verified != nil && *st.Verified
+		ok = ok && verified
+		fmt.Printf("%-16s source=%d imported=%d pending=%d rejected=%d verified=%v\n", n, st.SourceRows, st.Imported, st.Pending, st.Rejected, verified)
+	}
+	if err := pgstore.RotateEpoch(ctx, dst); err != nil {
+		return err
+	}
+	if !ok {
+		return fmt.Errorf("transcript import: some tables did not reconcile")
+	}
+	fmt.Println("import reconciled; change feed epoch rotated")
+	return nil
+}
+
+func fileSHA256(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
 func runTranscript(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: fragments-engine transcript <tool-calls|usage|enrich|embed|search|show> --config PATH [flags]")
+		return fmt.Errorf("usage: fragments-engine transcript <migrate|import|tool-calls|usage|enrich|embed|search|show> --config PATH [flags]")
 	}
 	fs := flag.NewFlagSet("transcript "+args[0], flag.ContinueOnError)
 	configPath := fs.String("config", "fragments.example.yaml", "path to config file")
@@ -1900,8 +1961,29 @@ func runTranscript(args []string) error {
 	query := fs.String("query", "", "search: text to find in enriched summaries")
 	semantic := fs.Bool("semantic", false, "search: rank by embedding similarity instead of text")
 	embedModel := fs.String("embed-model", "", "embed/search --semantic: local embedding model (default from config)")
+	source := fs.String("source", "", "import: backup copy of the SQLite transcripts.db to import")
+	runID := fs.String("run-id", "import", "import: name of the run; re-running with the same name resumes it")
 	if err := fs.Parse(args[1:]); err != nil {
 		return err
+	}
+	if args[0] == "migrate" || args[0] == "import" {
+		// These run before the corpus is opened: a migration cannot require a
+		// migrated schema, and an import targets the corpus directly.
+		cfg, err := config.Load(*configPath)
+		if err != nil {
+			return err
+		}
+		if !cfg.Transcripts.UsesPostgres() {
+			return fmt.Errorf("transcript %s: set transcripts.store: postgres", args[0])
+		}
+		if args[0] == "migrate" {
+			if err := pgstore.Migrate(context.Background(), pgstore.ConnFor(cfg.Transcripts.Postgres)); err != nil {
+				return err
+			}
+			fmt.Println("transcript corpus schema is current")
+			return nil
+		}
+		return runTranscriptImport(cfg, *source, *runID)
 	}
 	cfg, err := config.Load(*configPath)
 	if err != nil {

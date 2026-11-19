@@ -44,6 +44,9 @@ type TranscriptPG struct {
 	// MigrateDSNEnv names the variable holding the schema-owner DSN. It is read
 	// only by the migrate command, never by the running service.
 	MigrateDSNEnv string `json:"migrate_dsn_env" yaml:"migrate_dsn_env"`
+	// AllowInsecure permits a connection without TLS verification, for local
+	// development databases only. Default false: sslmode=verify-full is required.
+	AllowInsecure bool `json:"allow_insecure" yaml:"allow_insecure"`
 }
 
 // UsesPostgres reports whether the transcript corpus is Postgres.

@@ -51,7 +51,7 @@ func (s *Server) postgresCorpus(ctx context.Context, cfg config.Config) (*pgstor
 	if s.pg != nil {
 		return s.pg, nil
 	}
-	st, err := pgstore.Open(ctx, cfg.Transcripts.Postgres.DSNEnv)
+	st, err := pgstore.Open(ctx, pgstore.ConnFor(cfg.Transcripts.Postgres))
 	if err != nil {
 		return nil, err
 	}

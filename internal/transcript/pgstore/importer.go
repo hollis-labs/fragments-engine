@@ -777,3 +777,16 @@ func (im *Importer) Reconcile(ctx context.Context) error {
 	}
 	return im.saveEvidence(ctx, "running")
 }
+
+// Tables returns the per-table reconciliation evidence of the last Run.
+func (im *Importer) Tables() map[string]*TableStat { return im.ev.Tables }
+
+// RotateEpoch gives the change feed a new epoch. Readers bind their cursors to
+// the epoch, so rotating after a bulk import or a cutover invalidates every
+// cursor taken against the old history instead of letting it skip rows.
+func RotateEpoch(ctx context.Context, st *store.Store) error {
+	return st.WriteTx(ctx, func(ctx context.Context, tx store.Tx) error {
+		_, err := tx.ExecContext(ctx, `UPDATE feed_state SET epoch = replace(gen_random_uuid()::text, '-', '') WHERE singleton`)
+		return err
+	})
+}
