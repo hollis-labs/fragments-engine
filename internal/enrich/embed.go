@@ -104,7 +104,7 @@ type EmbedSummary struct {
 
 // EmbedSummaries embeds the newest ok Tier 1 result of every session whose
 // vector is missing or stale. limit 0 means all. It never calls a model.
-func EmbedSummaries(ctx context.Context, st *transcript.Store, e Embedder, model string, limit int) (EmbedSummary, error) {
+func EmbedSummaries(ctx context.Context, st transcript.EnrichBackend, e Embedder, model string, limit int) (EmbedSummary, error) {
 	var sum EmbedSummary
 	format := formatOf(e)
 	texts, err := st.SummaryTexts(ctx)

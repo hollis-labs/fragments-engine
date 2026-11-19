@@ -8,18 +8,17 @@ import (
 	"github.com/hollis-labs/fragments-engine/internal/transcript"
 )
 
-// TranscriptBrowseService is the owner-only read surface over the private
-// transcript store. It is not agent-facing: no MCP tool or agent CLI wraps it,
-// and gated agent access is a separate design. Every read is audited by route,
-// id and count, never by content.
+// TranscriptBrowseService is the read surface behind FE's transcript UI. Agents
+// read the corpus through the shared transcript service, not this one. Every
+// read is audited by route, id and count, never by content.
 type TranscriptBrowseService struct {
-	store *transcript.Store
+	store transcript.BrowseBackend
 	audit func(route, id string, count int)
 	// embedder frames semantic queries; nil means semantic search is unavailable.
 	embedder QueryEmbedder
 }
 
-func NewTranscriptBrowseService(store *transcript.Store) *TranscriptBrowseService {
+func NewTranscriptBrowseService(store transcript.BrowseBackend) *TranscriptBrowseService {
 	return &TranscriptBrowseService{store: store, audit: defaultTranscriptAudit}
 }
 

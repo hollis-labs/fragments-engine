@@ -18,33 +18,20 @@ import (
 
 const kind = "codex_sessions"
 
-// maxRetainedText bounds the message text kept from one rollout. It matches the
-// private store's per-record cap, which is the real limit: rollouts are mostly
-// tool output and images, so raw file size says little about what is kept.
-var maxRetainedText = 16 << 20 // var so tests can lower it
-
-// defaultMaxFileBytes is a hard ceiling on a rollout read, not a content rule.
-const defaultMaxFileBytes = 1 << 30
-
 type Source struct{}
 
 func (Source) Kind() string { return kind }
 
 func (Source) Collect(ctx context.Context, cfg config.IngestConfig) ([]domain.PipelineFragment, error) {
-	rules, err := config.DecodeRules[config.CodexSessionRules](cfg)
-	if err != nil {
+	if _, err := config.DecodeRules[config.CodexSessionRules](cfg); err != nil {
 		return nil, err
-	}
-	maxBytes := int64(defaultMaxFileBytes)
-	if rules.MaxFileSizeMB > 0 {
-		maxBytes = int64(rules.MaxFileSizeMB) * 1024 * 1024
 	}
 	root := config.ExpandHome(cfg.Source.Root)
 	if strings.TrimSpace(root) == "" {
 		return nil, fmt.Errorf("codex source root is required")
 	}
 	var paths []string
-	err = filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
+	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -100,11 +87,8 @@ func (Source) Collect(ctx context.Context, cfg config.IngestConfig) ([]domain.Pi
 		if !info.Mode().IsRegular() {
 			continue
 		}
-		if info.Size() > maxBytes {
-			domain.NoteSkip(ctx, "size_limit", rel)
-			continue
-		}
-		fragment, class, tail, err := collectSegment(ctx, path, rel, info, maxBytes, domain.ExcerptCapture(max(0, rules.ToolResultExcerptBytes), max(0, rules.ToolResultExcerptOnErrorBytes)))
+		// No file-size limit: a large rollout is read in bounded passes.
+		fragment, class, tail, err := collectSegment(ctx, path, rel, info)
 		if err != nil {
 			if cerr := ctx.Err(); cerr != nil {
 				return nil, cerr
@@ -133,7 +117,6 @@ func (Source) Collect(ctx context.Context, cfg config.IngestConfig) ([]domain.Pi
 		// A thread can have multiple physical rollout files (fork/revert histories).
 		// Keep each file distinct without treating its metadata as authority.
 		fragment.SourceIdentity.SegmentKey = "rollout/" + filepath.ToSlash(rel)
-		fragment.Detail.ApplyExcerptPolicy(max(0, rules.ToolResultExcerptBytes), max(0, rules.ToolResultExcerptOnErrorBytes))
 		out = append(out, fragment)
 	}
 	return out, nil
@@ -177,5 +160,3 @@ func readLine(r *bufio.Reader, lineNo int, offset int64) ([]byte, error) {
 		return buf, err
 	}
 }
-
-const maxLineBytes = 10 << 20

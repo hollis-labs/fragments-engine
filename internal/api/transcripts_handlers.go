@@ -13,12 +13,10 @@ import (
 	"github.com/hollis-labs/fragments-engine/internal/transcript"
 )
 
-// These routes are the one deliberate, narrow exception to the rule that the
-// API never serves transcript content. They are owner-only, read-only, off by
-// default (ui.transcripts.enabled), loopback-only and audited per read. They
-// return redacted text and metadata only: no source paths, native ids, raw
-// archives or attachment bytes. Agents never get this surface: there is no MCP
-// tool for it, and the CLI/API/MCP parity rule is deferred for these routes.
+// These routes serve FE's own transcript UI. They are read-only, off by default
+// (ui.transcripts.enabled), loopback-only and audited per read, and return
+// redacted text and metadata only: no source paths, raw archives or attachment
+// bytes. Agents read the corpus through the shared transcript service, not here.
 
 const transcriptsPrefix = "/v1/transcripts"
 
@@ -93,16 +91,26 @@ func (s *Server) transcriptsGuard(next func(http.ResponseWriter, *http.Request, 
 			return
 		}
 		w.Header().Set("Cache-Control", "no-store")
-		var store *transcript.Store
-		if root := strings.TrimSpace(cfg.Transcripts.PrivateRoot); root != "" {
-			store, err = transcript.Open(config.ExpandHome(root))
+		// A nil interface (not a nil *Store) means no corpus is configured.
+		var backend transcript.BrowseBackend
+		switch {
+		case cfg.Transcripts.UsesPostgres():
+			pg, err := s.postgresCorpus(r.Context(), cfg)
 			if err != nil {
 				http.Error(w, "transcript store unavailable", http.StatusServiceUnavailable)
 				return
 			}
-			defer store.Close()
+			backend = pg
+		case strings.TrimSpace(cfg.Transcripts.PrivateRoot) != "":
+			sq, err := transcript.Open(config.ExpandHome(strings.TrimSpace(cfg.Transcripts.PrivateRoot)))
+			if err != nil {
+				http.Error(w, "transcript store unavailable", http.StatusServiceUnavailable)
+				return
+			}
+			defer sq.Close()
+			backend = sq
 		}
-		svc := service.NewTranscriptBrowseService(store)
+		svc := service.NewTranscriptBrowseService(backend)
 		svc.SetEmbedder(service.NewLocalQueryEmbedder(cfg.Transcripts.Enrichment.Embedding))
 		if r.URL.Path == transcriptsPrefix+"/status" {
 			next(w, r, svc)

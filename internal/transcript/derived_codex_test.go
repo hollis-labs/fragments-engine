@@ -96,7 +96,7 @@ func TestCodexDetailCapturesStructureOnceAndRedacted(t *testing.T) {
 		t.Fatalf("exec status %q %v", status, err)
 	}
 	var patchIn string
-	if err := st.db.QueryRow(`SELECT input_redacted FROM tx_tool_calls WHERE session_pk = ? AND tool_use_id = 'c2'`, pk).Scan(&patchIn); err != nil || !strings.Contains(patchIn, "/synthetic/a.go") || !strings.Contains(patchIn, "/synthetic/b.go") || strings.Contains(patchIn, "Begin Patch") {
+	if err := st.db.QueryRow(`SELECT input_redacted FROM tx_tool_calls WHERE session_pk = ? AND tool_use_id = 'c2'`, pk).Scan(&patchIn); err != nil || !strings.Contains(patchIn, "/synthetic/a.go") || !strings.Contains(patchIn, "/synthetic/b.go") {
 		t.Fatalf("patch input %q %v", patchIn, err)
 	}
 	facts, err := st.SessionFacts(context.Background(), pk)

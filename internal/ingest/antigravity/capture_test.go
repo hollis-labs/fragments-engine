@@ -202,7 +202,7 @@ func TestCaptureBuildsStructuredDetail(t *testing.T) {
 	if len(d.Turns) != 2 || d.Turns[0].Role != "user" || d.Turns[1].Role != "assistant" || d.Turns[1].TS.Unix() != t0+1 {
 		t.Fatalf("turns: %+v", d.Turns)
 	}
-	if !d.Turns[1].HasThinking || d.Turns[1].ThinkingBytes != len("SECRET-THINKING-TEXT-must-not-be-stored") || d.Turns[1].StopReason != "2" {
+	if !d.Turns[1].HasThinking || d.Turns[1].ThinkingBytes != len("SECRET-THINKING-TEXT-must-not-be-stored") || d.Turns[1].Thinking != "SECRET-THINKING-TEXT-must-not-be-stored" || d.Turns[1].StopReason != "2" {
 		t.Fatalf("thinking/stop reason: %+v", d.Turns[1])
 	}
 	if len(d.Usage) != 1 || d.Usage[0].Input != 1200 || d.Usage[0].Output != 80 || d.Usage[0].CacheRead != 900 || d.Usage[0].Model != "gemini-3.8-flash" || d.Usage[0].RequestID != "resp-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" {
@@ -212,7 +212,7 @@ func TestCaptureBuildsStructuredDetail(t *testing.T) {
 		t.Fatalf("tools: %+v", d.Tools)
 	}
 	c1, c2 := d.Tools[0], d.Tools[1]
-	if c1.ToolUseID != "call-1" || c1.Name != "run_command" || !c1.HasResult || c1.IsError || c1.ResultSize != len("0123456789tool output body") || c1.ResultExcerpt != "" {
+	if c1.ToolUseID != "call-1" || c1.Name != "run_command" || !c1.HasResult || c1.IsError || c1.ResultSize != len("0123456789tool output body") || len(c1.Results) != 1 || c1.Results[0].Text != "0123456789tool output body" {
 		t.Fatalf("call-1: %+v", c1)
 	}
 	if c2.ToolUseID != "call-2" || c2.Name != "view_file" || !c2.HasResult || !c2.IsError || c2.ResultSize != 0 {
@@ -221,8 +221,16 @@ func TestCaptureBuildsStructuredDetail(t *testing.T) {
 	if c1.TurnUUID != d.Turns[1].EventUUID || c1.StartedAt.Unix() != t0+1 || c1.EndedAt.Unix() != t0+2+3 {
 		t.Fatalf("call timing/turn link: %+v", c1)
 	}
-	if by := skips.ByClass(); by["unsupported_step_17"] != 2 || by["unsupported_step_101"] != 1 || len(by) != 2 {
-		t.Fatalf("unsupported step accounting: %v", by)
+	// Unsupported step types are kept raw, not skipped.
+	if by := skips.ByClass(); len(by) != 0 {
+		t.Fatalf("nothing should be skipped: %v", by)
+	}
+	kept := map[int]int{}
+	for _, st := range d.Steps {
+		kept[st.Type]++
+	}
+	if kept[17] != 2 || kept[101] != 1 || len(d.Steps) != 3 {
+		t.Fatalf("unsupported steps kept: %v", kept)
 	}
 	if strings.Contains(frag.Content, "SECRET-THINKING") || !strings.Contains(frag.Content, "assistant answer") {
 		t.Fatalf("search text: %q", frag.Content)
@@ -245,21 +253,21 @@ func TestToolResultStatusNeedsAKnownStepStatus(t *testing.T) {
 	}
 }
 
-func TestToolResultExcerptIsOptInAndBounded(t *testing.T) {
+func TestToolResultIsKeptInFull(t *testing.T) {
 	root := t.TempDir()
 	writeConv(t, root, "conv-1", baseSteps(), time.Unix(t0+10, 0))
 	outDir := filepath.Join(root, "brain", "conv-1", ".system_generated", "steps", "2")
 	if err := os.MkdirAll(outDir, 0700); err != nil {
 		t.Fatal(err)
 	}
-	body := strings.Repeat("x", 5000)
+	body := strings.Repeat("x", 500000)
 	if err := os.WriteFile(filepath.Join(outDir, "output.txt"), []byte(body), 0600); err != nil {
 		t.Fatal(err)
 	}
-	got, _ := collectOne(t, root, context.Background(), map[string]any{"tool_result_excerpt_bytes": 99999})
+	got, _ := collectOne(t, root, context.Background(), nil)
 	c := conversationFragment(t, got).Detail.Tools[0]
-	if c.MaxExcerpt != maxExcerpt || len(c.ResultExcerpt) != maxExcerpt || c.ResultSize != 5000 {
-		t.Fatalf("excerpt cap: max=%d len=%d size=%d", c.MaxExcerpt, len(c.ResultExcerpt), c.ResultSize)
+	if c.ResultSize != len(body) || len(c.Results) != 1 || c.Results[0].Text != body {
+		t.Fatalf("result cut: size=%d parts=%d", c.ResultSize, len(c.Results))
 	}
 }
 
@@ -355,7 +363,7 @@ func TestCaptureIsIdempotentAndIncremental(t *testing.T) {
 	if ins != 0 || upd != 1 {
 		t.Fatalf("append run: %d %d %d", ins, upd, skip)
 	}
-	if by["unsupported_step_17"] != 0 {
+	if by["batch_continues"] != 0 {
 		t.Fatalf("incremental pass re-read old steps: %v", by)
 	}
 	appended := counts(t, dir)

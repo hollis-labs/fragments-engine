@@ -48,7 +48,7 @@ type Pipeline struct {
 	now         func() time.Time
 	vision      analyze.VisionAnalyzer
 	legacy      *legacycapture.Service
-	transcripts *transcript.Store
+	transcripts TranscriptWriter
 }
 
 // SetLegacyCaptureService installs the shared application adapter used by all
@@ -62,7 +62,27 @@ func (p *Pipeline) SetLegacyCaptureService(service *legacycapture.Service) {
 
 // SetTranscriptStore binds the explicit owner-private destination. Transcript
 // producers cannot fall back to the shared capture/fragment store.
-func (p *Pipeline) SetTranscriptStore(store *transcript.Store) { p.transcripts = store }
+func (p *Pipeline) SetTranscriptStore(store TranscriptWriter) {
+	// A typed nil must not look like a configured store.
+	if v, ok := store.(*transcript.Store); ok && v == nil {
+		p.transcripts = nil
+		return
+	}
+	p.transcripts = store
+}
+
+// TranscriptWriter is what the pipeline needs from the transcript corpus: apply a
+// parsed segment, and report where a source file was last read to. Both the
+// SQLite store and the Postgres writer satisfy it.
+type TranscriptWriter interface {
+	Accept(ctx context.Context, registration string, in domain.PipelineFragment) (transcript.Outcome, error)
+	Cursor(ctx context.Context, registration, path string) (domain.TranscriptCursor, bool)
+}
+
+// maxDrainPasses bounds how many bounded passes one run makes over a transcript
+// source. Each pass reads at most one pass-sized slice of every file, so this is
+// the largest file in passes, not a count of files.
+const maxDrainPasses = 10000
 
 func NewPipeline(repo *repository.FragmentRepository, vision analyze.VisionAnalyzer, stages []Stage, sources ...Source) *Pipeline {
 	index := make(map[string]Source, len(sources))
@@ -100,7 +120,32 @@ func (p *Pipeline) Run(ctx context.Context, ingestCfg config.IngestConfig) (doma
 // RunOnce executes an ingest and returns the run result WITHOUT persisting an
 // ingest_runs row. Callers that track the run themselves (async worker) own
 // the row lifecycle.
+//
+// A transcript source reads a large file in bounded passes. While any pass
+// reports batch_continues the run goes again, so one run leaves every file read
+// to its end. The returned counts are summed over the passes.
 func (p *Pipeline) RunOnce(ctx context.Context, ingestCfg config.IngestConfig) (domain.IngestRun, error) {
+	run, err := p.runPass(ctx, ingestCfg)
+	if err != nil || !domain.IsTranscriptSource(ingestCfg.Kind) {
+		return run, err
+	}
+	for pass := 1; run.SkipReasons["batch_continues"] > 0 && pass < maxDrainPasses; pass++ {
+		if err := ctx.Err(); err != nil {
+			return domain.IngestRun{}, err
+		}
+		next, err := p.runPass(ctx, ingestCfg)
+		if err != nil {
+			return domain.IngestRun{}, err
+		}
+		next.StartedAt = run.StartedAt
+		next.Inserted += run.Inserted
+		next.Updated += run.Updated
+		run = next
+	}
+	return run, nil
+}
+
+func (p *Pipeline) runPass(ctx context.Context, ingestCfg config.IngestConfig) (domain.IngestRun, error) {
 	source, ok := p.sources[ingestCfg.Kind]
 	if !ok {
 		return domain.IngestRun{}, fmt.Errorf("pipeline: unsupported ingest kind %q", ingestCfg.Kind)
@@ -184,6 +229,9 @@ func (p *Pipeline) RunOnce(ctx context.Context, ingestCfg config.IngestConfig) (
 	now := p.now().UTC()
 	for _, materialCandidate := range collected {
 		if private || domain.IsTranscript(materialCandidate.Source, materialCandidate.SourceType, materialCandidate.SourceIdentity.Provider) {
+			if p.transcripts == nil {
+				return domain.IngestRun{}, transcript.ErrPrivateStoreRequired
+			}
 			outcome, err := p.transcripts.Accept(ctx, ingestCfg.Name, materialCandidate)
 			if err != nil {
 				// One record the store refuses (too large, attachments) must not

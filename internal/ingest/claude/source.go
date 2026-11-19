@@ -16,12 +16,14 @@ import (
 const kind = "claude_code"
 
 const (
-	defaultMaxFileBytes = 1 << 30
-	maxLineBytes        = 10 << 20
-	tailWindow          = 4096
-	maxExcerptBytes     = 2048
-	rawExcerptBytes     = 16 << 10
+	maxLineBytes = 1 << 30 // a safety ceiling for one JSONL line, not a content rule
+	tailWindow   = 4096
 )
+
+// passBytes bounds how much of one file a single run reads. A larger file is read
+// in successive passes that resume from the stored cursor, so memory stays flat
+// and no session is ever too big to ingest. A var so tests can lower it.
+var passBytes int64 = 64 << 20
 
 type Source struct{}
 
@@ -40,29 +42,6 @@ func (Source) Collect(ctx context.Context, cfg config.IngestConfig) ([]domain.Pi
 		return nil, err
 	}
 
-	maxSizeBytes := int64(defaultMaxFileBytes)
-	rules, err := config.DecodeRules[config.ClaudeCodeRules](cfg)
-	if err != nil {
-		return nil, err
-	}
-	if rules.MaxFileSizeMB > 0 {
-		maxSizeBytes = int64(rules.MaxFileSizeMB) * 1024 * 1024
-	}
-	excerpt := rules.ToolResultExcerptBytes
-	if excerpt < 0 {
-		excerpt = 0
-	}
-	if excerpt > maxExcerptBytes {
-		excerpt = maxExcerptBytes
-	}
-	onError := rules.ToolResultExcerptOnErrorBytes
-	if onError < 0 {
-		onError = 0
-	}
-	if onError > maxExcerptBytes {
-		onError = maxExcerptBytes
-	}
-
 	out := make([]domain.PipelineFragment, 0, len(paths))
 	for _, path := range paths {
 		if err := ctx.Err(); err != nil {
@@ -77,11 +56,8 @@ func (Source) Collect(ctx context.Context, cfg config.IngestConfig) ([]domain.Pi
 			continue
 		}
 		relPath = filepath.ToSlash(relPath)
-		if info.Size() > maxSizeBytes {
-			domain.NoteSkip(ctx, "size_limit", relPath)
-			continue
-		}
-		fragment, skip, err := collectSegment(ctx, root, path, relPath, info, domain.ExcerptCapture(excerpt, onError))
+		// There is no file-size limit: a large file is read in bounded passes.
+		fragment, skip, err := collectSegment(ctx, root, path, relPath, info)
 		if err != nil {
 			if cerr := ctx.Err(); cerr != nil {
 				return nil, cerr
@@ -100,7 +76,6 @@ func (Source) Collect(ctx context.Context, cfg config.IngestConfig) ([]domain.Pi
 			domain.NoteSkip(ctx, skip, relPath)
 			continue
 		}
-		fragment.Detail.ApplyExcerptPolicy(excerpt, onError)
 		out = append(out, fragment)
 	}
 	return out, nil
