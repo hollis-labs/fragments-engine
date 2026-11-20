@@ -49,6 +49,14 @@ once). The area says what a file is:
 | `system` | `.system_generated/` (step outputs, logs, messages) | every file, any type; the `logs/chunks/` duplicates stay excluded |
 | `scratch` | `scratch/` working trees, including dependencies | text files (`.txt .md .json .jsonl .log`); code, maps and binaries are not |
 
+**These files are short term.** The eval process needs everything the agent had access
+to until it has processed it, and they are purged afterwards (owner ruling,
+2026-11-20). Every row carries `kind = 'brain_artifact'` and
+`retention = 'purge_after_evals'`, so the purge is one selector: delete the
+`session_files` rows with that retention, then the `file_contents` rows nothing points
+to. No purge job exists. They are kept out of search by construction: nothing here is in
+`search_documents`, so default transcript search never returns them.
+
 Text is redacted like everything else; a file that is not valid text is kept as bytes
 and flagged `not_redactable`. `read_policy` is `open` for every file today. A file is
 read again only when its size or mtime changes. Files are not searchable yet and the
