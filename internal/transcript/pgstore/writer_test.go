@@ -367,6 +367,9 @@ func TestWriterStoresConversationFiles(t *testing.T) {
 	if got := scalar(t, s, `SELECT redaction_state || ':' || area || ':' || media_type FROM file_contents c JOIN session_files f USING (content_sha256) WHERE f.rel_path = 'brain/c1/shot.png'`); got != "not_redactable:upload:image/png" {
 		t.Errorf("binary file: %s", got)
 	}
+	if got := scalar(t, s, `SELECT count(*) FROM session_files WHERE kind = 'brain_artifact' AND retention = 'purge_after_evals'`); got != "4" {
+		t.Errorf("retention tag: %s of 4 tagged", got)
+	}
 	if got := scalar(t, s, `SELECT native_session_id || ':' || harness FROM session_files WHERE rel_path = 'brain/c2/plan.md'`); got != "c2:antigravity" {
 		t.Errorf("link: %s", got)
 	}

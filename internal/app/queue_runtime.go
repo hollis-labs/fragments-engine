@@ -42,6 +42,10 @@ func DrainQueueOnce(ctx context.Context, cfgPath string) error {
 	if err != nil {
 		return err
 	}
+	// Draining the delivery queue never touches transcripts, which bypass the queue. Open
+	// without a transcript store so a process that has no corpus credentials (the MCP
+	// server) does not fail, and so no corpus connection is opened every poll.
+	cfg.Transcripts.Store, cfg.Transcripts.PrivateRoot = "", ""
 	instance, err := Open(ctx, cfg)
 	if err != nil {
 		return err
