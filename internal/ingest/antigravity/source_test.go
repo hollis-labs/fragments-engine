@@ -71,6 +71,12 @@ func TestCollectConversationsAndBrainReadOnly(t *testing.T) {
 	if got[0].Source != "antigravity_db" || got[1].Source != "antigravity_brain" || got[0].SourceType != "transcript" || got[1].SourceType != "transcript" {
 		t.Fatal("private transcript classification missing")
 	}
+	if got[1].File == nil || got[1].File.ConversationID != "synthetic" || got[1].File.Area != "artifact" {
+		t.Fatalf("brain file not described: %+v", got[1].File)
+	}
+	if body, err := got[1].File.Load(); err != nil || string(body) != "brain roadmap token=synthetic-secret" {
+		t.Fatalf("brain file content: %q %v", body, err)
+	}
 	if !strings.Contains(got[0].Content, "## user") || strings.Contains(got[0].Content, "thinking") || strings.Contains(got[0].Content, "opaque tool") || strings.Index(got[0].Content, "user roadmap") > strings.Index(got[0].Content, "assistant roadmap") {
 		t.Fatal("typed conversation extraction/order")
 	}
@@ -165,38 +171,29 @@ func TestPendingWALRefusedWithoutCheckpoint(t *testing.T) {
 	}
 }
 
-// A brain artifact over the old size cap is ingested; symlinks, partial transfers
-// and undecodable files are still excluded and counted.
+// A brain file over the old size cap is kept; symlinks and partial transfers are still
+// excluded. Files that are not text are kept too (bytes), nothing aborts the run.
 func TestBrainSymlinksPartialTransfersAndLargeFiles(t *testing.T) {
 	root := t.TempDir()
 	brainRoot := filepath.Join(root, "brain")
 	if err := os.MkdirAll(filepath.Join(brainRoot, ".rsync-partial"), 0700); err != nil {
 		t.Fatal(err)
 	}
-	for name, body := range map[string]string{"valid.jsonl": "{\"text\":\"synthetic\"}", ".rsync-partial/bad.txt": "\x00", "large.txt": strings.Repeat("x", 1024*1024+1), "opaque.bin": "\x00"} {
-		if err := os.WriteFile(filepath.Join(brainRoot, name), []byte(body), 0600); err != nil {
+	for name, body := range map[string][]byte{"valid.jsonl": []byte("{\"text\":\"synthetic\"}"), ".rsync-partial/bad.txt": {0}, "large.txt": []byte(strings.Repeat("x", 1024*1024+1)), "opaque.bin": {0}, "invalid.txt": {0xff}} {
+		if err := os.WriteFile(filepath.Join(brainRoot, name), body, 0600); err != nil {
 			t.Fatal(err)
 		}
 	}
 	if err := os.Symlink(filepath.Join(brainRoot, "valid.jsonl"), filepath.Join(brainRoot, "link.txt")); err != nil {
 		t.Fatal(err)
 	}
-	cfg := config.IngestConfig{Source: config.IngestSource{Root: root}, Rules: map[string]any{"max_file_size_mb": 1}}
-	got, err := (Source{}).Collect(context.Background(), cfg)
-	if err != nil || len(got) != 2 {
+	got, err := (Source{}).Collect(context.Background(), config.IngestConfig{Source: config.IngestSource{Root: root}})
+	if err != nil || len(got) != 4 {
 		t.Fatalf("bounds/discovery: %d %v", len(got), err)
-	}
-	if err := os.WriteFile(filepath.Join(brainRoot, "invalid.txt"), []byte{0xff}, 0600); err != nil {
-		t.Fatal(err)
-	}
-	skips := &domain.SkipCollector{}
-	got, err = (Source{}).Collect(domain.WithSkipCollector(context.Background(), skips), cfg)
-	if err != nil || len(got) != 2 || skips.ByClass()["not_utf8"] != 1 {
-		t.Fatalf("invalid text must be a counted skip, not an abort: %d %v %v", len(got), err, skips.ByClass())
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := (Source{}).Collect(ctx, cfg); !errors.Is(err, context.Canceled) {
+	if _, err := (Source{}).Collect(ctx, config.IngestConfig{Source: config.IngestSource{Root: root}}); !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancellation: %v", err)
 	}
 }
@@ -276,70 +273,61 @@ func TestPendingWALSkipsOnlyThatDatabase(t *testing.T) {
 	}
 }
 
-func TestBrainEncodingTrimAndSkip(t *testing.T) {
+// Scratch work trees keep their text files and drop code, maps and binaries; everything
+// outside scratch is kept whatever its type. A file the store already has, unchanged, is
+// counted and not read again.
+func TestBrainAreasAndUnchangedSkip(t *testing.T) {
 	root := t.TempDir()
-	brainRoot := filepath.Join(root, "brain")
-	if err := os.MkdirAll(brainRoot, 0700); err != nil {
-		t.Fatal(err)
+	files := map[string]string{
+		"brain/c1/plan.md":                               "plan",
+		"brain/c1/shot.png":                              "\x89PNG",
+		"brain/c1/.user_uploaded/spec.pdf":               "%PDF",
+		"brain/c1/.system_generated/logs/main.log":       "log",
+		"brain/c1/scratch/app/package.json":              "{}",
+		"brain/c1/scratch/app/index.js":                  "code",
+		"brain/c1/scratch/app/node_modules/x/README.txt": "readme",
+		"brain/c1/scratch/app/node_modules/x/x.js.map":   "map",
 	}
-	// A 100 KiB-style chunk cut in the middle of a 3-byte rune at its very end.
-	chunk := append([]byte(strings.Repeat("a", 1000)), []byte("\u20ac")[:2]...)
-	files := map[string][]byte{
-		"clean.jsonl":    []byte("synthetic clean text"),
-		"cut-tail.jsonl": chunk,
-		"mid-bad.jsonl":  append([]byte("synthetic "), append([]byte{0xff}, []byte(" tail text")...)...),
-		"head-cut.jsonl": append([]byte{0x82, 0xac}, []byte(" starts mid-rune")...),
-	}
-	for name, body := range files {
-		if err := os.WriteFile(filepath.Join(brainRoot, name), body, 0600); err != nil {
+	for rel, body := range files {
+		p := filepath.Join(root, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(p), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0600); err != nil {
 			t.Fatal(err)
 		}
 	}
-	skips := &domain.SkipCollector{}
-	got, err := (Source{}).Collect(domain.WithSkipCollector(context.Background(), skips), config.IngestConfig{Source: config.IngestSource{Root: root}})
+	got, err := (Source{}).Collect(context.Background(), config.IngestConfig{Source: config.IngestSource{Root: root}})
 	if err != nil {
-		t.Fatalf("run aborted: %v", err)
+		t.Fatal(err)
 	}
-	byKey := map[string]string{}
+	area := map[string]string{}
 	for _, f := range got {
-		byKey[f.SourceIdentity.SegmentKey] = f.Content
+		if f.File == nil || f.File.ConversationID != "c1" {
+			t.Fatalf("bad file fragment: %+v", f)
+		}
+		area[f.File.RelPath] = f.File.Area
 	}
-	if len(got) != 2 {
-		t.Fatalf("expected clean and trimmed artifacts imported, got %d: %v", len(got), byKey)
+	want := map[string]string{
+		"brain/c1/plan.md": "artifact", "brain/c1/shot.png": "artifact", "brain/c1/.user_uploaded/spec.pdf": "upload",
+		"brain/c1/.system_generated/logs/main.log": "system", "brain/c1/scratch/app/package.json": "scratch",
+		"brain/c1/scratch/app/node_modules/x/README.txt": "scratch",
 	}
-	if byKey["brain/clean.jsonl"] != "synthetic clean text" {
-		t.Fatalf("clean file changed: %q", byKey["brain/clean.jsonl"])
+	if len(area) != len(want) {
+		t.Fatalf("files = %v", area)
 	}
-	if c := byKey["brain/cut-tail.jsonl"]; c != strings.Repeat("a", 1000) {
-		t.Fatalf("partial trailing rune not trimmed cleanly: %d bytes", len(c))
-	}
-	by := skips.ByClass()
-	if by["trimmed_tail"] != 1 || by["not_utf8"] != 2 || len(skips.Skips) != 3 {
-		t.Fatalf("skip accounting: %v", by)
-	}
-	for _, s := range skips.Skips {
-		if s.PathHash == "" {
-			t.Fatal("skip without a path hash")
+	for k, v := range want {
+		if area[k] != v {
+			t.Fatalf("%s area = %q want %q (%v)", k, area[k], v, area)
 		}
 	}
-}
-
-func TestTrimPartialRune(t *testing.T) {
-	euro := []byte("\u20ac")
-	for n := 1; n <= 2; n++ {
-		if head, ok := trimPartialRune(append([]byte("ab"), euro[:n]...)); !ok || string(head) != "ab" {
-			t.Fatalf("cut %d: %q %v", n, head, ok)
-		}
-	}
-	for name, raw := range map[string][]byte{
-		"complete rune":       append([]byte("ab"), euro...),
-		"invalid byte":        []byte("ab\xff"),
-		"defect before cut":   append([]byte("a\xffb"), euro[:2]...),
-		"continuation at end": []byte("ab\x82"),
-		"empty":               nil,
-	} {
-		if _, ok := trimPartialRune(raw); ok {
-			t.Fatalf("%s must not be trimmed", name)
-		}
+	// Everything stored and unchanged: nothing is returned or read.
+	info, _ := os.Stat(filepath.Join(root, "brain/c1/plan.md"))
+	ctx := domain.WithCursorLookup(domain.WithSkipCollector(context.Background(), &domain.SkipCollector{}), func(p string) (domain.TranscriptCursor, bool) {
+		return domain.TranscriptCursor{FileSize: info.Size(), ModTime: info.ModTime().UTC()}, p == "brain/c1/plan.md"
+	})
+	got, err = (Source{}).Collect(ctx, config.IngestConfig{Source: config.IngestSource{Root: root}})
+	if err != nil || len(got) != len(want)-1 {
+		t.Fatalf("unchanged file not skipped: %d %v", len(got), err)
 	}
 }

@@ -17,6 +17,7 @@ storage; nothing is cut for length.
 | Tool results | `tool_results` | the complete result as ordered parts (see below) |
 | Usage | `usage` | token counters, merged per request by maximum |
 | Enrichment, embeddings | `enrichments`, `embeddings`, `embedding_groups` | summaries and cosine vectors, kept per model/format/dimension |
+| Conversation files | `session_files`, `file_contents` | files an Antigravity conversation's `brain/` folder holds (see below); stored whole, once per distinct content |
 | Search | `search_documents`, `search_chunks` | a derived projection, rebuilt from the rows above |
 | Change journal | `feed_state`, `changes` | commit-ordered feed for resumable tails |
 | Held records | `pending_records`, `legacy_rows`, `legacy_material` | rows that could not be mapped, kept rather than dropped |
@@ -32,6 +33,28 @@ A result is one row per content part, in order (`ordinal`). Exactly one of
 
 Text and JSON parts are searchable. Large text is chunked for search only; the
 stored part is always whole.
+
+### Conversation files
+
+Antigravity keeps a working folder per conversation (`brain/<conversation id>/`).
+Its files are kept whole in `session_files` (provenance: source, conversation id,
+path, area, media type, size, mtime, revision) pointing at `file_contents` (one row
+per distinct content, so a dependency file that appears in many conversations is stored
+once). The area says what a file is:
+
+| Area | What | What is kept |
+|---|---|---|
+| `artifact` | files the agent wrote for the conversation (plans, notes) | every file, any type |
+| `upload` | `.user_uploaded/` | every file, any type |
+| `system` | `.system_generated/` (step outputs, logs, messages) | every file, any type; the `logs/chunks/` duplicates stay excluded |
+| `scratch` | `scratch/` working trees, including dependencies | text files (`.txt .md .json .jsonl .log`); code, maps and binaries are not |
+
+Text is redacted like everything else; a file that is not valid text is kept as bytes
+and flagged `not_redactable`. `read_policy` is `open` for every file today. A file is
+read again only when its size or mtime changes. Files are not searchable yet and the
+change journal does not carry them; they are kept so a later process can decide what
+to index, summarise or purge. The scratch files and the system step outputs are the
+likely purge candidates.
 
 ## Limits
 

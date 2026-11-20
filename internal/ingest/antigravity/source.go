@@ -5,13 +5,10 @@ package antigravity
 import (
 	"context"
 	"errors"
-	"io"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
-	"time"
-	"unicode/utf8"
 
 	"github.com/hollis-labs/fragments-engine/internal/config"
 	"github.com/hollis-labs/fragments-engine/internal/domain"
@@ -65,20 +62,14 @@ func (Source) Collect(ctx context.Context, cfg config.IngestConfig) ([]domain.Pi
 				continue
 			}
 			var (
-				content  string
-				trimmed  bool
 				captured domain.PipelineFragment
 				skip     string
 			)
 			if section == "conversations" {
 				captured, skip, err = captureConversation(ctx, filepath.Join(root, "brain"), path, relPath, before)
-			} else {
-				content, trimmed, err = brain(ctx, path)
-			}
-			if errors.Is(err, errBrainEncoding) {
-				// One undecodable artifact must not abort the run. It is counted
-				// per file and picked up again only if its bytes change.
-				domain.NoteSkip(ctx, "not_utf8", relPath)
+			} else if c, ok := domain.LookupCursor(ctx, relPath); ok && c.FileSize == before.Size() && c.ModTime.Equal(before.ModTime().UTC()) {
+				// Stored and unchanged: not read again.
+				domain.NoteSkip(ctx, "unchanged", relPath)
 				continue
 			}
 			if errors.Is(err, ErrSnapshotRequired) {
@@ -102,23 +93,19 @@ func (Source) Collect(ctx context.Context, cfg config.IngestConfig) ([]domain.Pi
 				out = append(out, captured)
 				continue
 			}
-			if strings.TrimSpace(content) == "" {
-				continue
-			}
-			if trimmed {
-				// Imported, not skipped: counted so truncated artifacts stay visible.
-				domain.NoteSkip(ctx, "trimmed_tail", relPath)
-			}
-			rel := relPath
-			id := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
 			created := before.ModTime().UTC()
+			id := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
+			filePath := path
 			out = append(out, domain.PipelineFragment{
-				Source:     "antigravity_" + map[string]string{"conversations": "db", "brain": "brain"}[section],
-				SourceType: "transcript", SourceID: id, Title: "Antigravity " + section + ": " + id,
-				Content: content, CreatedAt: created,
-				SourceIdentity: domain.SourceIdentity{SegmentKey: filepath.ToSlash(rel)},
-				Metadata:       map[string]any{"source_file": path, "observed_at": created.Format(time.RFC3339Nano), "format": section},
-				CanonicalPath:  filepath.ToSlash(filepath.Join("fragments", "chats", "antigravity", section, created.Format("2006-01-02"), id)),
+				Source:     "antigravity_brain",
+				SourceType: "transcript", SourceID: id, Title: "Antigravity brain: " + id,
+				CreatedAt:      created,
+				SourceIdentity: domain.SourceIdentity{SegmentKey: relPath},
+				File: &domain.TranscriptFile{
+					ConversationID: brainConversation(relPath), RelPath: relPath, Area: brainArea(root, path),
+					Size: before.Size(), ModTime: created,
+					Load: func() ([]byte, error) { return os.ReadFile(filePath) },
+				},
 			})
 		}
 	}
@@ -144,7 +131,17 @@ func sourceFiles(ctx context.Context, root string, databases bool) ([]string, er
 			return nil
 		}
 		ext := strings.ToLower(filepath.Ext(path))
-		if databases && ext == ".db" || !databases && (ext == ".txt" || ext == ".md" || ext == ".json" || ext == ".jsonl" || ext == ".log") {
+		switch {
+		case databases:
+			if ext == ".db" {
+				paths = append(paths, path)
+			}
+		case brainArea(root, path) != "scratch":
+			// Artifacts, uploads and system files are kept whatever their type.
+			paths = append(paths, path)
+		case ext == ".txt" || ext == ".md" || ext == ".json" || ext == ".jsonl" || ext == ".log":
+			// Scratch work trees hold code and dependencies; their text files are kept,
+			// the rest (sources, maps, binaries) is not.
 			paths = append(paths, path)
 		}
 		return nil
@@ -153,54 +150,38 @@ func sourceFiles(ctx context.Context, root string, databases bool) ([]string, er
 	return paths, err
 }
 
-var errBrainEncoding = errors.New("Antigravity brain artifact is not supported UTF-8 text")
-
-// brain reads one brain artifact. An artifact whose only defect is an
-// incomplete UTF-8 sequence at its very end (a size-capped chunk cut mid-rune)
-// is decoded after dropping that partial rune and reported as trimmed; any other
-// invalid text returns errBrainEncoding.
-func brain(ctx context.Context, path string) (string, bool, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return "", false, errors.New("cannot open Antigravity brain artifact")
+// brainConversation is the conversation id in brain/<conversation>/... .
+func brainConversation(rel string) string {
+	parts := strings.Split(rel, "/")
+	if len(parts) >= 3 && parts[0] == "brain" {
+		return parts[1]
 	}
-	defer f.Close()
-	raw, err := io.ReadAll(f)
-	if err != nil {
-		return "", false, errors.New("cannot read Antigravity brain artifact")
-	}
-	if err := ctx.Err(); err != nil {
-		return "", false, err
-	}
-	trimmed := false
-	if !utf8.Valid(raw) {
-		head, ok := trimPartialRune(raw)
-		if !ok {
-			return "", false, errBrainEncoding
-		}
-		raw, trimmed = head, true
-	}
-	if !validText(raw) {
-		return "", false, errBrainEncoding
-	}
-	// Structured logs are kept as separate text artifacts, not projected into
-	// conversation turns. No binary attachments are materialized.
-	return string(raw), trimmed, nil
+	return ""
 }
 
-// trimPartialRune drops an incomplete UTF-8 sequence (1-3 bytes) from the end of
-// raw. It reports false unless that is the only defect.
-func trimPartialRune(raw []byte) ([]byte, bool) {
-	for n := 1; n <= utf8.UTFMax-1 && n <= len(raw); n++ {
-		tail := raw[len(raw)-n:]
-		if utf8.RuneStart(tail[0]) && tail[0] >= utf8.RuneSelf && !utf8.FullRune(tail) {
-			if head := raw[:len(raw)-n]; utf8.Valid(head) {
-				return head, true
-			}
-			return nil, false
-		}
+// brainArea says what kind of file a brain path is: scratch work, an upload, a system
+// file, or (everything else) an artifact the agent wrote.
+func brainArea(root, path string) string {
+	rel, err := filepath.Rel(root, path)
+	if err != nil {
+		return "artifact"
 	}
-	return nil, false
+	parts := strings.Split(filepath.ToSlash(rel), "/")
+	if len(parts) > 0 && parts[0] == "brain" {
+		parts = parts[1:]
+	}
+	if len(parts) < 2 { // brain/<conversation>/<file>
+		return "artifact"
+	}
+	switch parts[1] {
+	case "scratch":
+		return "scratch"
+	case ".user_uploaded":
+		return "upload"
+	case ".system_generated":
+		return "system"
+	}
+	return "artifact"
 }
 
 func snapshotReady(path string) error {

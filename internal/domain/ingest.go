@@ -53,6 +53,10 @@ type PipelineFragment struct {
 	// Detail is the structured transcript view a private source parsed beside
 	// Content. It is excluded from JSON so it can never ride into material.
 	Detail *TranscriptDetail `json:"-"`
+	// File is a file a conversation's working folder holds (an artifact, an upload,
+	// scratch work). It is stored whole beside the transcripts, linked by the
+	// conversation id; it is not a transcript segment. Excluded from JSON like Detail.
+	File *TranscriptFile `json:"-"`
 }
 
 type PipelineAttachment struct {

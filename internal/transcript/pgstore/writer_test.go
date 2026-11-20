@@ -3,6 +3,7 @@ package pgstore
 import (
 	"context"
 	"encoding/base64"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -327,5 +328,59 @@ func TestWriterRecordsAndLearnsHost(t *testing.T) {
 	}
 	if got := scalar(t, s, `SELECT host_id FROM sessions`); got != "mac" {
 		t.Fatalf("known host changed: %s", got)
+	}
+}
+
+func fileFrag(rel, conv, area string, body []byte) domain.PipelineFragment {
+	return domain.PipelineFragment{Source: "antigravity_brain", SourceType: "transcript", SourceID: "x",
+		SourceIdentity: domain.SourceIdentity{SegmentKey: rel},
+		File: &domain.TranscriptFile{ConversationID: conv, RelPath: rel, Area: area, Size: int64(len(body)), ModTime: time.Unix(1700000000, 0),
+			Load: func() ([]byte, error) { return body, nil }}}
+}
+
+// Files from a conversation's working folder are stored whole, once per distinct
+// content, redacted when text and kept as flagged bytes when not.
+func TestWriterStoresConversationFiles(t *testing.T) {
+	w, s, done := openWriter(t)
+	defer done()
+	ctx := context.Background()
+	big := strings.Repeat("line of a plan\n", 200000) // ~3 MB, no limit applies
+	for _, f := range []domain.PipelineFragment{
+		fileFrag("brain/c1/plan.md", "c1", "artifact", []byte(big)),
+		fileFrag("brain/c1/notes.md", "c1", "artifact", []byte("key password=hunter2secret")),
+		fileFrag("brain/c2/plan.md", "c2", "artifact", []byte(big)), // same content, another conversation
+		fileFrag("brain/c1/shot.png", "c1", "upload", []byte{0x89, 'P', 'N', 'G', 0, 1, 2}),
+	} {
+		if out, err := w.Accept(ctx, "r", f); err != nil || out != transcript.Inserted {
+			t.Fatalf("accept %s: %v %v", f.File.RelPath, out, err)
+		}
+	}
+	if got := scalar(t, s, `SELECT count(*) FROM session_files`) + "/" + scalar(t, s, `SELECT count(*) FROM file_contents`); got != "4/3" {
+		t.Errorf("files/contents = %s, want 4/3 (identical content stored once)", got)
+	}
+	if got := scalar(t, s, `SELECT length(text_redacted) FROM file_contents c JOIN session_files f USING (content_sha256) WHERE f.rel_path = 'brain/c1/plan.md'`); got != fmt.Sprint(len(big)) {
+		t.Errorf("large file not whole: %s", got)
+	}
+	if got := scalar(t, s, `SELECT text_redacted FROM file_contents c JOIN session_files f USING (content_sha256) WHERE f.rel_path = 'brain/c1/notes.md'`); strings.Contains(got, "hunter2secret") {
+		t.Errorf("secret stored: %s", got)
+	}
+	if got := scalar(t, s, `SELECT redaction_state || ':' || area || ':' || media_type FROM file_contents c JOIN session_files f USING (content_sha256) WHERE f.rel_path = 'brain/c1/shot.png'`); got != "not_redactable:upload:image/png" {
+		t.Errorf("binary file: %s", got)
+	}
+	if got := scalar(t, s, `SELECT native_session_id || ':' || harness FROM session_files WHERE rel_path = 'brain/c2/plan.md'`); got != "c2:antigravity" {
+		t.Errorf("link: %s", got)
+	}
+	if out, _ := w.Accept(ctx, "r", fileFrag("brain/c1/notes.md", "c1", "artifact", []byte("key password=hunter2secret"))); out != transcript.Skipped {
+		t.Errorf("replay = %v", out)
+	}
+	if out, _ := w.Accept(ctx, "r", fileFrag("brain/c1/notes.md", "c1", "artifact", []byte("changed"))); out != transcript.Updated {
+		t.Errorf("change = %v", out)
+	}
+	if got := scalar(t, s, `SELECT revision FROM session_files WHERE rel_path = 'brain/c1/notes.md'`); got != "2" {
+		t.Errorf("revision = %s", got)
+	}
+	cur, ok := w.Cursor(ctx, "r", "brain/c1/notes.md")
+	if !ok || cur.FileSize != int64(len("changed")) || !cur.ModTime.Equal(time.Unix(1700000000, 0).UTC()) {
+		t.Errorf("checkpoint = %+v %v", cur, ok)
 	}
 }

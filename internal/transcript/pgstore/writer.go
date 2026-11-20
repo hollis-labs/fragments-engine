@@ -100,6 +100,9 @@ func (w *Writer) Accept(ctx context.Context, registration string, in domain.Pipe
 	if w == nil || w.st == nil {
 		return "", transcript.ErrPrivateStoreRequired
 	}
+	if in.File != nil {
+		return w.acceptFile(ctx, registration, in)
+	}
 	if in.Detail == nil {
 		return "", fmt.Errorf("%w: structured transcript detail is required", transcript.ErrRecordRejected)
 	}
