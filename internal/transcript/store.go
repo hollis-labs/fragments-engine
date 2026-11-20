@@ -132,6 +132,11 @@ func (s *Store) Close() error {
 // and the local text index atomically. IDs reveal no raw source locator. Updates
 // retain only redacted material; retries compare only redacted content.
 func (s *Store) Accept(ctx context.Context, registration string, in domain.PipelineFragment) (Outcome, error) {
+	if in.File != nil {
+		// Conversation files (Antigravity brain) are kept by the Postgres corpus only;
+		// this store is being retired and never held them as files.
+		return Skipped, nil
+	}
 	if s == nil {
 		return "", ErrPrivateStoreRequired
 	}

@@ -191,3 +191,18 @@ func ExcerptCapture(all, onError int) int {
 	}
 	return all
 }
+
+// TranscriptFile is one file from a conversation's working folder. Load reads the
+// content on demand, so a source can list tens of thousands of files without holding
+// them in memory, and the writer reads only the ones whose size or mtime changed.
+type TranscriptFile struct {
+	// ConversationID is the native id of the conversation the file belongs to.
+	ConversationID string
+	// RelPath is the source-relative path, the file's identity within its source.
+	RelPath string
+	// Area is artifact, upload, system or scratch.
+	Area    string
+	Size    int64
+	ModTime time.Time
+	Load    func() ([]byte, error)
+}
