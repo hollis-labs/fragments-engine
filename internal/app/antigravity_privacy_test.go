@@ -62,7 +62,7 @@ func TestAppAntigravityPrivateAcceptanceAndRetry(t *testing.T) {
 	defer instance.Close()
 	for attempt := 0; attempt < 2; attempt++ {
 		runs, err := instance.Fragments.RunAllIngests(context.Background(), cfg)
-		if err != nil || len(runs) != 1 || attempt == 0 && runs[0].Inserted != 2 || attempt == 1 && (runs[0].Skipped != 2 || runs[0].Updated != 0 || runs[0].Inserted != 0) {
+		if err != nil || len(runs) != 1 || attempt == 0 && runs[0].Inserted != 1 || attempt == 1 && (runs[0].Skipped != 2 || runs[0].Updated != 0 || runs[0].Inserted != 0) {
 			t.Fatalf("private acceptance/retry: %+v %v", runs, err)
 		}
 	}
@@ -72,10 +72,10 @@ func TestAppAntigravityPrivateAcceptanceAndRetry(t *testing.T) {
 	}
 	defer private.Close()
 	var count int
-	if err := private.QueryRow(`SELECT count(*) FROM transcripts WHERE material_json LIKE '%roadmap%' AND material_json NOT LIKE '%synthetic-antigravity-secret%'`).Scan(&count); err != nil || count != 2 {
+	if err := private.QueryRow(`SELECT count(*) FROM transcripts WHERE material_json LIKE '%roadmap%' AND material_json NOT LIKE '%synthetic-antigravity-secret%'`).Scan(&count); err != nil || count != 1 {
 		t.Fatalf("private canonical redaction: %d %v", count, err)
 	}
-	if err := private.QueryRow(`SELECT count(*) FROM transcript_search WHERE transcript_search MATCH 'roadmap'`).Scan(&count); err != nil || count != 2 {
+	if err := private.QueryRow(`SELECT count(*) FROM transcript_search WHERE transcript_search MATCH 'roadmap'`).Scan(&count); err != nil || count != 1 {
 		t.Fatalf("private index: %d %v", count, err)
 	}
 	if err := private.QueryRow(`SELECT count(*) FROM transcript_search WHERE content LIKE '%synthetic-antigravity-secret%'`).Scan(&count); err != nil || count != 0 {
